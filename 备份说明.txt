@@ -1,0 +1,21 @@
+NovelCraft Flutter 版 · 源码备份
+====================================
+备份时间：2026-09-15 23:20
+源路径　：F:/30_Novelcraft_Flutter/Flutter版代码/novelcraft
+总大小　：5.7 MB（313 文件）
+
+【已包含】lib/ tool/ test/ tools/ integration_test/ web/ docs/ linux/ macos/
+          android/ ios/ windows/runner/ + 根配置（pubspec.yaml、HANDOFF.md、
+          PITFALLS.md、README.md、icon.ico 等）
+
+【已排除】rwkv_models/        6.0GB（下载的 GGUF 模型 + 引擎二进制，可用 UI 重新下载）
+          build/              399MB（构建产物，flutter build 可重建）
+          .dart_tool/         471MB（Dart 工具缓存）
+          windows/flutter/ephemeral（Flutter 自动生成）
+          *.log               构建日志
+
+【备份时项目状态】HANDOFF 18-30 全部落地（P1-P4 完成）
+  - 云端路径：已用真实端点实测打通（批量 8→1 POST、会话续跑、存档重放）
+  - 本地路径：代码就绪；RTX 3070 Ti 8GB 只能跑 1.5B（7.2B 需 13.4GB 放不下）
+  - 验证脚本：tool/verify_*.dart 共 7 个，dart run 可复现（累计 159 项断言全过）
+  - 详见 PITFALLS.md（§27-§39）与 HANDOFF.md
