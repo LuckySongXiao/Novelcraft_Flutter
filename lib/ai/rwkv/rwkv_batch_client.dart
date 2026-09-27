@@ -597,22 +597,40 @@ class RwkvBatchClient {
 
   /// 通用 JSON POST（给 `/state/*`、`/multi_state/*` 这类非批量路由复用）。
   ///
-  /// 统一处理三件事，避免每个调用点各写一遍：
+  /// 统一处理四件事，避免每个调用点各写一遍：
   ///   1. **HTML 预检** —— CF 认证失败时返回的是登录页 HTML，不是 JSON（PITFALLS §27.2）
   ///   2. **HTTP 200 但 body 是 `{"error":...}`** —— SSE 运行时异常也走 200（§31.3）
   ///   3. 非 2xx 时抛出带状态码的异常，**绝不静默返回 null**
+  ///   4. **并发门控下沉**（交接文档遗留）：非批量路由此前完全不过
+  ///      waitForPermit —— 多会话并发写 state 时会无上限直压移动端
+  ///      内存/套接字；现在与批量路径共用同一许可闸（min(硬上限, 服务端
+  ///      available, 排队折半, 惩罚档)），超限排队而非裸发。
   Future<Map<String, dynamic>> postJson(
     String route,
     Map<String, dynamic> body, {
     Duration timeout = const Duration(seconds: 120),
   }) async {
-    final http.Response resp = await client
-        .post(
-          Uri.parse(_url(route)),
-          headers: _requestHeaders(),
-          body: jsonEncode(body),
-        )
-        .timeout(timeout);
+    await concurrency?.waitForPermit();
+    concurrency?.enterInFlight();
+    try {
+      final http.Response resp = await client
+          .post(
+            Uri.parse(_url(route)),
+            headers: _requestHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(timeout);
+      concurrency?.noteSuccess();
+      return _parsePostJsonResponse(resp, route);
+    } finally {
+      concurrency?.leaveInFlight();
+    }
+  }
+
+  Map<String, dynamic> _parsePostJsonResponse(
+    http.Response resp,
+    String route,
+  ) {
     final String text = resp.body;
     if (text.trimLeft().startsWith('<')) {
       throw RwkvBatchException(

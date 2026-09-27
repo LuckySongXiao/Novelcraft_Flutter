@@ -1,6 +1,12 @@
+import 'dart:async' show unawaited;
+
+import 'package:drift/drift.dart' as d;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../application/services/chapter_sync_service.dart';
+import '../../core/di.dart';
+import '../../data/database.dart';
 import '../../l10n/l10n.dart';
 import 'world_system_page.dart' show SystemFieldDef, SystemFieldType;
 
@@ -76,6 +82,7 @@ class EntityPageConfig {
     this.nameField = 'name',
     this.summaryField,
     this.previewBuilder,
+    this.syncOnSave = false,
   });
 
   final String titleZh;
@@ -95,6 +102,10 @@ class EntityPageConfig {
   /// 功能 A：仅 chapterEntityConfig 提供（章节只读预览）。
   final Widget Function(BuildContext context, Map<String, dynamic> values)?
       previewBuilder;
+
+  /// 保存后是否触发章节后处理（世界观/剧情/时间线自动同步）。
+  /// 仅 chapterEntityConfig 置 true——见 entity_page._save。
+  final bool syncOnSave;
 
   final EntityDataSource Function(WidgetRef ref) sourceBuilder;
 
@@ -239,6 +250,9 @@ class _EntityPageState extends ConsumerState<EntityPage> {
     final values = _readForm();
     if (values.isEmpty) return;
     final l10n = ref.read(l10nProvider);
+    final String? chapterId = _selected?['id'] as String?;
+    final int oldVersion =
+        (_selected?['versionNumber'] as num?)?.toInt() ?? 0;
     try {
       if (_selected == null) {
         await _source.create(widget.projectId, values);
@@ -249,8 +263,55 @@ class _EntityPageState extends ConsumerState<EntityPage> {
       setState(() => _dirty = false);
       await _reload();
       _snack(l10n.t('Common.Saved', '已保存'));
+
+      // ---- 剧情状态/世界观自动同步（交接功能 C）----
+      // 手动保存路径此前完全没接后处理（只有一键生成/改稿接了）——
+      // 「开关默认开」形同虚设。保存章节后 fire-and-forget 触发同步，
+      // 不阻塞 UI、异常折叠（下次保存 version 自增后可重试）。
+      if (widget.config.syncOnSave) {
+        unawaited(_runPostProcess(
+          chapterId ?? (values['id'] as String?),
+          values,
+          oldVersion,
+        ));
+      }
     } catch (e) {
       _snack(l10n.tf('Common.SaveFailed', '保存失败：{0}', [e.toString()]));
+    }
+  }
+
+  /// 章节后处理：versionNumber 自增写回 + 世界观/剧情/时间线同步。
+  Future<void> _runPostProcess(
+    String? chapterId,
+    Map<String, dynamic> values,
+    int oldVersion,
+  ) async {
+    try {
+      if (chapterId == null || chapterId.isEmpty) return;
+      final chapters = ref.read(chapterRepositoryProvider);
+      final ChapterRow? row = await chapters.getById(chapterId);
+      if (row == null) return;
+      final int newVersion = oldVersion + 1;
+      await ref.read(chapterServiceProvider).updateById(
+            chapterId,
+            ChaptersCompanion(versionNumber: d.Value(newVersion)),
+          );
+      final post = ref.read(chapterPostProcessServiceProvider);
+      await post.runForChapter(ChapterSyncInput(
+        chapterId: chapterId,
+        volumeId: row.volumeId,
+        projectId: row.projectId ?? '',
+        title: (values['title'] as String?) ?? row.title,
+        orderIndex: row.orderIndex,
+        content: (values['content'] as String?) ?? row.content ?? '',
+        summary: (values['summary'] as String?) ?? row.summary,
+        status: (values['status'] as String?) ?? row.status,
+        notes: (values['notes'] as String?) ?? row.notes,
+        versionNumber: newVersion,
+        eventDate: DateTime.now(),
+      ));
+    } on Object {
+      // 后处理绝不阻塞/打扰保存流程；失败静默，下次保存自增后可重试
     }
   }
 

@@ -59,6 +59,23 @@ class CopilotChatLogController extends Notifier<CopilotChatLog> {
     await _save();
   }
 
+  /// 清空会话（用户显式操作）：清掉 KVStore 记录并重置为一条全新开场白。
+  ///
+  /// 没有此入口时，用户想"重新开一段对话"只能卸载重装（记录落在
+  /// KVStore，重启不丢）。落盘失败仅记日志 —— 内存态已清，刷新后
+  /// 由 _restore 的空记录分支自然补开场白。
+  Future<void> clear() async {
+    state = CopilotChatLog(messages: <ChatMessage>[_welcome()]);
+    try {
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
+      await kv.writeJson(_scope, _key, jsonEncode(
+        state.messages.map((ChatMessage m) => m.toJson()).toList(growable: false),
+      ));
+    } on Object catch (e) {
+      ref.read(aiLoggerProvider).warning('清空聊天记录落盘失败：$e');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // 持久化 + 限长
   // ---------------------------------------------------------------------------

@@ -588,23 +588,28 @@ class _WorldSubNav extends ConsumerWidget {
     final selected = t == current;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      child: ListTile(
-        dense: true,
-        visualDensity: kSubNavTileDensity,
-        selected: selected,
-        selectedTileColor: scheme.secondaryContainer,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        title: Text(
-          _label(t, l10n),
-          softWrap: true,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 13,
-            color: selected ? scheme.onSecondaryContainer : null,
+      // ListTile 必须自带 Material：外层 ColoredBox 会遮挡波纹/选中底色
+      // （Flutter 3.47 起该场景直接抛断言，全局每页触发）。
+      child: Material(
+        type: MaterialType.transparency,
+        child: ListTile(
+          dense: true,
+          visualDensity: kSubNavTileDensity,
+          selected: selected,
+          selectedTileColor: scheme.secondaryContainer,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          title: Text(
+            _label(t, l10n),
+            softWrap: true,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: selected ? scheme.onSecondaryContainer : null,
+            ),
           ),
+          onTap: () => onSelect(t),
         ),
-        onTap: () => onSelect(t),
       ),
     );
   }
@@ -740,23 +745,27 @@ class _AiSubNav extends ConsumerWidget {
     final selected = t == current;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
-      child: ListTile(
-        dense: true,
-        visualDensity: kSubNavTileDensity,
-        selected: selected,
-        selectedTileColor: scheme.secondaryContainer,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        title: Text(
-          _labelForAi(t, l10n),
-          softWrap: true,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 13,
-            color: selected ? scheme.onSecondaryContainer : null,
+      // 同世界观二级导航：ListTile 自带 Material，避免 ColoredBox 遮挡
+      child: Material(
+        type: MaterialType.transparency,
+        child: ListTile(
+          dense: true,
+          visualDensity: kSubNavTileDensity,
+          selected: selected,
+          selectedTileColor: scheme.secondaryContainer,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          title: Text(
+            _labelForAi(t, l10n),
+            softWrap: true,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: selected ? scheme.onSecondaryContainer : null,
+            ),
           ),
+          onTap: () => onSelect(t),
         ),
-        onTap: () => onSelect(t),
       ),
     );
   }

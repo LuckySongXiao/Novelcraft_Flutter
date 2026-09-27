@@ -183,7 +183,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
       final order = _topologicalSort(workflowDefinition.tasks);
 
       // --- 功能：跑之前探测最大并发 + 主 Agent 自主决定分派数 ---
+      // ⚠ TaskQueue 是应用级单例：本次调整必须在工作流结束后恢复原值，
+      // 否则一次「服务端繁忙 → 决策压低」会永久拖慢后续所有工作流。
       final planner = _dispatchPlanner;
+      final int originalConcurrency = _taskQueue.maxConcurrentTasks;
       if (planner != null) {
         try {
           final int parallelizable = order
@@ -210,8 +213,17 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         }
       }
 
-      _taskQueue.enqueueAll(order);
-      await _taskQueue.runAll(_runTask);
+      try {
+        _taskQueue.enqueueAll(order);
+        await _taskQueue.runAll(_runTask);
+      } finally {
+        // 无论成功/失败/异常，恢复队列原并发并清理终结态登记
+        // （_completed/_completion 不清理会随每次执行无限增长）。
+        if (_taskQueue.maxConcurrentTasks != originalConcurrency) {
+          _taskQueue.setMaxConcurrentTasks(originalConcurrency);
+        }
+        _taskQueue.clearFinishedState();
+      }
 
       // --- P4-27 会话存档 ---
       if (rwkvSessionId != null) {

@@ -641,7 +641,9 @@ abstract class BaseAgent implements IAgent {
         throw Exception('没有可用的 AI 服务');
       }
 
-      return processAIResponse(taskType, aiResponse, parameters);
+      // 必须先 await：直接 return Future 会绕过本 catch —— processAIResponse
+      // 内部的异步解析异常将成为未处理异步错误，精心设计的降级/回退链全部失效。
+      return await processAIResponse(taskType, aiResponse, parameters);
     } catch (e, st) {
       _logger.severe('AI 辅助执行任务失败: $taskType', e, st);
       if (_isFallbackExecution) {
@@ -694,7 +696,8 @@ abstract class BaseAgent implements IAgent {
           errorMessage: response.errorMessage ?? 'RWKV 推理返回空结果',
         );
       }
-      return processAIResponse(taskType, response.content, parameters);
+      // 同上：await 后异步解析异常才能落入下方 catch 统一兜底。
+      return await processAIResponse(taskType, response.content, parameters);
     } catch (e, st) {
       _logger.severe('RWKV 推理任务 $taskType 异常', e, st);
       return AgentTaskResult(

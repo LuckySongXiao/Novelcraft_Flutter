@@ -105,41 +105,52 @@ class _ProjectHealthCheckPageState extends ConsumerState<ProjectHealthCheckPage>
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const Spacer(),
-                    Tooltip(
-                      message: l10n.t('HC.ConsistencyCheckTooltip', '一致性检查'),
-                      child: FilledButton.tonalIcon(
-                        onPressed: _isChecking
-                            ? null
-                            : () => _run(HealthCheckMode.consistency),
-                        icon: const Icon(Icons.verified_user_outlined),
-                        label: Text(l10n.t('HC.ConsistencyCheck', '一致性检查')),
+                    Flexible(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.end,
+                        children: [
+                          Tooltip(
+                            message: l10n.t('HC.ConsistencyCheckTooltip',
+                                '一致性检查'),
+                            child: FilledButton.tonalIcon(
+                              onPressed: _isChecking
+                                  ? null
+                                  : () => _run(HealthCheckMode.consistency),
+                              icon: const Icon(Icons.verified_user_outlined),
+                              label:
+                                  Text(l10n.t('HC.ConsistencyCheck', '一致性检查')),
+                            ),
+                          ),
+                          Tooltip(
+                            message:
+                                l10n.t('HC.QualityCheckTooltip', '质量检查'),
+                            child: FilledButton.tonalIcon(
+                              onPressed: _isChecking
+                                  ? null
+                                  : () => _run(HealthCheckMode.quality),
+                              icon: const Icon(Icons.grade_outlined),
+                              label: Text(l10n.t('HC.QualityCheck', '质量检查')),
+                            ),
+                          ),
+                          Tooltip(
+                            message: l10n.t('HC.FullCheckTooltip', '全量检查'),
+                            child: FilledButton.icon(
+                              onPressed:
+                                  _isChecking ? null : () => _run(HealthCheckMode.all),
+                              icon: const Icon(Icons.health_and_safety),
+                              label: Text(l10n.t('HC.FullCheck', '全量检查')),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed:
+                                _isChecking ? null : () => _run(_lastMode),
+                            icon: const Icon(Icons.refresh),
+                            tooltip: l10n.t('HC.Recheck', '再次检查'),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: l10n.t('HC.QualityCheckTooltip', '质量检查'),
-                      child: FilledButton.tonalIcon(
-                        onPressed: _isChecking
-                            ? null
-                            : () => _run(HealthCheckMode.quality),
-                        icon: const Icon(Icons.grade_outlined),
-                        label: Text(l10n.t('HC.QualityCheck', '质量检查')),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: l10n.t('HC.FullCheckTooltip', '全量检查'),
-                      child: FilledButton.icon(
-                        onPressed: _isChecking ? null : () => _run(HealthCheckMode.all),
-                        icon: const Icon(Icons.health_and_safety),
-                        label: Text(l10n.t('HC.FullCheck', '全量检查')),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      onPressed: _isChecking ? null : () => _run(_lastMode),
-                      icon: const Icon(Icons.refresh),
-                      tooltip: l10n.t('HC.Recheck', '再次检查'),
                     ),
                   ],
                 ),

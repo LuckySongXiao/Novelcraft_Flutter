@@ -485,3 +485,46 @@ if ((resp.statusCode == 302 || resp.statusCode == 403) && resp.body.startsWith('
 | L4 MultiState 分叉（世界观分支并行推演） | **POST** `/multi_state/chat/completions` | `X-RWKV-Session-Id` + `dialogue_indices: int[]` + 同 L1 body | 同 session 内 O(1) 分叉多条剧情线（BE/A线/B线/C线），只需存 state 字节差，不用重跑 prefill；世界观并行推演 P3 23 核心 |
 | 辅助：缓存状态 | **GET** `/state/status` | （无 body） | 返回 L1/L2/L3 三层 session 数 + 命中率；健康检查面板 P4 26 拉取 |
 | 辅助：删除缓存 | **DELETE** `/state/{session_id}` | （无 body） | 工作流结束清理 L1 state，避免三张 4090 L1 16 槽被占满 |
+
+---
+
+## GLM 增量（2026-09-27 晚，分支 `glm/contribution-v1`，5 个提交）
+
+接手者注意：以下改动已全部通过 `flutter analyze 0 issue` + 测试 **116/116**（基线 95 → 新增 21 个）。
+
+### 已修复（对应本文件「已知遗留」编号）
+
+| 项 | 内容 |
+|---|---|
+| 遗留#2 | 两处忙等（`waitForPermit` 200ms / `TaskQueue` 门控 100ms）全部改**事件驱动唤醒**：`leaveInFlight`/`noteSuccess`/`invalidate`/`setMaxConcurrentTasks`/任务完成/清空都会主动唤醒等待者；保留周期兜底（1s / 500ms）覆盖「容量探测升档无本地事件」场景。`invalidate()` 此前不清醒等待者已补 |
+| 遗留#4 | 分派规划器 `configuredFallback` 读引擎配置 `maxConcurrentSessions`（原硬编码 16，小显存设备配置被无视） |
+| 遗留#5 | `WorkflowEngine` 用 try/finally 保证**工作流结束恢复 TaskQueue 原并发**并调用 `clearFinishedState()`（`_completed`/`_completion` 随每次执行无限增长的慢性泄漏） |
+| 遗留#7 | 聊天页新增「清空会话」入口：`CopilotChatLogController.clear()` 清 KVStore + 重置开场白；头部按钮带确认对话框；键 `AC.ClearChat`/`AC.ClearChatConfirm` 双语 |
+| 遗留「门控下沉」 | `RwkvBatchClient.postJson`（/state/* 等非批量路由）+ `RwkvEngine.rawCompletion`（引擎唯一绕过 `_semaphore` 的入口）全部接入许可闸——**现在没有任何推理路径绕过并发门控** |
+
+### 新发现并修复（审查所得）
+
+- **TaskQueue 僵尸任务**：门控/依赖等待中的任务 `cancel()` 在 `_running`/`_pending` 两处都查不到 → 返回 false 且任务照样执行。新增 `_tracked` 注册表覆盖「已派发未终态」全生命周期。
+- **取消态被覆盖**：runner 返回/异常路径无条件写 completed/failed，会覆盖运行中置的 cancelled。现已保留用户取消语义。
+- **3 处 `return Future` 未 await**（agent.dart ×2 / rwkv_engine.dart ×1）：异步解析异常成为未处理异步错误，精心设计的 catch/降级链全部失效。
+- **AIOutputSanitizer 缺聊天模板 token 清理**：`<|im_start|>`/`<|im_end|>`/`<|endoftext|>` 偶发泄漏（C# 版真机冒烟实证同款），已按 C# 版语义移植（含 `im_end` 紧跟 `im_start` 的模板续写截断）。
+
+### 新增测试（21 个）
+
+`task_queue_test`（6）、`rwkv_concurrency_test`（3）、`output_sanitizer_test`（9）、`copilot_chat_log_test`（2）、`postjson_gate_test`（1）——全部为纯 Dart/假实现，无需真端点。
+
+### 仍待做
+
+- 遗留#8（页面导航状态）：`_buildPage` 每次 new Widget，滚动位置/未保存草稿在切页后丢失——需 IndexedStack/KeepAlive 或 per-scope 状态托管，**涉及 UI 布局重构，建议 Windows 真机配合验证**
+- think 预算自适应（g1j `mdlet` 块白吃 max_tokens 的长期解）
+- `rwkvMaxConcurrentSessions` 在 AI 配置页的说明文案与实际生效链路的对齐核对
+
+### GLM 第二批（阅读视图 + 选节 AI + 响应式排版，commit 4ee8ec5/94478ef）
+
+**用户需求**：卷宗区域阅读正文 / 正文选节 AI 润色扩写续写 / 屏幕自适应智能排版。
+
+- **GUI 自动化测试落地**：`gui_pages_test.dart` —— 35 页 × 3 视口（800×600/1600×900/420×800）渲染 + RenderFlex 溢出自动检测 + 新建项目交互链路；内存库 + 假 KV 接管真实启动链（突破此前刻意绕开的限制）。**首扫抓出 4 处布局缺陷并修复**：两处二级导航 ListTile 被 ColoredBox 遮挡（3.47 新断言，94 失败的根因）、AI 配置页 4 个 SwitchListTile 同款、参数面板标题行与健康页按钮组窄视口溢出。
+- **选节 AI 助手**：`chapter_ai_panel.dart` —— SelectionArea.onSelectionChanged 捕获选区 → 润色/扩写/续写 + 附加要求 → 默认 provider 非流式调用（无服务明确指引）；原文/结果对照 + 复制；空选区引导。预览为只读快照，写回职责留编辑表单。
+- **智能排版**：正文列宽视口断点（≥1600→960 / ≥1200→840 / ≥900→760 / 窄屏全宽）+ 居中 + 字号 13-24 钳制；空正文占位时 AI 开关禁用。
+- **测试**：新增 chapter_reading_test 6 用例（面板契约/响应式断点/字号钳制/空态禁用）；累计 **123 用例 + 1 skip，analyze 0 issue**。
+- **测试基建注记**：3 个网络活跃页（aiCollaboration/aiConfiguration/projectHealthCheck）在渲染测试中 skip——它们加载即自动探测端点，flutter_test 对 pending-timer/HTTP-400 是硬断言；相关逻辑已由 mock 单测覆盖。

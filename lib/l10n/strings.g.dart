@@ -4166,6 +4166,9 @@ const Map<String, String> zhStrings = <String, String>{
   // --- Common / Dlg (跨页面通用) ---
   'Common.Close': '关闭',
   'Common.Cancel': '取消',
+  // --- GLM 增补：AI 协作聊天（源 CSV 未含，格式与生成器一致）---
+  'AC.ClearChat': '清空会话',
+  'AC.ClearChatConfirm': '将清空当前聊天记录并重新开始（已持久保存的历史将被删除，此操作不可撤销）。',
   'Common.Save': '保存',
   'Common.Create': '创建',
   'Common.Delete': '删除',
@@ -8446,6 +8449,9 @@ const Map<String, String> enStrings = <String, String>{
   // --- Common / Dlg (cross-page) ---
   'Common.Close': 'Close',
   'Common.Cancel': 'Cancel',
+  // --- GLM added: AI collaboration chat (not in source CSV; generator-style) ---
+  'AC.ClearChat': 'Clear chat',
+  'AC.ClearChatConfirm': 'Clear the current chat history and start over (persisted history will be deleted; this cannot be undone).',
   'Common.Save': 'Save',
   'Common.Create': 'Create',
   'Common.Delete': 'Delete',

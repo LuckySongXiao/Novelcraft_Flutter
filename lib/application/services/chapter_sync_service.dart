@@ -200,12 +200,17 @@ class ChapterSyncService {
     for (final CharacterRow c in matchedCharacters) {
       final String entry = '$marker：$summaryText';
       // 首末出场章节（对齐 C# UpdateAppearanceRange）
-      final int? firstOrder = c.firstAppearanceChapterId != null
-          ? orderLookup[c.firstAppearanceChapterId!]
-          : null;
-      final String? firstAppearance = (firstOrder == null || currentOrder < firstOrder)
+      // ⚠ firstOrder 为 null 有两种含义：①从未设定首出场 → 应设本章；
+      // ②首出场章节已被删除（orderLookup 查不到）→ **保持原值不动**，
+      //   否则本章会误抢首出场（last 侧用 -(1<<30) 兜底自愈，属可接受）。
+      final String? firstId = c.firstAppearanceChapterId;
+      final int? firstOrder =
+          firstId != null ? orderLookup[firstId] : null;
+      final String firstAppearance = firstId == null
           ? input.chapterId
-          : c.firstAppearanceChapterId;
+          : (firstOrder != null && currentOrder < firstOrder
+              ? input.chapterId
+              : firstId);
       final int lastOrder = c.lastAppearanceChapterId != null
           ? (orderLookup[c.lastAppearanceChapterId!] ?? -(1 << 30))
           : -(1 << 30);
@@ -274,11 +279,18 @@ class ChapterSyncService {
             ..where((t) =>
                 t.factionId.equals(f.id) & notDeleted(t.isDeleted)))
           .get();
+      final bool mentionedInText = _contains(context, f.name);
       await (_db.update(_db.factions)..where((t) => t.id.equals(f.id))).write(
         FactionsCompanion(
           memberCount: Value(members.length),
-          history: Value(_appendUnique(f.history, '$marker：$summaryText')),
-          notes: Value(_appendUnique(f.notes, '$marker：同步更新')),
+          // 噪音收紧：只有正文**确实提到**势力名才追加历史/备注——
+          // 「出场角色所属势力」每章必触发追加，会把 notes 刷成噪音墙
+          history: Value(mentionedInText
+              ? _appendUnique(f.history, '$marker：$summaryText')
+              : f.history),
+          notes: Value(mentionedInText
+              ? _appendUnique(f.notes, '$marker：同步更新')
+              : f.notes),
           updatedAt: Value(now),
         ),
       );
@@ -368,8 +380,13 @@ class ChapterSyncService {
         for (final String id in ordered)
           if (chapterById[id] != null) chapterById[id]!,
       ];
-      final int actualWords =
-          involvedChapters.fold(0, (int sum, ChapterRow c) => sum + c.wordCount);
+      // ⚠ wordCount 兜底：章节表单的「字数」靠手填，多数章节是 0 ——
+      // 不兜底会让 actualWords 恒 0、剧情进度永远不动（状态更新的最大暗坑）。
+      // content 长度是唯一可靠的落库事实。
+      final int actualWords = involvedChapters.fold(0,
+          (int sum, ChapterRow c) => sum + (c.wordCount > 0
+              ? c.wordCount
+              : (c.content?.length ?? 0)));
       final int estimated = p.estimatedWordCount ?? 0;
       double progress;
       if (estimated > 0) {
@@ -381,7 +398,10 @@ class ChapterSyncService {
             : (inferred > 100 ? 100 : inferred);
       }
       String status = p.status;
-      if (progress >= 100) {
+      // 状态推进保护：达标时只把「规划中/进行中」推进为「已完成」，
+      // 不动用户手动设置的「暂停」等状态——自动更新不得覆盖人工意图。
+      const autoAdvancable = <String>{'规划中', '进行中'};
+      if (progress >= 100 && autoAdvancable.contains(status)) {
         status = '已完成';
       } else if (status == '规划中') {
         status = '进行中';
@@ -598,21 +618,31 @@ class ChapterSyncService {
   // ---------------------------------------------------------------------------
 
   Future<CharacterRelationshipRow?> _characterPair(String a, String b) async {
-    return (_db.select(_db.characterRelationships)
+    // ⚠ 用 get()+firstOrNull 而非 getSingleOrNull：历史脏数据（同一对
+    // 存在双向重复记录）会让 getSingleOrNull 抛 StateError，炸掉整条
+    // 同步链（剧情/时间线全部停摆）——取第一条即可，脏数据容错。
+    final List<CharacterRelationshipRow> rows = await (_db.select(
+            _db.characterRelationships)
           ..where((t) =>
               notDeleted(t.isDeleted) &
               ((t.sourceCharacterId.equals(a) & t.targetCharacterId.equals(b)) |
-                  (t.sourceCharacterId.equals(b) & t.targetCharacterId.equals(a)))))
-        .getSingleOrNull();
+                  (t.sourceCharacterId.equals(b) &
+                      t.targetCharacterId.equals(a)))))
+        .get();
+    return rows.isEmpty ? null : rows.first;
   }
 
   Future<FactionRelationshipRow?> _factionPair(String a, String b) async {
-    return (_db.select(_db.factionRelationships)
+    // 同 _characterPair：脏数据容错，取第一条
+    final List<FactionRelationshipRow> rows = await (_db.select(
+            _db.factionRelationships)
           ..where((t) =>
               notDeleted(t.isDeleted) &
               ((t.sourceFactionId.equals(a) & t.targetFactionId.equals(b)) |
-                  (t.sourceFactionId.equals(b) & t.targetFactionId.equals(a)))))
-        .getSingleOrNull();
+                  (t.sourceFactionId.equals(b) &
+                      t.targetFactionId.equals(a)))))
+        .get();
+    return rows.isEmpty ? null : rows.first;
   }
 
   static bool _isCharacterMatched(

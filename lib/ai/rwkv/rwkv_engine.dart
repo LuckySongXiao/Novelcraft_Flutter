@@ -570,7 +570,8 @@ class RwkvEngine {
   /// 扫描本地模型目录。
   Future<List<RwkvLocalModel>> scanLocalModels() async {
     try {
-      return _modelScanner.scan(config.modelsDir);
+      // await 后异步异常才能落入 catch 返回空表，而不是变成未处理异步错误。
+      return await _modelScanner.scan(config.modelsDir);
     } catch (e, st) {
       _logger.warning('扫描本地 RWKV 模型失败', e, st);
       return const <RwkvLocalModel>[];
@@ -658,6 +659,30 @@ class RwkvEngine {
     final String text = prompt;
     if (text.trim().isEmpty) return null;
 
+    // 并发闸对齐 chatWithSession：rawCompletion 是引擎内唯一绕过 _semaphore
+    // 的推理入口（工作流的 Agent 前置探测/一次性生成都会走这里），
+    // 并发风暴时同样会打满本地 HTTP 在途。
+    await _semaphore.acquire();
+    try {
+      return await _rawCompletionLocked(
+        text,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topP: topP,
+        topK: topK,
+      );
+    } finally {
+      _semaphore.release();
+    }
+  }
+
+  Future<String?> _rawCompletionLocked(
+    String text, {
+    int maxTokens = 2048,
+    double temperature = 0.9,
+    double topP = 0.85,
+    int topK = 0,
+  }) async {
     final Map<String, dynamic> body = <String, dynamic>{
       'contents': <String>[text],
       'stream': false,

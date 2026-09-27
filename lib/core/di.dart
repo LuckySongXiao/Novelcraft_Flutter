@@ -472,7 +472,21 @@ final workflowDispatchPlannerProvider = Provider<WorkflowDispatchPlanner>((
       final int cap = cloud.concurrency.clientHardCap;
       return avail < cap ? avail : cap;
     },
-    configuredFallback: () => 16,
+    // 探测失败时的回退值：读引擎配置的会话上限（与 AI 配置页
+    // rwkvMaxConcurrentSessions 同源），而非硬编码 —— 此前写死 16，
+    // 用户在小显存设备上配置的低上限会被规划器无视。
+    configuredFallback: () {
+      try {
+        final int n = ref
+            .read(rwkvProviderInstanceProvider)
+            .engine
+            .config
+            .maxConcurrentSessions;
+        return n > 0 ? n : 16;
+      } on Object {
+        return 16;
+      }
+    },
     askMainAgent: (String prompt) async {
       final AgentRoleWorkflowSettings s = ref.read(dualAgentSettingsProvider);
       if (!s.enableDualAgentWorkflow) return null;

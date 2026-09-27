@@ -42,6 +42,27 @@ class TaskQueue {
   final StreamController<WorkflowTask> _taskStatusChangedController =
       StreamController<WorkflowTask>.broadcast();
 
+  /// 并发门控等待者（唤醒式，替代 100ms 忙等）。
+  final List<Completer<void>> _gateWaiters = <Completer<void>>[];
+
+  void _wakeGateOne() {
+    while (_gateWaiters.isNotEmpty) {
+      final w = _gateWaiters.removeAt(0);
+      if (!w.isCompleted) {
+        w.complete();
+        return;
+      }
+    }
+  }
+
+  void _wakeGateAll() {
+    final waiters = List<Completer<void>>.from(_gateWaiters);
+    _gateWaiters.clear();
+    for (final w in waiters) {
+      if (!w.isCompleted) w.complete();
+    }
+  }
+
   /// 构造任务队列。
   /// 并发上限（只读快照）。
   ///
@@ -57,6 +78,8 @@ class TaskQueue {
     if (n < 1) return;
     _maxConcurrentTasks = n;
     _logger.info('任务队列并发上限调整为 $n');
+    // 上限变化（尤其调大）时唤醒等待者复评；调小无副作用（醒来重新检查）
+    _wakeGateAll();
   }
 
   TaskQueue(this._logger, {int maxConcurrentTasks = 5})
@@ -96,7 +119,14 @@ class TaskQueue {
     }
   }
 
-  /// 取消任务（运行中或待处理均可）。
+  /// 已派发但未到终态的任务（含门控/依赖等待中）。
+  ///
+  /// cancel/clear 需要能找到「已从 _pending 取出、尚未进入 _running」的
+  /// 任务 —— 此前这类任务两处都查不到，cancel() 返回 false 且任务照样
+  /// 执行（僵尸任务）。
+  final Map<String, WorkflowTask> _tracked = <String, WorkflowTask>{};
+
+  /// 取消任务（运行中 / 待处理 / 门控等待中均可）。
   bool cancel(String taskId) {
     if (_running.containsKey(taskId)) {
       final task = _running.remove(taskId)!;
@@ -121,6 +151,16 @@ class TaskQueue {
       _logger.info('队列中的任务已取消: ${task.name} (ID: $taskId)');
       return true;
     }
+    // 门控 / 依赖等待中的任务：标记取消，等待循环会看到状态并自行收尾
+    final tracked = _tracked[taskId];
+    if (tracked != null && tracked.status != WorkflowStatus.cancelled) {
+      tracked.status = WorkflowStatus.cancelled;
+      tracked.completedAt = DateTime.now();
+      tracked.errorMessage = '任务被用户取消';
+      _logger.info('等待中的任务已取消: ${tracked.name} (ID: $taskId)');
+      _wakeGateAll();
+      return true;
+    }
     return false;
   }
 
@@ -135,7 +175,19 @@ class TaskQueue {
       _notify(task);
     }
     _pending.clear();
+    // 门控/依赖等待中的任务同样取消
+    for (final task in List<WorkflowTask>.from(_tracked.values)) {
+      if (task.status != WorkflowStatus.cancelled &&
+          task.status != WorkflowStatus.completed &&
+          task.status != WorkflowStatus.failed) {
+        task.status = WorkflowStatus.cancelled;
+        task.completedAt = DateTime.now();
+        task.errorMessage = '队列被清空';
+      }
+    }
     _logger.info('任务队列已清空');
+    // 唤醒门控中的等待任务：它们醒来会看到取消态并自行收尾
+    _wakeGateAll();
   }
 
   /// 执行全部已入队任务。
@@ -153,9 +205,13 @@ class TaskQueue {
     final futures = <Future<void>>[];
     while (_pending.isNotEmpty) {
       final task = _pending.removeAt(0);
+      // 登记为「已派发未终态」：cancel/clear 才能找到门控/依赖等待中的它
+      _tracked[task.id] = task;
       futures.add(_dispatch(task, runner));
     }
     await Future.wait(futures);
+    // 防御性清理（_dispatch 的 finally 已逐个移除，这里兜底）
+    _tracked.clear();
   }
 
   /// 取指定状态的任务列表。
@@ -181,12 +237,35 @@ class TaskQueue {
       }
     }
 
-    // 动态并发门控：主 Agent 分派决策可运行时调整 _maxConcurrentTasks，
-    // 忙等（100ms）仅在打满时发生，空闲路径零开销。
+    // 依赖等待期间被取消（cancel/clear 已置状态）→ 直接收尾，不再执行。
+    if (task.status == WorkflowStatus.cancelled) {
+      _finishCancelled(task);
+      return;
+    }
+
+    // 动态并发门控：主 Agent 分派决策可运行时调整 _maxConcurrentTasks。
+    // 唤醒式（依赖完成 / 上限调整 / 队列清空都会触发），500ms 周期兜底
+    // 防丢失唤醒；等待中每次醒来都复查取消状态，避免「僵尸任务」——
+    // 此前 cancel() 在任务已被取出等待门控时返回 false，任务照样执行。
     while (_running.length >= _maxConcurrentTasks) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (task.status == WorkflowStatus.cancelled) {
+        _finishCancelled(task);
+        return;
+      }
+      final waiter = Completer<void>();
+      _gateWaiters.add(waiter);
+      await waiter.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
+      _gateWaiters.remove(waiter);
     }
     try {
+      // 门控等待期间被取消（见上）
+      if (task.status == WorkflowStatus.cancelled) {
+        _finishCancelled(task);
+        return;
+      }
       task.status = WorkflowStatus.running;
       task.startedAt = DateTime.now();
       _running[task.id] = task;
@@ -194,6 +273,10 @@ class TaskQueue {
       _notify(task);
 
       final result = await runner(task);
+      // runner 运行期间被 cancel() 置了取消态 → 不覆盖（保留用户取消语义）
+      if (task.status == WorkflowStatus.cancelled) {
+        return;
+      }
       task.result = result;
       task.progress = 100;
       if (result.isSuccess) {
@@ -203,16 +286,31 @@ class TaskQueue {
         task.errorMessage = result.errorMessage;
       }
     } catch (e) {
-      task.status = WorkflowStatus.failed;
-      task.errorMessage = e.toString();
+      // 异常路径同样不覆盖取消态
+      if (task.status != WorkflowStatus.cancelled) {
+        task.status = WorkflowStatus.failed;
+        task.errorMessage = e.toString();
+      }
       _logger.severe('任务处理失败: ${task.name} (ID: ${task.id})', e);
     } finally {
       _running.remove(task.id);
+      _tracked.remove(task.id);
       task.completedAt = DateTime.now();
       _completed[task.id] = task;
       _complete(task.id);
       _notify(task);
+      // 腾出一个并发槽：唤醒门控等待者复评
+      _wakeGateOne();
     }
+  }
+
+  /// 等待期间被取消的任务的轻量收尾（登记完成事件，避免依赖者永等）。
+  void _finishCancelled(WorkflowTask task) {
+    task.completedAt ??= DateTime.now();
+    _tracked.remove(task.id);
+    _completed[task.id] = task;
+    _complete(task.id);
+    _notify(task);
   }
 
   void _complete(String taskId) {
@@ -231,8 +329,21 @@ class TaskQueue {
     _completion.addAll(completions);
   }
 
+  /// 清理单次运行后的终结态登记（_completed / _completion）。
+  ///
+  /// TaskQueue 是应用级单例，这两张 Map 若不清理会随每次工作流执行
+  /// 无限增长（慢性内存泄漏）。仅在 runAll 结束（无 pending/running）时调用。
+  void clearFinishedState() {
+    if (_pending.isNotEmpty || _running.isNotEmpty) return;
+    _completed.clear();
+    _completion.clear();
+    _tracked.clear();
+    _logger.fine('已清理任务队列终结态登记');
+  }
+
   /// 释放事件控制器。
   void dispose() {
+    _wakeGateAll();
     _taskStatusChangedController.close();
   }
 }

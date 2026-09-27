@@ -317,6 +317,17 @@ Map<String, dynamic> _chapterToMap(dynamic r) => {
       'tags': r.tags,
     };
 
+/// 章节字数自动补算：手填值优先；留空/0 且正文非空时按正文长度统计。
+///
+/// 不补算的话 wordCount 恒 0 → 剧情进度（actualWords/estimated）恒 0、
+/// 状态永不推进——「剧情状态自动更新」最大的暗坑（PITFALLS 补充）。
+int _autoWordCount(Map<String, dynamic> v) {
+  final int manual = (v['wordCount'] as num?)?.toInt() ?? 0;
+  if (manual > 0) return manual;
+  final String content = (v['content'] as String?) ?? '';
+  return content.trim().isEmpty ? 0 : content.trim().length;
+}
+
 final chapterEntityConfig = EntityPageConfig(
   titleZh: '章节管理',
   titleEn: 'Chapters',
@@ -324,12 +335,14 @@ final chapterEntityConfig = EntityPageConfig(
   itemNameEn: 'Chapter',
   nameField: 'title',
   summaryField: 'status',
+  // 保存后触发世界观/剧情/时间线自动同步（entity_page._save → _runPostProcess）
+  syncOnSave: true,
   fields: [
     _text('title', '章节标题', 'Chapter Title'),
     // Chapters.status 表列默认值 'Draft'
     _selc('status', '状态', 'Status', PseudoEnums.chapterStatuses),
     _text('type', '类型', 'Type'),
-    _num('wordCount', '字数', 'Word Count'),
+    _num('wordCount', '字数（留空自动按正文统计）', 'Word Count (auto)'),
     _multi('summary', '梗概', 'Summary'),
     _multi('content', '正文', 'Content'),
     _multi('notes', '备注', 'Notes'),
@@ -351,7 +364,7 @@ final chapterEntityConfig = EntityPageConfig(
           projectId: d.Value(pid),
           status: d.Value(v['status'] as String? ?? 'Draft'),
           type: d.Value(v['type'] as String?),
-          wordCount: d.Value(v['wordCount'] as int? ?? 0),
+          wordCount: d.Value(_autoWordCount(v)),
           summary: d.Value(v['summary'] as String?),
           content: d.Value(v['content'] as String?),
           notes: d.Value(v['notes'] as String?),
@@ -363,7 +376,7 @@ final chapterEntityConfig = EntityPageConfig(
           title: d.Value(v['title'] as String? ?? ''),
           status: d.Value(v['status'] as String? ?? 'Draft'),
           type: d.Value(v['type'] as String?),
-          wordCount: d.Value(v['wordCount'] as int? ?? 0),
+          wordCount: d.Value(_autoWordCount(v)),
           summary: d.Value(v['summary'] as String?),
           content: d.Value(v['content'] as String?),
           notes: d.Value(v['notes'] as String?),

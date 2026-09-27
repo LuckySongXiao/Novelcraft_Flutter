@@ -111,16 +111,53 @@ class RwkvConcurrencyController {
   int get inFlight => _inFlight;
   RwkvServerCapacity? get lastCapacity => _cached;
 
-  /// 动态许可门控：在途数达到当前许可上限时等待（每 200ms 复查）。
+  /// 许可门控的等待者（唤醒式，替代 200ms 忙等轮询）。
+  final List<Completer<void>> _permitWaiters = <Completer<void>>[];
+
+  /// 动态许可门控：在途数达到当前许可上限时等待。
   ///
   /// 许可 = min(clientHardCap, 服务端 available，排队再折半，惩罚档再收紧)。
   /// 这是「尽可能吃满服务端并发」与「本地资源不失控」的折中执行点：
   /// 服务端容量大 → 许可≈clientHardCap（64）；服务端报紧 → 自动跟随。
+  ///
+  /// 唤醒时机：[leaveInFlight]（腾出许可）与 [noteSuccess]（惩罚档回升）会
+  /// 主动唤醒等待者；另保留 1s 周期复评兜底 —— 许可还会随容量探测 TTL
+  /// 刷新而**升高**（如服务端释放显存），该场景没有本地事件可依赖，
+  /// 只能靠周期复查。相比原先 200ms 忙等，空转频率降为 1/5，且打满路径
+  /// 在多数情况下完全零轮询（事件驱动）。
   Future<void> waitForPermit() async {
     while (true) {
       final int permits = await effectivePermits();
       if (_inFlight < permits) return;
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final waiter = Completer<void>();
+      _permitWaiters.add(waiter);
+      // 1s 兜底复评：覆盖「许可升高但无本地事件」的场景；正常情况下
+      // leaveInFlight/noteSuccess 会先到，这里只是保险丝。
+      await waiter.future.timeout(
+        const Duration(seconds: 1),
+        onTimeout: () {},
+      );
+      _permitWaiters.remove(waiter);
+    }
+  }
+
+  /// 唤醒一个等待者（许可可能已腾出）。
+  void _wakeOneWaiter() {
+    while (_permitWaiters.isNotEmpty) {
+      final w = _permitWaiters.removeAt(0);
+      if (!w.isCompleted) {
+        w.complete();
+        return;
+      }
+    }
+  }
+
+  /// 唤醒全部等待者（惩罚档回升 / 许可整体变化时）。
+  void _wakeAllWaiters() {
+    final waiters = List<Completer<void>>.from(_permitWaiters);
+    _permitWaiters.clear();
+    for (final w in waiters) {
+      if (!w.isCompleted) w.complete();
     }
   }
 
@@ -171,18 +208,25 @@ class RwkvConcurrencyController {
       _penaltyCap = (_penaltyCap! + 1).clamp(1, clientHardCap);
       _successStreak = 0;
       _logger.fine('并发档位回升到 $_penaltyCap');
+      // 惩罚档回升 = 许可可能变大，唤醒全部等待者复评
+      _wakeAllWaiters();
     }
   }
 
   void enterInFlight() => _inFlight++;
   void leaveInFlight() {
     if (_inFlight > 0) _inFlight--;
+    // 腾出一个许可：唤醒队首等待者复评
+    _wakeOneWaiter();
   }
 
   /// 使缓存失效（例如刚启动完本地引擎，容量已变）。
   void invalidate() {
     _cached = null;
     _cachedAt = null;
+    // 缓存失效意味着容量已变（如本地引擎刚启动/重启）：唤醒全部等待者
+    // 立即复评，否则它们要等 1s 兜底周期才可能看到新容量。
+    _wakeAllWaiters();
   }
 
   Future<RwkvServerCapacity?> _capacity({required bool force}) async {

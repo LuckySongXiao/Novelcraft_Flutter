@@ -776,6 +776,14 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                           color: scheme.onSurfaceVariant,
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      // 清空会话：记录落在 KVStore（重启不丢），此前用户想
+                      // 重开对话只能卸载重装 —— 交接文档遗留 #7。
+                      _ClearChatButton(
+                        onConfirmed: () => ref
+                            .read(copilotChatLogProvider.notifier)
+                            .clear(),
+                      ),
                     ],
                   ),
                 ),
@@ -1396,6 +1404,57 @@ class _MessageBubble extends ConsumerWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 清空会话按钮：带确认对话框（记录会落 KVStore 持久清除，不可撤销）。
+class _ClearChatButton extends ConsumerWidget {
+  const _ClearChatButton({required this.onConfirmed});
+
+  /// 用户在确认对话框点「清空」后执行（由页面传入 notifier.clear）。
+  final Future<void> Function() onConfirmed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = ref.watch(l10nProvider);
+    return Tooltip(
+      message: l10n.t('AC.ClearChat', '清空会话'),
+      child: IconButton(
+        icon: Icon(
+          Icons.delete_sweep_outlined,
+          size: 16,
+          color: scheme.onSurfaceVariant,
+        ),
+        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+        padding: EdgeInsets.zero,
+        onPressed: () async {
+          final bool? ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(l10n.t('AC.ClearChat', '清空会话')),
+              content: Text(l10n.t(
+                'AC.ClearChatConfirm',
+                '将清空当前聊天记录并重新开始（已持久保存的历史将被删除，此操作不可撤销）。',
+              )),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: Text(l10n.t('Common.Cancel', '取消')),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: Text(l10n.t('AC.ClearChat', '清空会话')),
+                ),
+              ],
+            ),
+          );
+          if (ok == true) {
+            await onConfirmed();
+          }
+        },
       ),
     );
   }

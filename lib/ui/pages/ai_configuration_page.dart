@@ -153,6 +153,48 @@ class AIConfigurationPage extends ConsumerStatefulWidget {
       _AIConfigurationPageState();
 }
 
+/// 最大令牌数滑动档位节点：512 → 1M（12 档）。
+const List<int> kMaxTokensSteps = <int>[
+  512, // 512
+  1024, // 1K
+  2048, // 2K
+  4096, // 4K
+  8192, // 8K
+  16384, // 16K
+  32768, // 32K
+  65536, // 64K
+  131072, // 128K
+  262144, // 256K
+  524288, // 512K
+  1048576, // 1M
+];
+
+/// 档位刻度标签（与 [kMaxTokensSteps] 一一对应）。
+const List<String> kMaxTokensStepLabels = <String>[
+  '512', '1K', '2K', '4K', '8K', '16K', '32K', '64K', '128K', '256K',
+  '512K', '1M',
+];
+
+/// 值 → 档位标签（16K/32K/.../1M；非档位值显示实际数值）。
+String maxTokensLabel(int tokens) {
+  final int idx = kMaxTokensSteps.indexOf(tokens);
+  return idx >= 0 ? kMaxTokensStepLabels[idx] : '$tokens';
+}
+
+/// 值 → 最近档位的滑块索引（存量自定义值自动吸附）。
+int maxTokensSliderIndex(int tokens) {
+  int best = 0;
+  int bestDiff = 1 << 62;
+  for (int i = 0; i < kMaxTokensSteps.length; i++) {
+    final int d = (kMaxTokensSteps[i] - tokens).abs();
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   _ProviderKind _selectedKind = _ProviderKind.deepseek;
   final Map<_ProviderKind, _ProviderConfig> _configs = {
@@ -2045,14 +2087,29 @@ class _ConfigCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 窄视口下「标题 + Spacer + 两个按钮」会溢出 30px：
+            // 标题用 Flexible 收缩，按钮行改 Wrap 允许换行
             Row(
               children: [
-                Text(l10n.tf('AIC.ParamsTitle', '{label} 参数',
-                    {'label': _pvdLabel(cfg.kind, isEnglish)}),
+                Flexible(
+                  child: Text(
+                    l10n.tf('AIC.ParamsTitle', '{label} 参数',
+                        {'label': _pvdLabel(cfg.kind, isEnglish)}),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           color: scheme.primary,
-                        )),
-                const Spacer(),
+                        ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: [
                 OutlinedButton.icon(
                   onPressed: testing ? null : onTest,
                   icon: testing
@@ -2066,7 +2123,6 @@ class _ConfigCard extends ConsumerWidget {
                       ? l10n.t('AIC.Connecting', '连接中…')
                       : l10n.t('AIC.TestConnection', '测试连接')),
                 ),
-                const SizedBox(width: 8),
                 FilledButton.icon(
                   onPressed: onSave,
                   icon: const Icon(Icons.save_outlined, size: 18),
@@ -2186,26 +2242,60 @@ class _ConfigCard extends ConsumerWidget {
                     ),
                   ),
                 ),
-                _Field(
-                  label: l10n.t('AIC.FieldMaxTokens', '最大令牌数'),
-                  child: SizedBox(
-                    width: 140,
-                    child: TextField(
-                      keyboardType: TextInputType.number,
-                      controller: TextEditingController(
-                          text: cfg.defaultMaxTokens.toString()),
-                      onChanged: (v) {
-                        final n = int.tryParse(v);
-                        if (n != null && n > 0) {
-                          cfg.defaultMaxTokens = n;
-                          onChanged();
-                        }
-                      },
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                // ---- 最大令牌数：滑动输入，档位节点 16K~1M ----
+                // （原为 140 宽数字输入框；改为全宽 Slider，7 档 snap，
+                //   非档位的存量值自动吸附最近档位）
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            l10n.t('AIC.FieldMaxTokens', '最大令牌数'),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          const Spacer(),
+                          Text(
+                            maxTokensLabel(cfg.defaultMaxTokens),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: scheme.primary,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
+                      Slider(
+                        value: maxTokensSliderIndex(cfg.defaultMaxTokens)
+                            .toDouble(),
+                        min: 0,
+                        max: (kMaxTokensSteps.length - 1).toDouble(),
+                        divisions: kMaxTokensSteps.length - 1,
+                        label: maxTokensLabel(cfg.defaultMaxTokens),
+                        onChanged: (v) {
+                          cfg.defaultMaxTokens =
+                              kMaxTokensSteps[v.round()];
+                          onChanged();
+                        },
+                      ),
+                      // 档位刻度
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          for (final String lbl
+                              in kMaxTokensStepLabels)
+                            Text(
+                              lbl,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
                 _Field(
@@ -2924,13 +3014,16 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                 '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。'),
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
           ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: s.enableDualAgentWorkflow,
-            onChanged: (bool v) => patch(enable: v),
-            title: Text(l10n.t('AICfg.EnableDualAgent',
-                '启用 MainAgent / SubAgent 双代理写作流')),
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: s.enableDualAgentWorkflow,
+              onChanged: (bool v) => patch(enable: v),
+              title: Text(l10n.t('AICfg.EnableDualAgent',
+                  '启用 MainAgent / SubAgent 双代理写作流')),
+            ),
           ),
           const SizedBox(height: 8),
           _Field(
@@ -2988,14 +3081,17 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
             label: l10n.t('AICfg.HintSubAgentRole', 'SubAgent 职责描述'),
             child: TextField(controller: _subRoleCtrl, maxLines: 2),
           ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: s.enableArchiveWrite,
-            onChanged: (bool v) => patch(archive: v),
-            title: Text(l10n.t('AICfg.AllowArchiveWrite',
-                '允许 SubAgent 将纯净定稿写入正式项目档案库')),
-          ),
+          Material(
+            type: MaterialType.transparency,
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: s.enableArchiveWrite,
+              onChanged: (bool v) => patch(archive: v),
+              title: Text(l10n.t('AICfg.AllowArchiveWrite',
+                  '允许 SubAgent 将纯净定稿写入正式项目档案库')),
+            ),
+          )
         ],
       ),
     );
@@ -3275,38 +3371,44 @@ class _ChapterSyncCardState extends ConsumerState<_ChapterSyncCard> {
               const SizedBox(height: 12),
               const Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ] else ...[
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _ruleEnabled,
-                onChanged: (bool v) async {
-                  setState(() => _ruleEnabled = v);
-                  await ref
-                      .read(chapterPostProcessServiceProvider)
-                      .setRuleEnabled(v);
-                },
-                title: Text(l10n.t('SYN.ToggleTitle', '章节保存后自动同步世界观')),
-                subtitle: Text(
-                  l10n.t('SYN.ToggleSub',
-                      '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）'),
-                  style: const TextStyle(fontSize: 12),
+              Material(
+                type: MaterialType.transparency,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _ruleEnabled,
+                  onChanged: (bool v) async {
+                    setState(() => _ruleEnabled = v);
+                    await ref
+                        .read(chapterPostProcessServiceProvider)
+                        .setRuleEnabled(v);
+                  },
+                  title: Text(l10n.t('SYN.ToggleTitle', '章节保存后自动同步世界观')),
+                  subtitle: Text(
+                    l10n.t('SYN.ToggleSub',
+                        '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _aiEnabled,
-                onChanged: (bool v) async {
-                  setState(() => _aiEnabled = v);
-                  await ref
-                      .read(chapterPostProcessServiceProvider)
-                      .setAiEnabled(v);
-                },
-                title: Text(l10n.t('SYN.AIToggleTitle', 'AI 状态抽取（实验）')),
-                subtitle: Text(
-                  l10n.t('SYN.AIToggleSub',
-                      '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）'),
-                  style: const TextStyle(fontSize: 12),
+              Material(
+                type: MaterialType.transparency,
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _aiEnabled,
+                  onChanged: (bool v) async {
+                    setState(() => _aiEnabled = v);
+                    await ref
+                        .read(chapterPostProcessServiceProvider)
+                        .setAiEnabled(v);
+                  },
+                  title: Text(l10n.t('SYN.AIToggleTitle', 'AI 状态抽取（实验）')),
+                  subtitle: Text(
+                    l10n.t('SYN.AIToggleSub',
+                        '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
-              ),
+              )
             ],
           ],
         ),

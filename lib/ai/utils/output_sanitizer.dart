@@ -32,10 +32,38 @@ class AIOutputSanitizer {
     content = _tryUnwrapCodeFence(content);
     content = _tryExtractFromJson(content, preferredJsonKeys ?? const []);
     content = _unescapeCommonSequences(content);
+    // 聊天模板 token 泄漏清理（须在思维链剥离前，避免模板标记干扰段落识别）：
+    // rwkv-g1k 等 chat 模板模型在 state 端点偶发输出原始模板标记
+    // （C# 版真机冒烟实测同款问题，见 RwkvThinkingStripper 修复）。
+    content = _stripChatTemplateTokens(content);
     content = _stripThinkingBlocks(content);
     content = _stripLeadingQuoteBlock(content);
     content = _stripPolitenessPreamble(content);
     return content.trim();
+  }
+
+  /// 聊天模板 token：`<|im_start|>`（含紧随 role 名）、`<|im_end|>`、``。
+  static final RegExp _chatTemplateTokenRegex = RegExp(
+    r'<\|\s*im_start\s*\|>\s*(system|user|assistant|tool)?'
+    r'|<\|\s*im_end\s*\|>'
+    r'|<\|\s*endoftext\s*\|>',
+    caseSensitive: false,
+  );
+
+  /// 模板续写形态：`<|im_end|>` 后紧跟 `<|im_start|>` —— 模型已在续写
+  /// 对话模板而非正文，其后内容属于其他回合的模板文本，全部丢弃。
+  /// `im_end` 后跟普通文本则不截断（保守保留，避免误伤正文）。
+  static final RegExp _templateContinuationRegex = RegExp(
+    r'<\|\s*im_end\s*\|>\s*<\|\s*im_start\s*\|>',
+    caseSensitive: false,
+  );
+
+  static String _stripChatTemplateTokens(String content) {
+    final continuation = _templateContinuationRegex.firstMatch(content);
+    if (continuation != null) {
+      content = content.substring(0, continuation.start);
+    }
+    return content.replaceAll(_chatTemplateTokenRegex, '');
   }
 
   /// 提取可见内容。
