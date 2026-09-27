@@ -12,6 +12,7 @@
 library;
 
 import 'agent.dart';
+import '../utils/anti_ai_flavor.dart';
 
 /// 从 AI 返回中抽取 Markdown 标题（## xxx）与下一段内容到 Map。
 Map<String, String> parseMarkdownSections(String ai) {
@@ -217,17 +218,27 @@ class WriterAgent extends BaseAgent {
   @override
   String buildSystemPrompt(String taskType) {
     if (taskType == 'GenerateChapterContent') {
-      return '你是《玄穹剑主》的网文主笔作家（WriterAgent）。'
-          '要求：严格中文、第三人称、无现代用语、修仙术语统一；'
-          '分节：## 章节标题 / ## 正文；字数：至少1500字。'
-          '人物语气必须匹配：叶知秋=冷静外冷内热；谢青山=憨厚正直；苏曼莎=清冷隐忍；'
-          '冷无霜=冷艳毒舌；血无极=阴毒深沉。开头抓眼球，结尾留钩子。';
+      // 反 AI 味五戒：StoryScope（arXiv:2604.03136）实证的 5 大话语层
+      // AI 写作倾向，作为负向约束注入（见 anti_ai_flavor.dart 头注）
+      return withAntiAiFlavorGuidelines(
+        '你是《玄穹剑主》的网文主笔作家（WriterAgent）。'
+        '要求：严格中文、第三人称、无现代用语、修仙术语统一；'
+        '分节：## 章节标题 / ## 正文；字数：至少1500字。'
+        '人物语气必须匹配：叶知秋=冷静外冷内热；谢青山=憨厚正直；苏曼莎=清冷隐忍；'
+        '冷无霜=冷艳毒舌；血无极=阴毒深沉。开头抓眼球，结尾留钩子。',
+      );
     }
     if (taskType == 'ContinueChapter') {
-      return '你是东方奇幻续写手。请根据上下文延续，人物不崩、节奏不停、字数1500-2500，结尾必须留强钩子。';
+      return withAntiAiFlavorGuidelines(
+        '你是东方奇幻续写手。请根据上下文延续，人物不崩、节奏不停、字数1500-2500，结尾必须留强钩子。',
+      );
     }
     if (taskType == 'PolishText') {
-      return '你是专业文字润色编辑。请从语病修复、人物语气统一、场景生动化、修仙术语一致、节奏紧凑化五方面润色用户提供的正文，直接输出润色后的完整文本。';
+      // 润色同样是 AI 味重灾区：选节润色最容易把松散线索「顺」成整洁单线
+      return withAntiAiFlavorGuidelines(
+        '你是专业文字润色编辑。请从语病修复、人物语气统一、场景生动化、修仙术语一致、节奏紧凑化五方面润色用户提供的正文，直接输出润色后的完整文本。'
+        '润色时保留原文的时间线结构与结局歧义，不要把留白解释清楚。',
+      );
     }
     return '你是专业小说作家，请执行任务 $taskType。';
   }
@@ -823,6 +834,11 @@ class EditorAgent extends BaseAgent {
           description: '设定一致性（人设/战力/时间线/地理/伏笔）：列表形式输出问题',
           priority: 100,
         ),
+        AgentCapability(
+          name: 'AiFlavorCheck',
+          description: '叙事结构「AI 味」审查（主题显式/因果线性/时间线性/感官超写/和解模板）',
+          priority: 70,
+        ),
       ];
 
   @override
@@ -833,6 +849,16 @@ class EditorAgent extends BaseAgent {
     if (taskType == 'ConsistencyCheck') {
       return '你是专业总编。按角色档案 / 境界战力 / 时间线 / 地理设定 / 伏笔回收 五大维度，'
           '## 问题清单 分节列出每条：位置 + 问题描述 + 修改建议。';
+    }
+    if (taskType == 'AiFlavorCheck') {
+      // StoryScope 五维自检：把「检测 AI」的研究结论反转为创作自检工具
+      return '你是叙事结构审读员。对给定章节按五维逐项评分（0-2：0=无 AI 味，1=轻度，2=明显）：'
+          '①主题显式（叙述者直接点题/说教/对话变哲理辩论）'
+          '②因果过整洁（无支线或松散线索全被收束、冲突全由主角解决）'
+          '③时间过线性（无闪回/时间跳跃/非线性）'
+          '④感官超写（身体/环境感官细节密度过高）'
+          '⑤和解模板（以主角内心释怀收束、拒绝歧义）。'
+          '按 ## 五维评分（每维：分数+一句话证据）/ ## 总评（AI 味 0-10 分）/ ## 去味建议 输出。';
     }
     return '你是总编辑。';
   }
@@ -865,6 +891,22 @@ class EditorAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
+    if (taskType == 'AiFlavorCheck') {
+      // 本地回退：无 AI 服务时给出全 0 分占位（如实标注回退）
+      const fb = '## 五维评分\n'
+          '①主题显式：0\n②因果过整洁：0\n③时间过线性：0\n④感官超写：0\n⑤和解模板：0\n'
+          '## 总评\n0（本地回退：未执行 AI 叙事审查）\n'
+          '## 去味建议\n（需配置 AI 服务后执行）';
+      return AgentTaskResult(
+        isSuccess: true,
+        data: fb,
+        metadata: {
+          'TaskType': taskType,
+          'sections': parseMarkdownSections(fb),
+          'Fallback': true,
+        },
+      );
+    }
     const fb = '## 结论\n通过\n'
         '## 问题清单\n（本地回退：未检出风险或矛盾）\n'
         '## 修改建议\n1. 可在剑招描写中加入剑光特效；2. 反派独白可再增加性格层次。';
