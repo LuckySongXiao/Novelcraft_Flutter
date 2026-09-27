@@ -546,6 +546,10 @@ class OpenAICompatibleProvider implements IModelProvider {
 
   Map<String, dynamic> _buildExtraFields(Map<String, dynamic> parameters) {
     final extra = <String, dynamic>{};
+    // 白名单放行：各家的扩展采样/结构参数。
+    // 其中 RWKV 家族的 `top_k` / `alpha_*`（rwkv_lightning）与 `dry_*`（llama.cpp）
+    // 由 `kRwkvAntiRepeatSampling` 提供，见 `ai/rwkv/rwkv_sampling.dart`。
+    // ⚠ 只有 RWKV 家族才该收到这些键（其他厂商的严格 API 会 400），调用方负责判定。
     for (final key in const [
       'thinking',
       'response_format',
@@ -553,6 +557,18 @@ class OpenAICompatibleProvider implements IModelProvider {
       'tool_choice',
       'stream_options',
       'user',
+      // RWKV 原生采样
+      'top_k',
+      'alpha_presence',
+      'alpha_frequency',
+      'alpha_decay',
+      'stop_tokens',
+      'chunk_size',
+      // llama.cpp DRY 采样器
+      'dry_multiplier',
+      'dry_base',
+      'dry_allowed_length',
+      'dry_penalty_last_n',
     ]) {
       if (parameters.containsKey(key) && parameters[key] != null) {
         extra[key] = parameters[key];

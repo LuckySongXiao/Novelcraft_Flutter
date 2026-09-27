@@ -37,7 +37,7 @@
 
 **RWKV 新生态调研（对班落地目标）**：
 - 新增参考仓 `Alic-Li/rwkv_lightning_cuda`（v1.5.0，发布于 2026-09-13，CI 持续更新）：纯 C++/CUDA 原生 RWKV-7 推理服务，支持 PTH 模型 + W8A16/W4A16 量化 `.rwkvq`、L1/L2/SQLite 三级 State Cache、X-RWKV-Session-Id / X-RWKV-State-Id 请求头、Go Router 多后端负载均衡 + 会话亲和、Go Launcher Web UI；核心并行 API 四件套：① `POST /v1/chat/completions`（原生 batch `contents: string[]`，N 条 prompt 一次并行返回，SSE 中 `choices[].index` 交错输出）；② `POST /big_batch/completions`（超大 batch 仅 temperature 采样，专啃角色/世界观批量生成）；③ `POST /v2/chat/completions`（V2 sampler top_k=500/top_p=0.5）；④ `POST /state/chat/completions` + `/multi_state/chat/completions`（可分叉多分支 dialogue_idx Stateful 推理，用于 NovelCraft 世界观分支剧情的「多条故事线并行推演」）；OpenAI 兼容路由 `/openai/v1/chat/completions` 供已有客户端无缝接入；启动参数需额外 `--vocab-path`（RWKV v20230424 词表 txt，和模型分文件存放）。
-- 新增线上 RWKV API 测试环境：`https://api-7b.rwkvos.com`，三张 4090 部署 rwkv_lightning_cuda 集群；Cloudflare Access 双向 mTLS 认证：请求头必传 `CF-Access-Client-Id: 7e06b7648f552e22842e308939e68be6.access` + `CF-Access-Client-Secret: 8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a`；`GET /v1/models` 已真机验证返回 `rwkv7-g1j-7.2b-20260831-ctx16384`（owned_by=rwkv_lighting_cuda，注意拼写 t/cuofa，代码里别写死 owned_by 匹配）；支持同步并发多发（4090×3 可同时承载 12-24 并行 batch 请求，当前 `RwkvProvider` 全局 `Semaphore(4)` + `TaskQueue(5)` 限流过于保守，需按 Provider 模式动态解锁上限）。
+- 新增线上 RWKV API 测试环境：`https://api-7b.rwkvos.com`，三张 4090 部署 rwkv_lightning_cuda 集群；Cloudflare Access 双向 mTLS 认证：请求头必传 `CF-Access-Client-Id` + `CF-Access-Client-Secret`（凭据已脱敏，运行时经 `--dart-define` / 环境变量传入，勿硬编码进仓库）；`GET /v1/models` 已真机验证返回 `rwkv7-g1j-7.2b-20260831-ctx16384`（owned_by=rwkv_lighting_cuda，注意拼写 t/cuofa，代码里别写死 owned_by 匹配）；支持同步并发多发（4090×3 可同时承载 12-24 并行 batch 请求，当前 `RwkvProvider` 全局 `Semaphore(4)` + `TaskQueue(5)` 限流过于保守，需按 Provider 模式动态解锁上限）。
 
 **LOGO 全平台分发**：源文件 `F:\30_Novelcraft_Flutter\novelcraft_en\icon.ico` → 覆盖写入 Windows / Web / Android / iOS / macOS 全部尺寸位图表 + favicon.ico（详见 §7 Logo 分发清单）。
 
@@ -45,6 +45,64 @@
 - 代码级 dart2js 全量通过（Compiling lib/main.dart for the Web 均完成）
 - 中文路径 build：Flutter 3.38.5 impellerc.exe ANSI fopen 打开 UTF-8 中文路径报 `Could not write file .../ink_sparkle.frag`（PITFALLS §24.3）— **非代码缺陷**
 - 纯英文 junction 路径 build：`F:\30_Novelcraft_Flutter\novelcraft_en` → 目标项目，`flutter build web --no-pub --release --no-wasm-dry-run` **exit 0**，ink_sparkle.frag / main.dart.js / canvaskit skwasm ×5 变体 全部产物齐全
+
+### 2026-09-17 第十轮：边聊「关联章节」改稿闭环 + 会话持久化 + 分段改写 + 真机验收
+
+**交付**（四块，均 `flutter analyze` 0 issue）：
+
+| 能力 | 实现 | 验证 |
+|---|---|---|
+| 关联章节改稿（边聊页选定 书→卷→章 → 提意见 → Agent 改写 → 回写 `Chapter.Content`，同步 wordCount/version/lastEditedAt，**不动 status**） | `lib/ai/utils/chapter_intent.dart`（提问/处理/解除三态判定）+ `lib/application/services/chapter_revision_service.dart` + `lib/ui/pages/ai_collaboration_page.dart` 关联面板 + `lib/ui/state/chapter_referral.dart` | 打桩 23/23 + **真模型 3/3** |
+| 长文分段滚动改写（C# `RewriteChapterCoreAsync` 工艺：1800 字切片 → 逐片携带上一片结尾 → 复读换更强提示词重试 → 拼接 → **原子落库**；另加**段数闸门**：超 12 段 ≈ 2.16 万字，在**任何模型调用之前**拒绝） | `lib/ai/utils/segment_rewrite.dart`（纯函数，含 `SegmentRewrite.plan` / `SegmentPlan`）+ `ChapterRevisionService._rewriteSegmented` | `verify_segment_rewrite` 59/0 + 打桩用例 7 条 |
+| 会话状态落 KVStore（跨页面 + **跨 App 重启**） | `copilot/chapter_referral`（关联 + 处理模式）、`copilot/chat_log`（聊天记录；限长 60 条 / 6 万字，**不截断单条**；恢复**不覆盖**"已经在聊"的现场；悬空关联自愈） | 打桩用例：跨页面 / 跨重启 / 悬空自愈 / 限长 4 条 |
+| 产出清洗：剥**行首** Markdown 引用符 `>` | `AIOutputSanitizer._stripLeadingQuoteBlock`（只剥开头连续引用行，正文中间的 `>` 保留） | `verify_output_sanitizer` 19/0 |
+
+**本轮修掉的三个真 BUG**（都在「关联章节」链路上，属数据事故，别回退）：
+1. **提问被当成改稿** → 作者问一句「这章节奏有什么问题？」会把正文重写掉。C# 有 `LooksLikeChapterQuestion` 闸门，Flutter 侧此前漏了。现按 `ChapterIntent` 分派（先看处理关键词，再看 `?`/`？`/「吗」结尾），提问走 `askAboutChapter` 只作答、`persisted=false`。
+2. **占位文本覆盖正文** → `BaseAgent.executeTaskWithAI` 在模型调用失败时**静默回退** `executeTask`，返回内置示例文本（`【本地回退章节示例】叶知秋…`）且 `isSuccess=true`；`AiWritingService._singleAgent` 又把 `Fallback` 标记吞了。现透传该标记，改稿服务见到即**拒绝落库**并如实报错。
+3. **关联后模式切换器消失** → `_linkChapter` 原会收起面板，而「按意见改写 / 按意见续写」切换器在展开区里（关联后想换模式必须重新展开）。现关联后保持展开；另把"切分卷导致关联失效"的提示与手动解除的文案区分开。
+
+**真机验收（真模型，非打桩）**：`integration_test/chapter_revision_live_test.dart`（凭证约定同 `rwkv_cloud_live_test.dart`，可 `--dart-define` 覆盖；**只写内存库，不碰真实书稿**）
+- 入口：`flutter test -d windows integration_test/chapter_revision_live_test.dart`
+- 2026-09-17 结果：连通性 200；改写用例 **8 秒**完成、`workflowMode=DualAgent`（两个角色都真接管）、`persisted=true`、207 字 → 185 字、`versionNumber+1`、`status` 未变；问答用例 `ChapterQa`、**正文与版本号一字未动**。
+- 验收中当场发现并已修：该模型（`rwkv7-g1j-7.2b`）在「原文 + 处理要求」结构下**产出首行总带 `>`**（改写与问答两条用例全部复现，属系统性行为），已在 `extractCleanOutput` 里剥掉。
+
+**已知边界（下一轮候选）**：
+- ~~分段改写对超长章无段数上限~~ → **已加闸门（2026-09-18）**：`SegmentRewrite.maxSegments = 12`（≈2.16 万字）。超限时**在发起任何模型调用之前**就返回失败，提示里带「本章 N 字 / 按每段 1800 字需 M 段 / 上限 12 段」，正文一字不动；**刻意不做「只改前 N 段」**（那会把正文切成"改过的前半 + 原样的后半"，风格断层且作者看不出原因）。闸门是纯函数 `SegmentRewrite.plan()`，段长与上限都可传参覆盖，将来要做成配置项直接接参数即可；
+- 聊天记录只做限长、还没有"清空会话"入口；
+- `AppShell._buildPage` 每次只挂一个页面 → 其它页面的会话态（如对话生成器已生成的结果）仍会随导航丢失，未统一处理。
+
+### 2026-09-19 第十一轮：安卓 APK 打包链路
+
+**产物**：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+1_release.apk`（65.1MB，`com.novelcraft.novelcraft`，minSdk 24 / targetSdk 36，含 arm64-v8a + armeabi-v7a + x86_64，apksigner 验签通过）
+
+**配置改动**（都在工程内，clone 后即可复现）：
+- `android/local.properties` → SDK 指向 `D:\Android\Sdk`（C 盘那个 sdk 目录是空壳 + 曾有一个损坏的 NDK 28.2.13676358，已删）。⚠ **flutter build 会按 Flutter 全局配置重写此文件**，所以真正要固化的是 `flutter config --android-sdk D:\Android\Sdk`（已执行，落 Flutter 全局配置）。
+- `android/app/src/main/AndroidManifest.xml` → 补 `INTERNET` 权限（Flutter 模板只在 debug/profile 带，release 缺它云端 AI 全挂）。
+- `android/app/build.gradle.kts` → release 正式签名：读 `android/key.properties`（口令+别名，gitignored），缺失时自动回退 debug 签名。密钥 `android/app/upload-keystore.jks` 别名 **song**（CN=song，RSA2048/10000 天，gitignored）—— **发布前务必备份这两个文件，丢了无法发更新包**。
+- `android/gradle.properties` → `android.overridePathCheck=true`（见下）。
+
+**关键教训：中文路径是 Android 构建的硬阻塞**。工程真实路径含 `Flutter版代码`，AGP 先拒绝（加 overridePathCheck 放行），随后 Kotlin 增量缓存写不进、Dart AOT snapshotter 读文件路径乱码（`Flutter?????`），flutter clean 也救不了 —— **junction 没用（工具会解析回真实路径），必须 `subst`**：
+```
+subst S: "F:\30_Novelcraft_Flutter\Flutter版代码\novelcraft"
+Set-Location S:\
+flutter build apk --release
+```
+subst 映射重启后失效，重打 APK 前先重跑第一条。产物在 `S:\build\app\outputs\flutter-apk\`（物理上就是工程 `build\` 目录）。想要更小的包用 `--split-per-abi`（每 ABI 约 1/3），上架商店用 `flutter build appbundle`。
+
+**2026-09-20 真机首启修复**：安卓首启报 `FileSystemException: Creation failed, path='//NovelManagement' (errno 30)` —— `key_value_store_native.dart` 用 `Platform.environment['APPDATA']` 取数据目录，安卓上 APPDATA/HOME 均 null，退到只读根目录。已改为：**Windows 保持 `%APPDATA%\NovelManagement`（老数据不动），其它平台走 `path_provider.getApplicationSupportDirectory()`**（应用私有可写目录，无需权限）。新 APK 已重签打包（仍 CN=song，65.1MB）。这是**全库唯一**一处环境变量路径依赖（已 grep 确认）；`Directory.systemTemp`（推理 pid 文件）在安卓落到应用缓存目录，安全。
+
+**2026-09-20 安卓横屏 + 布局缩放优化**：真机反馈 AI 配置页导航标签换行、右侧卡片溢出。四处改动：① `AndroidManifest.xml` MainActivity 加 `android:screenOrientation="sensorLandscape"`（默认横屏、随传感器双向旋转）；② `main.dart` MaterialApp.builder 对安卓把系统字体缩放钳到 1.2（`MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.2)`，⚠ Flutter 3.38 **没有** `TextScaler.clamping` 静态方法，只有实例 `clamp`；用 foundation 的 `defaultTargetPlatform` 判断，不引 dart:io 保 Web 可编译）；③ `app_shell.dart` 主侧栏窄屏（<1000 逻辑宽）自动收起为图标栏，`_extendedOverride ?? width >= 1000`，手动切换后以手动值为准；④ `ai_configuration_page.dart` 内容区 <560px 时供应商列表与配置卡片上下堆叠（`_ProviderList` 加可变 width），宽屏保持左右分栏。验证：analyze 0 issue、chapter_revision_test 25/25；APK 已重签打包并覆盖 `F:\30_Novelcraft_Flutter\novelcraft_1.0.0+1_release.apk`（65.1MB，apksigner 验签通过）。
+
+**2026-09-20 主侧栏滚动 + 字体钳制收紧 + 协作页短屏适配**：真机后续两轮反馈的收尾。① `app_shell.dart` 主侧栏 NavigationRail 包纵向滚动——手机横屏高度装不下 6 个目的地，第 6 项「AI 助手」整块被裁导致进不去 AI 配置。⚠ **NavigationRail 不能直接塞进滚动视图**：其外层 Column 是 `MainAxisSize.max` 且含 `Flexible`（groupAlignment 布局），无界高度触发 unbounded 断言；需 `LayoutBuilder + SingleChildScrollView + ConstrainedBox(minHeight: 视口高) + IntrinsicHeight`——IntrinsicHeight 先算固有高度再给 tight 约束绕开断言，minHeight 保证内容不满一屏时背景仍撑满整列。二级导航（世界观/AI 功能）本就是 ListView，无需处理。② `main.dart` 安卓字体钳制 1.2 → **1.0**（真机反馈 1.2 仍偏大；App 按桌面密度设计，安卓端不再跟随系统字体缩放）。③ `ai_collaboration_page.dart` 矮视口（逻辑高 <520）紧凑布局：隐藏页内重复大标题（AppBar 已有标题）、内边距 20→12、输入框 maxLines 5→2；关联章节面板展开态用 `ConstrainedBox(45% 视口高) + SingleChildScrollView` 限高内部滚动，避免把输入框挤出屏幕。验证：analyze 0 issue、chapter_revision_test 25/25；APK 重签打包覆盖发布产物。
+
+**2026-09-27 桌面端 RWKV 超级并发压测 + 两端封装 v1.0.0+2**：版本号 1.0.0+1 → **1.0.0+2**（pubspec 与状态栏同步显示；此前用户拿到的 APK 全是旧构建——**交付纪律：构建完成后立刻拷贝覆盖发布产物并汇报路径**）。新增压测 `integration_test/rwkv_concurrency_stress_test.dart`（真端点，运行 `flutter test integration_test/rwkv_concurrency_stress_test.dart -d windows -r expanded`，5/5 通过）：①容量 hard=169 / available=167 / bytesPerBsz≈52.4MB；②串行 8 条 0.74 req/s（基线）；③8 槽单 POST **6.06 req/s**（8.2×）；④6 路批量 × 8 槽 = 48 路并行 **16.42 req/s**、48/48 内容无混串、压测后服务端队列归零 available 回落 167；⑤16 路有状态会话并发 3.76 req/s、抽查暗号无串号无丢失、测试后清理全部会话。⚠ 用例设计坑：**别给小模型下「只回复：好的」这类复读指令**——第二轮问暗号它会复读自己上一句，看起来像并发串号，实为提示词污染。封装产物：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+2_release.apk`（65.1MB，song 签名，旧 +1 已删）、`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+2_windows_release.zip`（14.6MB，解压运行 `novelcraft.exe`）。⚠ 桌面**运行中的 GUI 实例会锁 `build\windows\...\Debug\novelcraft.exe`**，集成测试构建时报 MSB3073/INSTALL 退出码 1——跑测试前先 `Get-Process novelcraft | Stop-Process -Force`。
+
+**2026-09-27 RWKV 并发放开 + 安卓操控性优化 + 主 Agent 分派决策（v1.0.0+4）**：用户明确「单卡 4090 可扛 900+ 并发，尽可能开放利用能力上限」「跑之前先测本地最大并发数并保存到配置，由主 Agent 自主决定分派多少个子 Agent」。① **并发**：`RwkvConcurrencyController.clientHardCap` 16 → **64**（服务端 FIFO admission + dynamic_max_bsz 自保护，客户端上限只防本地在途失控）；`rwkvMaxConcurrentSessions` 默认 8 → 16（引擎级会话限流，对齐实测峰值；存量用户配置不受影响）。⚠ **关键修复：`effectivePermits` 此前没有任何消费方**——批量客户端只做观测不做门控，实际并发不设防；现已在 `rwkv_batch_client.dart` 两条 POST 路径（非流式 `_chatWithRetry` / 流式 SSE）加 `waitForPermit()` 动态门控（许可=min(64, 服务端 available, 排队折半, 惩罚档)，每 200ms 复查），使「吃满服务端容量 + 本地不失控」真正生效。② **主 Agent 分派决策**：新增 `lib/ai/workflow/dispatch_planner.dart`（纯 Dart，存储走回调注入对齐 session_archive 先例）——`WorkflowEngine.executeWorkflow` 跑之前自动 `probeAndPersist()`（探测云端 `capacity().effectiveAvailable`，失败回退本地配置 16，持久化 KVStore `ai_config/rwkv.probed_concurrency`，60s TTL）→ 让**双代理 Main provider** 对「分派多少个子 Agent 并行」表态（只回整数，16 token 预算）→ `decide()` clamp 到 [1, 探测值] → `TaskQueue.setMaxConcurrentTasks()` 运行时生效（**TaskQueue 已从固定 Semaphore 改为动态门控**，快照读 `maxConcurrentTasks`），决策写进 `workflow.configuration['dispatchConcurrency'/'dispatchProbedMax']`；规划任何一步失败按原并发执行不阻塞。⚠ TaskQueue 的 Semaphore 已移除，别再按旧签名用它。③ **安卓操控性**：输入框触控平台放宽（`isDense:false` + 内边距 14，桌面保持紧凑）、AppBar <720 逻辑宽时「一键生成书籍」收成纯图标、二级导航 ListTile 密度触控平台放宽（`kSubNavTileDensity`）。验证：analyze 0 issue、`test/dispatch_planner_test.dart` 7/7（未装配用满探测值/表态 clamp/超报钳制/非整数未表态/探测回退/持久化往返）、`test/chapter_sync_test.dart` 4/4、压测 5/5 + 回归 25/25 串跑全绿；产物 v1.0.0+4（旧 +3 删除）。
+
+**2026-09-27 并发/生成质量实测审查 + 立即修 5 处（并入 v1.0.0+4）**：真端点压测复跑 5/5（容量 hard=169/available=167/queued=0；串行 0.77 req/s；8 槽批量 3.41 req/s = 4.4×；48 路并行 **15.0 req/s** ≈ 19.5× 串行、去重 48/48 无混串、压后队列归零；16 路有状态暗号各自命中无串号）+ 一次性生成质量探针（跑完即删，不进仓库）：长文 420 字 12 字滑窗去重比 1.000 零复读、有状态续写跨轮记住主角名并在首句出现；⚠ **g1j 推理模型的 `<think>` 块会白吃 max_tokens**——严格 JSON / 格式类短输出任务在预算紧张时「剥 think 后正文为空」（应用层 AIOutputSanitizer + Fallback 闸保护不落库，长期需 think 预算自适应：格式类任务 maxTokens ≥2× 预期正文 + 空正文放大预算重试一次）。立即修：① `rwkv_concurrency.dart` effectivePermits 注释与实现对齐（探测失败沿用 clientHardCap，服务端 FIFO + bsz overflow 惩罚档已构成兜底，无需减半）；② `RwkvBatchFailureKind` 新增 `network`（网络异常不再误标 truncated，面板可区分链路断/响应截断）；③ 流式批量 `chatStream` 收尾加完整性校验——`finished.length < n` 时告警并把指标记为失败（failureKind=truncated），不再无条件 done=true 静默当成功（不重试：调用方已拿部分快照，补拉语义归上层）；④ `dispatch_planner.dart decide()` 持久化**完整** DispatchPlan（此前只写 probedMax/source/probedAtMs 三元组，fromMap 读 effective/mainAgentDecision 永远为 0，lastPlan 形同虚设）；⑤ `di.dart` planner 探测值与 `concurrency.clientHardCap`(64) 取小——非批量路由（chat/state/postJson）不过 waitForPermit，TaskQueue 是它们唯一的并发闸，防止探测值 167 直压移动端内存/套接字。另修 `test/widget_test.dart` 外壳用例：窄屏适配（<1000 收图标栏）使默认 800x600 测试面不渲染品牌字，改 `tester.view.physicalSize = 1280x800`（⚠ `binding.setSurfaceSize` 已失效静默不改尺寸，必须用 `tester.view`）。已知遗留（下版/长期）：门控下沉 postJson/chat 全路径、waitForPermit/TaskQueue 忙等改唤醒、主 Agent 表态缓存、planner 回退值读配置页 rwkvMaxConcurrentSessions（当前硬编码 16）、工作流结束恢复 TaskQueue 原并发、think 预算自适应。验证：analyze 0 issue、test/ 95/95。⚠ **APK 构建两条硬教训（本次 +4 实录）**：① `novelcraft_en` 是指向真实目录 `Flutter版代码\novelcraft`（中文路径）的 **junction**，Gradle 会把路径解析回真实位置；从 junction 发起构建时 gen_snapshot/impellerc 等原生工具在中文路径上挂掉（`Unable to read app.dill` / `Could not write ...shaders/*.frag`，日志里路径乱码成 `Flutter?????`）——**必须按 §2 的 subst 方案 `subst S: "F:\30_Novelcraft_Flutter\Flutter版代码\novelcraft"` 后从 `S:\` 构建**（subst 盘符路径不会被 canonicalize 回中文）；Windows 构建不受影响（走 novelcraft_en 纯 ASCII 路径）。② 构建中途失败/`flutter clean` 后若报 `e: Daemon compilation failed` + `Storage ... is already registered`，是 **Kotlin daemon 僵死**（长驻 JVM 持有已被删除的增量缓存注册）——`gradlew --stop` + `taskkill /F /IM java.exe`（Gradle/Kotlin daemon 同源）后重建即好；`flutter clean` 不清 daemon。产物 v1.0.0+4：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+4_release.apk`（65.8MB，song 签名 apksigner 验签通过）+ `novelcraft_1.0.0+4_windows_release.zip`（14.1MB，**含全部立即修**；zip 在 flutter clean 之前打出、clean 只删 build 不影响已交付 zip），旧 +2/+3 已删。
+
+**2026-09-27 三大功能：章节结构化预览 + 写作过程档案 + 写后世界观自动同步（v1.0.0+3）**：用户反馈三连的收口。① **功能 A 章节预览**：`chapter_stats_service.dart`（C# 口径：段落=非空换行块、阅读时长=400 字/分、目标进度）+ `chapter_preview_page.dart`（统计面板 / 元信息 Chip / 梗概备注卡 / 段落阅读视图 / 字号切换）+ `entity_page.dart` 新增 `previewBuilder` 挂口（表单快照 + 行元信息一起带走，未保存改动也能预览）。② **功能 B 过程档案**：`readonly_prose_view.dart` 共享阅读组件 + `generation_archive_page.dart` 双 Tab（生成档案=**首次接线只写不读的 `project_archive`**，详情含 RequirementBrief/MainDraft 过程数据；大纲 Tab 读 `Plots(type='主线')`）+ `NavigationTarget.generationArchive`（AI 分组）+ 协作页工作流 SnackBar「查看结果」+ 一键生成结果行「查看」（结果类新增 outlineText/chapterText 内存直通）。③ **功能 C 写后同步**：`chapter_sync_service.dart`（C# `ChapterContentSyncService` 1:1：人物 History/KeyEvents/首末出场/履历事件 upsert、势力 memberCount/Notes、人物关系两两配对、剧情涉及章节+进度+状态推进、世界设定 History、势力关系、时间线「剧情事件」按 chapterId upsert+参与者重建；**单字名不参与 contains 匹配**防误伤；追加去重幂等）+ `chapter_post_process_service.dart`（防重 `last_version:{chapterId}`、开关 KVStore scope=chapter_sync、**规则同步默认开 / AI 抽取默认关**、异常全部折叠绝不阻塞章节保存）+ `chapter_ai_state_service.dart` + `state_extraction_parser.dart`（配平截取/回显过滤含模板占位名/单引号修复/长度钳制）+ AI 配置页 `_ChapterSyncCard` 两级开关 + 改稿与一键生成两个落库出口挂钩子、`linkageApplied` 接真值（一键结果对话框按真值显示「已同步/未执行」）。**状态栏书名**：`currentProjectNameProvider`（此前显示 projectId UUID，用户无法辨认；autoDispose 反查项目名，失败回退 id）。验证：`tool/verify_chapter_stats.dart` 17/0、`tool/verify_state_extraction_parser.dart` 19/0、`test/chapter_sync_test.dart` 4/4、`chapter_revision_test` 25/25。⚠ **规则同步的验证必须放 `test/` 而非 `tool/`**——`database.dart` 经 drift_flutter 依赖 dart:ui，纯 `dart run` 编不过；lib/ai 的纯解析器仍可走 tool/。产物：v1.0.0+3（后被 +4 取代，+3 已删）。
 
 ## 3. 架构分层
 
@@ -79,14 +137,25 @@ lib/
 flutter pub get
 dart run build_runner build --delete-conflicting-outputs   # 仅改了表定义后需要
 
-# 静态检查（本沙箱内唯一可靠的全量验证手段）
+# 静态检查（必过）
 flutter analyze          # 期望: No issues found!
+
+# 纯函数 / 工艺验证（16 个脚本，**不进 GUI、不联网**；改完 ai/utils 或 RWKV 参数后必跑）
+Get-ChildItem tool\verify_*.dart | ForEach-Object { dart run $_.FullName }
+
+# 真机（当前环境已可跑；会编译并启动桌面 App，跑完自动关闭）
+flutter test -d windows integration_test/seeder_test.dart                 # 数据库 seeding 幂等
+flutter test -d windows integration_test/chapter_revision_test.dart       # 边聊改稿全链路（AI 打桩，23 条）
+flutter test -d windows integration_test/chapter_revision_live_test.dart  # 真模型验收（需外网 + 那台 GPU 在线）
+flutter test integration_test/rwkv_cloud_live_test.dart                   # 云端端点 / 批量路由
 
 # Web 编译（可验证 dart2js 全量编译）
 flutter build web        # 产物 build/web/main.dart.js（约 3MB）
 ```
 
-> ⚠ 见第 5 节的**环境阻塞**：本工作区沙箱**无法**执行 `flutter build windows` 与 `flutter test`，请在普通 Windows 命令行环境验证。
+> ⚠ 第 5 节的**环境阻塞**是早期沙箱的限制；截至 2026-09-17，`flutter build windows` 与 `flutter test -d windows` 在**当前环境均已验证可跑**（真机验收 + 打桩用例都跑过）。`flutter build web` 仍受中文路径 impellerc 限制（PITFALLS §24.3），需在纯英文 junction 路径下构建。
+>
+> 跑真机用例的注意：`flutter test -d windows` 会占用 `build\windows\...\novelcraft.exe`，**同时开着 `flutter run` 会因文件锁导致 CMake INSTALL 失败** —— 先停掉 App 再跑测试。
 
 ## 5. 环境阻塞（非代码缺陷）
 
@@ -163,10 +232,10 @@ flutter build web        # 产物 build/web/main.dart.js（约 3MB）
    - 目标：把用户提供的 `api-7b.rwkvos.com`（三张 4090）做成**可切换的独立 Provider**，不要塞到现有的「RWKV (本地)」里面（二者路由完全不同：本地 llama-server 是 GGUF；云端 rwkv_lightning_cuda 是 PTH；认证方式、并发策略、State API 语义全部不同，硬塞会导致互相覆盖、配置持久化混乱、启动时本地拉进程、云端根本跑不起来）。
    - 具体改动清单：
      a. `_ProviderKind` 枚举（ai_configuration_page.dart:L28）新增 `rwkvCloud` 项，label 中文=「RWKV 云端 (rwkvos)」、英文=「RWKV Cloud (rwkvos)」，icon=Icons.cloud_outlined；左侧 Provider 列表由原来 5 项变 6 项，RWKV 云端放 RWKV 本地正下方。
-     b. `IModelConfiguration` 体系新增 `RwkvCloudConfiguration implements IModelConfiguration`（单独文件 `lib/ai/providers/rwkv_cloud_configuration.dart`，别乱塞到 rwkv_provider.dart 里会导致 analyze 爆炸），字段：`baseUrl`（默认 `https://api-7b.rwkvos.com`，去尾 `/`）、`defaultModel`（默认从 `/v1/models` 取第一条，推荐值=用户给的 `rwkv7-g1j-7.2b-20260831-ctx16384`）、`defaultMaxTokens=16000`（匹配 ctx16384 标签）、`defaultTemperature=1.0`、`timeoutSeconds=180`、`enableStreaming=true`、`cfAccessClientId`（Cloudflare Access 明文 Client ID，默认填用户给的 7e06b7…be6.access，用户可自定义）、`cfAccessClientSecret`（Cloudflare Access 明文 Secret，默认填用户给的 8f97be4…93d83a，用户可自定义）、`customHeaders=<String,String>{}`（兜底扩展）。**切勿把这两个 CF 字段塞到 OpenAICompatibleConfiguration.customHeaders**——原因：customHeaders 是用户手动填的键值对，和 `CF-Access-Client-Id/Secret` 的语义不一样；后者是「服务端零信任安全认证，必带两个成对 header」，应该在 `_defaultHeaders()` 内按命名字段组装，防止用户误删/拼错大小写（Access 头必须是精确 camelcase 这两个拼写，否则 CF 直接返回 403 / 302 重定向到身份页 HTML 导致 JSON 解析炸）。
+     b. `IModelConfiguration` 体系新增 `RwkvCloudConfiguration implements IModelConfiguration`（单独文件 `lib/ai/providers/rwkv_cloud_configuration.dart`，别乱塞到 rwkv_provider.dart 里会导致 analyze 爆炸），字段：`baseUrl`（默认 `https://api-7b.rwkvos.com`，去尾 `/`）、`defaultModel`（默认从 `/v1/models` 取第一条，推荐值=用户给的 `rwkv7-g1j-7.2b-20260831-ctx16384`）、`defaultMaxTokens=16000`（匹配 ctx16384 标签）、`defaultTemperature=1.0`、`timeoutSeconds=180`、`enableStreaming=true`、`cfAccessClientId`（Cloudflare Access 明文 Client ID，默认值已脱敏，经 --dart-define / 用户输入提供，用户可自定义）、`cfAccessClientSecret`（Cloudflare Access 明文 Secret，默认值已脱敏，用户可自定义）、`customHeaders=<String,String>{}`（兜底扩展）。**切勿把这两个 CF 字段塞到 OpenAICompatibleConfiguration.customHeaders**——原因：customHeaders 是用户手动填的键值对，和 `CF-Access-Client-Id/Secret` 的语义不一样；后者是「服务端零信任安全认证，必带两个成对 header」，应该在 `_defaultHeaders()` 内按命名字段组装，防止用户误删/拼错大小写（Access 头必须是精确 camelcase 这两个拼写，否则 CF 直接返回 403 / 302 重定向到身份页 HTML 导致 JSON 解析炸）。
      c. `RwkvCloudProvider implements IModelProvider`（单独文件 `lib/ai/providers/rwkv_cloud_provider.dart`，策略：**不 extends RwkvProvider**，因为 RwkvProvider 内部持有 `_engine` + `_globalSemaphore(4)` + `launchLocalServer()` 等纯本地逻辑，继承会导致 20+ 字段废用和初始化混乱；正确做法：**组合一个内部的 `http.Client` + `OpenAICompatibleProvider` 实例做实际 HTTP 调用**，把 Cloudflare Access 头 + `X-RWKV-*` 扩展头在 `_effectiveHeaders()` 中注入后传给内部 OpenAICompatibleProvider 的 customHeaders；对外的 `testConnection/getAvailableModels/chat/chatStream/statistics/dispose` 全部转调内部实例，仅扩展 `get nativeBatchApiEnabled` + `batchChatContents(List<String> prompts, ...)` + `multiStateChat(...)` 等 rwkv_lightning 独有接口）。
      d. `lib/core/di.dart` 新增 `rwkvCloudProviderInstanceProvider = Provider<RwkvCloudProvider>` 单例（和 rwkvProviderInstanceProvider 平级，**同一个 RwkvCloudProvider 必须被 workflowEngineProvider + allAgentsProvider 两边注入到同一个实例引用里**——重复 P2 第八签的教训：Agent 拿一个、Workflow 拿另一个会导致 session/state 全部对不上，直接炸 State 复用链）。
-     e. AI 配置页 UI（ai_configuration_page.dart）`_buildProviderConfigCard(_ProviderKind.rwkvCloud)` 新增独立的参数卡片（别复用 RWKV 本地那张「本地 RWKV 管理 / 官方资源一键安装」面板，云端不需要那一堆），参数区结构：① API 基础地址（`TextFormField` 默认 https://api-7b.rwkvos.com，onChange 实时写 `_cfg`）；② 默认模型（`TextFormField` + 按钮「从云端拉取模型列表」，点了之后内部调 `getAvailableModels()` 填下拉，和 Ollama 拉本地模型同理）；③ 超时秒/温度/最大 token（沿用现有 RWKV 本地同款 4 行 Row 布局）；④ **Cloudflare Access 认证区（两行 TextFormField + 行尾 EyeIcon 切换明文/密文）**：第一行 label=CF-Access-Client-Id，hintText=7e06b7648f552e22842e308939e68be6.access（灰色 placeholder 不填默认就用这个值）；第二行 label=CF-Access-Client-Secret，obscureText=true，hintText=8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a；两行下面放小字 warning（黄色）：「Cloudflare Access 密钥绑定 rwkvos 测试集群，请勿外传；如部署自有集群，请替换为自己的 Service Token 对」。
+     e. AI 配置页 UI（ai_configuration_page.dart）`_buildProviderConfigCard(_ProviderKind.rwkvCloud)` 新增独立的参数卡片（别复用 RWKV 本地那张「本地 RWKV 管理 / 官方资源一键安装」面板，云端不需要那一堆），参数区结构：① API 基础地址（`TextFormField` 默认 https://api-7b.rwkvos.com，onChange 实时写 `_cfg`）；② 默认模型（`TextFormField` + 按钮「从云端拉取模型列表」，点了之后内部调 `getAvailableModels()` 填下拉，和 Ollama 拉本地模型同理）；③ 超时秒/温度/最大 token（沿用现有 RWKV 本地同款 4 行 Row 布局）；④ **Cloudflare Access 认证区（两行 TextFormField + 行尾 EyeIcon 切换明文/密文）**：第一行 label=CF-Access-Client-Id，hintText=<REDACTED>（凭据经 --dart-define / 用户输入提供，勿写进仓库）；第二行 label=CF-Access-Client-Secret，obscureText=true，hintText=<REDACTED>；两行下面放小字 warning（黄色）：「Cloudflare Access 密钥绑定 rwkvos 测试集群，请勿外传；如部署自有集群，请替换为自己的 Service Token 对」。
      f. **配置持久化**（KVStore 新 scope，不要污染 ai_config/rwkv.configuration）：`(scope=ai_config, key=rwkv_cloud.configuration)` 存 RwkvCloudConfiguration.toJson()（含 baseUrl/model/cfAccessClientId/cfAccessClientSecret 明文）；启动 initState 里先读 KV → 填 `_cfg` → 然后 `_testing=true` 时按用户填的头发请求。持久化风险：明文存 Client Secret 会被本地用户读到；这是用户允许的 tradeoff（桌面端本地存储，不存在跨租户泄露风险），如果后续要加密就套个 `String XOR mask`（不要引 cryptography 包，Flutter Web 编译会炸，用简单 XOR 即可）。
      g. **测试连接时的 HTTP 403/302 拦截**：Cloudflare Access 不合法时不会返回 JSON，会返回 302 跳转到 `.cloudflareaccess.com` 登录页 HTML，`jsonDecode` 直接报 `FormatException: Unexpected character <`；`RwkvCloudProvider.testConnection()` 必须特判 statusCode=403 / 302：如果 body 以 `<` 开头或包含 `cloudflareaccess`，就直接返回人类可读的错误：「Cloudflare Access 认证失败：请检查 CF-Access-Client-Id / CF-Access-Client-Secret 是否匹配当前集群（返回为 Cloudflare 登录 HTML 而非 JSON）」，不要把整段 HTML 抛给用户会炸 RedErrorScreen。
      h. L10n：所有新增 UI 文字都要进 strings.g.dart，key 前缀=AIC.RwkvCloud*（例如 AIC.RwkvCloudLabel=RWKV 云端(rwkvos)、AIC.RwkvCloudCfId=CF Access Client Id、AIC.RwkvCloudCfSecret=CF Access Client Secret、AIC.RwkvCloudCfWarn=Cloudflare Access 密钥绑定测试集群，请勿外传…），禁止硬中文，严格走 PITFALLS §26.3 的 reverse key diff。
@@ -332,6 +401,20 @@ flutter build web        # 产物 build/web/main.dart.js（约 3MB）
 | P4 30 | `integration_test/rwkv_cloud_integration_test.dart` | 集成测试三必过用例：① `testConnection()` GET /v1/models 带 CF 头 → HTTP 200 / JSON 有 data[0].id；② `batchChat_2items()` contents=['ping1','ping2'] → 2 条 choice index 0/1 全有、finish_reason='stop'；③ `withRetry_429backoff()` mock HttpClient 第一次返回 429 + Retry-After:1 → 第二次 200 → 验证总耗时 ≥ 1s；放在 `integration_test/` 目录，**别放 test/**（test/ 无网络、无浏览器、Windows 下 `flutter test integration_test/rwkv_cloud_integration_test.dart -d windows` 才能跑） |
 | L10n 同步 | `lib/l10n/strings.g.dart` 追加约 18 条新 key | 前缀 `aics.`（AI Configuration Rwkv Cloud）：`aics.rwkvCloudTab` / `aics.baseUrl` / `aics.defaultModel` / `aics.cfAccessClientId` / `aics.cfAccessClientSecret` / `aics.showSecret` / `aics.hideSecret` / `aics.testConnection` / `aics.connecting` / `aics.connectionOk` / `aics.connectionFailedHtml`（CF 302/403 HTML 拦截时的人类可读提示）/ `aics.concurrencyLevel` / `aics.batchSize`；zh/en 双表同步写（遵守 PITFALLS §26.3 无中文 fallback 陷阱），写完用 §26.3 的 reverse diff PS 脚本验差集为空 |
 
+### 第十轮新增文件坐标（2026-09-17，路径已落盘，别再另建同名概念）
+
+| 文件 | 职责 |
+|---|---|
+| `lib/ai/utils/chapter_intent.dart` | 关联模式下的输入意图判定（处理要求 / 提问 / 取消关联），对应 C# `LooksLikeChapterQuestion` + `ChapterOpKeywords` |
+| `lib/ai/utils/segment_rewrite.dart` | 长文分段改写纯函数集（切片 / 拼接 / 尾部截取 / 复读检测 / 提示词组装 / 切片清洗） |
+| `lib/application/services/chapter_revision_service.dart` | 关联章节改稿：改写 / 续写 / 按梗概成文 / 章节问答 → 回写 `Chapter.Content` |
+| `lib/ui/state/chapter_referral.dart` | 关联状态（书/卷/章 + 处理模式），全局单例 + KVStore `copilot/chapter_referral` |
+| `lib/ui/state/copilot_chat_log.dart` | 聊天记录，全局单例 + KVStore `copilot/chat_log`（限长 60 条 / 6 万字） |
+| `tool/verify_chapter_intent.dart` | 意图判定验证 43 条 |
+| `tool/verify_segment_rewrite.dart` | 分段工艺验证 49 条 |
+| `integration_test/chapter_revision_test.dart` | 边聊改稿全链路（AI 打桩）23 条：改稿/续写/成文/问答/闸门/分段/持久化/UI 接线 |
+| `integration_test/chapter_revision_live_test.dart` | 真模型验收 3 条（连通性 + 真改写 + 真问答） |
+
 ## 8. 配套工具
 
 - `tools/csv_to_dart.py`：3664 条本地化词条 CSV → `lib/l10n/strings.g.dart`
@@ -365,8 +448,8 @@ flutter build web        # 产物 build/web/main.dart.js（约 3MB）
 
 | Header 名（const 常量，禁字面量） | 本项目测试环境值（仅开发/测试，正式生产必须由用户输入，别硬编码进代码） | 语义 |
 |---|---|---|
-| `const kHeaderCfAccessClientId = 'CF-Access-Client-Id'` | `7e06b7648f552e22842e308939e68be6.access` | Cloudflare Access mTLS 客户端 ID（Service Token 颁发） |
-| `const kHeaderCfAccessClientSecret = 'CF-Access-Client-Secret'` | `8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a` | Cloudflare Access mTLS 客户端 Secret（Service Token 颁发） |
+| `const kHeaderCfAccessClientId = 'CF-Access-Client-Id'` | `<REDACTED>` | Cloudflare Access mTLS 客户端 ID（Service Token 颁发，经 --dart-define 传入） |
+| `const kHeaderCfAccessClientSecret = 'CF-Access-Client-Secret'` | `<REDACTED>` | Cloudflare Access mTLS 客户端 Secret（Service Token 颁发，经 --dart-define 传入） |
 
 校验拦截代码（写在 RwkvCloudProvider.testConnection() 第一行就加）：
 ```dart

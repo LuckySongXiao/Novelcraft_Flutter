@@ -256,6 +256,40 @@ class RwkvProvider implements IModelProvider {
   String? currentStateId(String sessionId) =>
       _engine.sessionManager.get(sessionId)?.currentStateId;
 
+  /// **手动停止**本地 RWKV server 进程。
+  ///
+  /// 与 [launchLocalServer] 对称：停止后可以再次拉起。
+  /// 返回是否真的停掉了一个在跑的进程。
+  Future<bool> stopLocalServer() => _engine.stopLocalServer();
+
+  /// 原始 prompt 补全 —— 对应 C# `IRwkvLightningService.CompleteAsync`。
+  ///
+  /// 与 [chatInSession] 的区别：本方法**不套 chat 模板**，把 [prompt] 原样
+  /// 作为 `contents` 发给服务端续写。调用方（如前置条件生成的修炼体系）
+  /// 传入的 prompt 已自带 `User: … \n\nAssistant:  thinking</think` 结构。
+  ///
+  /// 不可用或失败时返回 null —— 调用方据此回退代码内置模板，不抛异常。
+  Future<String?> completeRawPrompt(
+    String prompt, {
+    int maxTokens = 2048,
+    double temperature = 0.9,
+    double topP = 0.85,
+    int topK = 0,
+  }) async {
+    if (!isAvailable) return null;
+    try {
+      return await _engine.rawCompletion(
+        prompt,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topP: topP,
+        topK: topK,
+      );
+    } on Object {
+      return null;
+    }
+  }
+
   /// 扫描本地 `rwkv_models/` 下的 GGUF 模型列表（UI 可选下拉）。
   Future<List<RwkvLocalModel>> listLocalModels() => _engine.scanLocalModels();
 

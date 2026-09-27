@@ -6,6 +6,7 @@ import '../../core/enums/pseudo_enums.dart';
 import '../../data/database.dart';
 import '../layout/navigation.dart';
 import 'entity_page.dart';
+import 'chapter_preview_page.dart';
 import 'world_system_page.dart' show SystemFieldDef, SystemFieldType;
 
 /// 数据库实体页配置表
@@ -310,6 +311,10 @@ Map<String, dynamic> _chapterToMap(dynamic r) => {
       'type': r.type,
       'wordCount': r.wordCount,
       'notes': r.notes,
+      // 功能 A 预览页元信息（表单未暴露这些列，预览时从行快照取）
+      'versionNumber': r.versionNumber,
+      'lastEditedAt': r.lastEditedAt?.toString(),
+      'tags': r.tags,
     };
 
 final chapterEntityConfig = EntityPageConfig(
@@ -367,6 +372,8 @@ final chapterEntityConfig = EntityPageConfig(
       onDelete: svc.delete,
     );
   },
+  // 功能 A：章节只读结构化预览（对齐 C# ChapterPreviewDialog）
+  previewBuilder: (context, values) => ChapterPreviewPage(values: values),
 );
 
 // ---------------------------------------------------------------------------

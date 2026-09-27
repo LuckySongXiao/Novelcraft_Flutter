@@ -7,7 +7,7 @@
 //   实现；本实现改为**真实拓扑依赖等待**：每个任务完成时登记一个 [Completer]，
 //   下游任务在开始前 [Future.wait] 其所有依赖的完成 future，依赖真正就绪才会运行，
 //   不再空转轮询。
-// - 并发上限由自实现的轻量 [Semaphore] 控制（不依赖 `dart:io`）。
+// - 并发上限运行时可变（主 Agent 分派决策），门控为动态忙等（打满时 100ms 复查）。
 // - `event EventHandler<WorkflowTask>` 改为广播 [Stream<WorkflowTask>]。
 library;
 
@@ -16,7 +16,6 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 
 import '../agents/agent.dart';
-import '../utils/semaphore.dart';
 import 'workflow.dart';
 
 /// 任务队列状态变更回调（用于通知引擎）。
@@ -24,8 +23,8 @@ typedef TaskStateChanged = void Function(WorkflowTask task);
 
 /// 轻量并发任务队列。
 class TaskQueue {
-  final int _maxConcurrentTasks;
-  final Semaphore _semaphore;
+  /// 并发上限（**运行时可变**：主 Agent 分派决策会动态调整）。
+  int _maxConcurrentTasks;
   final Logger _logger;
 
   /// 待处理任务。
@@ -44,27 +43,37 @@ class TaskQueue {
       StreamController<WorkflowTask>.broadcast();
 
   /// 构造任务队列。
-  /// 并发上限（只读）。
+  /// 并发上限（只读快照）。
   ///
   /// 供上层自查配置：若它小于 `BatchAgentExecutor.maxBatchSize`，
   /// 攒批永远攒不满（PITFALLS §33.7）。
   int get maxConcurrentTasks => _maxConcurrentTasks;
 
+  /// 运行时调整并发上限（功能：主 Agent 分派决策）。
+  ///
+  /// 已在跑的任务不受影响；排队任务按下一次调度的新值放行。
+  /// 只在 idle 时调用也安全（值只是被读写，无锁竞争面）。
+  void setMaxConcurrentTasks(int n) {
+    if (n < 1) return;
+    _maxConcurrentTasks = n;
+    _logger.info('任务队列并发上限调整为 $n');
+  }
+
   TaskQueue(this._logger, {int maxConcurrentTasks = 5})
-      : _maxConcurrentTasks = maxConcurrentTasks,
-        _semaphore = Semaphore(maxConcurrentTasks);
+    : _maxConcurrentTasks = maxConcurrentTasks;
 
   /// 任务状态变化事件流。
-  Stream<WorkflowTask> get taskStatusChanged => _taskStatusChangedController.stream;
+  Stream<WorkflowTask> get taskStatusChanged =>
+      _taskStatusChangedController.stream;
 
   /// 当前队列状态快照。
   TaskQueueStatus getQueueStatus() => TaskQueueStatus(
-        pendingTasks: _pending.length,
-        runningTasks: _running.length,
-        completedTasks: _completed.length,
-        maxConcurrentTasks: _maxConcurrentTasks,
-        isProcessing: _running.isNotEmpty || _pending.isNotEmpty,
-      );
+    pendingTasks: _pending.length,
+    runningTasks: _running.length,
+    completedTasks: _completed.length,
+    maxConcurrentTasks: _maxConcurrentTasks,
+    isProcessing: _running.isNotEmpty || _pending.isNotEmpty,
+  );
 
   /// 加入单个任务。
   void enqueue(WorkflowTask task) {
@@ -150,10 +159,11 @@ class TaskQueue {
   }
 
   /// 取指定状态的任务列表。
-  List<WorkflowTask> getByStatus(WorkflowStatus status) =>
-      <WorkflowTask>[..._pending, ..._running.values, ..._completed.values]
-          .where((t) => t.status == status)
-          .toList();
+  List<WorkflowTask> getByStatus(WorkflowStatus status) => <WorkflowTask>[
+    ..._pending,
+    ..._running.values,
+    ..._completed.values,
+  ].where((t) => t.status == status).toList();
 
   Future<void> _dispatch(
     WorkflowTask task,
@@ -171,7 +181,11 @@ class TaskQueue {
       }
     }
 
-    await _semaphore.acquire();
+    // 动态并发门控：主 Agent 分派决策可运行时调整 _maxConcurrentTasks，
+    // 忙等（100ms）仅在打满时发生，空闲路径零开销。
+    while (_running.length >= _maxConcurrentTasks) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
     try {
       task.status = WorkflowStatus.running;
       task.startedAt = DateTime.now();
@@ -197,7 +211,6 @@ class TaskQueue {
       task.completedAt = DateTime.now();
       _completed[task.id] = task;
       _complete(task.id);
-      _semaphore.release();
       _notify(task);
     }
   }

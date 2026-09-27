@@ -28,6 +28,7 @@ import '../../ai/rwkv/rwkv_official_resources.dart'
         RwkvModelQuantX;
 import '../../ai/providers/deepseek_provider.dart';
 import '../../ai/providers/zhipu_provider.dart';
+import '../../ai/workflow/dual_agent_workflow.dart';
 
 enum _ProviderKind {
   deepseek,
@@ -104,12 +105,12 @@ class _ProviderConfig {
   /// 思考前缀模式（`none`/`fast`/`free`/`preferChinese`/`en`/`enShort`/`enLong`）
   String rwkvThinkType = 'fast';
 
-  /// 引擎级并发上限（客户端侧保守限流）。
+  /// 引擎级并发上限（客户端侧限流）。
   ///
   /// ⚠ 真实并发由**服务端**的 FIFO admission queue 决定（`/v1/server/status` 的
-  /// `available_bsz`，实测 169）；客户端这个值只做**保守限流 + 快速失败**，
-  /// 不要照着服务端上限拍。实测吞吐峰值在 ~16（PITFALLS §31.3）。
-  int rwkvMaxConcurrentSessions = 8;
+  /// `available_bsz`，实测 169；单卡 4090 官方标称可扛 900+ 并发）。默认 16
+  /// 对齐实测吞吐峰值（PITFALLS §31.3）；追求极限可在配置里调高。
+  int rwkvMaxConcurrentSessions = 16;
 
   _ProviderConfig(this.kind)
       : baseUrl = switch (kind) {
@@ -167,6 +168,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   final List<RwkvLocalModel> _rwkvModels = <RwkvLocalModel>[];
   bool _rwkvScanning = false;
   bool _rwkvLaunching = false;
+  bool _rwkvStopping = false;
 
   OfficialServerVariant _serverVariant = OfficialServerVariant.vulkan;
   RwkvDownloadProgress? _serverInstallProgress;
@@ -396,6 +398,40 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       await _testConnection();
     } finally {
       if (mounted) setState(() => _rwkvLaunching = false);
+    }
+  }
+
+  Future<void> _stopRwkvLocalServer() async {
+    final l10n = ref.read(l10nProvider);
+    if (_rwkvStopping) return;
+    setState(() {
+      _rwkvStopping = true;
+      _lastTest = null;
+    });
+    try {
+      final bool stopped =
+          await ref.read(rwkvProviderInstanceProvider).stopLocalServer();
+      if (!mounted) return;
+      setState(() {
+        _lastTest = ConnectionTestResult(
+          isSuccess: stopped,
+          responseTime: Duration.zero,
+          serverInfo: <String, dynamic>{
+            'note': stopped
+                ? l10n.t('AIC.RwkvServerStoppedNote', '本地 RWKV server 已停止')
+                : l10n.t('AIC.RwkvServerNotRunningNote',
+                    '本地 RWKV server 当前没有在运行（无需停止）'),
+          },
+          errorMessage: stopped
+              ? null
+              : l10n.t('AIC.RwkvServerNotRunningNote',
+                  '本地 RWKV server 当前没有在运行（无需停止）'),
+        );
+      });
+      // 停止后立刻复测，让「可用性」与状态卡片反映真实情况（对齐启动后的行为）
+      if (stopped) await _testConnection();
+    } finally {
+      if (mounted) setState(() => _rwkvStopping = false);
     }
   }
 
@@ -889,25 +925,13 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
             ),
             const SizedBox(height: 16),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _ProviderList(
-                    selectedKind: _selectedKind,
-                    onTap: (k) => setState(() => _selectedKind = k),
-                    configs: _configs,
-                    availableMap: _availableMap,
-                    defaultProvider: _defaultProvider,
-                    registered: registered,
-                    onSetDefault: _setDefault,
-                    isEnglish: isEnglish,
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
+              // 手机横屏逻辑宽 ~780：内容区只剩 ~500px，左右分栏（220 列表 + 卡片）
+              // 会把配置卡挤爆 —— 窄屏改为「提供商列表在上、配置卡在下」整体滚动。
+              child: LayoutBuilder(builder: (context, box) {
+                final narrow = box.maxWidth < 560;
+                final Widget cards = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                           _ConfigCard(
                             cfg: _cfg,
                             onChanged: () => setState(() {}),
@@ -921,6 +945,14 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                                 : null,
                             rwkvScanning: _rwkvScanning,
                             rwkvLaunching: _rwkvLaunching,
+                            rwkvStopping: _rwkvStopping,
+                            rwkvServerRunning: ref
+                                .watch(rwkvProviderInstanceProvider)
+                                .localServerRunning,
+                            onStopRwkvServer:
+                                _selectedKind == _ProviderKind.rwkv
+                                    ? _stopRwkvLocalServer
+                                    : null,
                             onRefreshRwkvModels: _selectedKind == _ProviderKind.rwkv
                                 ? () => _ensureRwkvScanned(force: true)
                                 : null,
@@ -1012,12 +1044,48 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                             stats: _statsMap[_cfg.registeredName],
                             available: _availableMap[_cfg.registeredName],
                           ),
+                          // ---- MainAgent / SubAgent 双代理写作流（全局配置）----
+                          const SizedBox(height: 16),
+                          const _DualAgentCard(),
+                          // ---- 功能 C：章节落库后自动同步世界观 ----
+                          const SizedBox(height: 16),
+                          const _ChapterSyncCard(),
                         ],
-                      ),
+                );
+
+                final Widget list = _ProviderList(
+                  width: narrow ? double.infinity : 220,
+                  selectedKind: _selectedKind,
+                  onTap: (k) => setState(() => _selectedKind = k),
+                  configs: _configs,
+                  availableMap: _availableMap,
+                  defaultProvider: _defaultProvider,
+                  registered: registered,
+                  onSetDefault: _setDefault,
+                  isEnglish: isEnglish,
+                );
+
+                if (narrow) {
+                  return SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        list,
+                        const SizedBox(height: 16),
+                        cards,
+                      ],
                     ),
-                  ),
-                ],
-              ),
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    list,
+                    const SizedBox(width: 16),
+                    Expanded(child: SingleChildScrollView(child: cards)),
+                  ],
+                );
+              }),
             ),
           ],
         ),
@@ -1082,14 +1150,17 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
   }
 
   String _fmtProgress(RwkvDownloadProgress p) {
-    final String phase = p.phase.label;
+    final L10n l10n = ref.read(l10nProvider);
+    final String phase = l10n.t(p.phase.labelKey, p.phase.label);
     if (p.totalBytes > 0) {
       final double mb = p.receivedBytes / 1048576;
       final double totalMb = p.totalBytes / 1048576;
       final String speed = p.speedMbps > 0
           ? '  ${p.speedMbps.toStringAsFixed(1)} MB/s'
           : '';
-      final String eta = p.etaSeconds > 0 ? '  剩余 ${p.etaSeconds}s' : '';
+      final String eta = p.etaSeconds > 0
+          ? '  ${l10n.tf('AIC.EtaRemainingFmt', '剩余 {0}s', {'0': p.etaSeconds})}'
+          : '';
       return '$phase  ${mb.toStringAsFixed(1)}/$totalMb.toStringAsFixed(1) MB$speed$eta';
     }
     return phase;
@@ -1098,6 +1169,7 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
   /// 一键装齐：引擎（下载 + SHA-256 校验 + 解压）+ 外置词表
   Future<void> _provision() async {
     if (_busy) return;
+    final L10n l10n = ref.read(l10nProvider);
     setState(() {
       _busy = true;
       _status = null;
@@ -1110,12 +1182,19 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       );
       if (!mounted) return;
       widget.onProvisioned(p);
-      setState(() => _status =
-          '引擎已就位：${p.executablePath}\n词表已就位：${p.vocabPath}');
+      setState(() => _status = l10n.tf(
+          'AIC.BuiltIn.EngineReadyFmt',
+          '引擎已就位：{0}\n词表已就位：{1}',
+          {'0': p.executablePath, '1': p.vocabPath}));
     } on RwkvDownloadCancelledException catch (_) {
-      if (mounted) setState(() => _status = '已取消');
+      if (mounted) {
+        setState(() => _status = l10n.t('AIC.StatusCancelled', '已取消'));
+      }
     } on Object catch (e) {
-      if (mounted) setState(() => _status = '安装失败：$e');
+      if (mounted) {
+        setState(() => _status = l10n.tf(
+            'AIC.InstallFailed', '安装失败：{error}', {'error': '$e'}));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1267,11 +1346,17 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       );
       if (!mounted) return;
       widget.onModelDownloaded(path, _variant);
-      setState(() => _status = '模型已下载：$path');
+      setState(() => _status = l10n.tf(
+          'AIC.ModelDownloadedPathFmt', '模型已下载：{0}', {'0': path}));
     } on RwkvDownloadCancelledException catch (_) {
-      if (mounted) setState(() => _status = '已取消');
+      if (mounted) {
+        setState(() => _status = l10n.t('AIC.StatusCancelled', '已取消'));
+      }
     } on Object catch (e) {
-      if (mounted) setState(() => _status = '下载失败：$e');
+      if (mounted) {
+        setState(() => _status = l10n.tf(
+            'AIC.DownloadFailed', '下载失败：{error}', {'error': '$e'}));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1713,7 +1798,11 @@ class _ProviderList extends ConsumerWidget {
     required this.registered,
     required this.onSetDefault,
     required this.isEnglish,
+    this.width = 220,
   });
+
+  /// 列表宽度；窄屏（上下堆叠）布局传 [double.infinity] 占满整行
+  final double width;
 
   final _ProviderKind selectedKind;
   final ValueChanged<_ProviderKind> onTap;
@@ -1729,7 +1818,7 @@ class _ProviderList extends ConsumerWidget {
     final l10n = ref.watch(l10nProvider);
     final scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      width: 220,
+      width: width,
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(10),
@@ -1901,8 +1990,11 @@ class _ConfigCard extends ConsumerWidget {
     this.rwkvModels,
     this.rwkvScanning = false,
     this.rwkvLaunching = false,
+    this.rwkvStopping = false,
+    this.rwkvServerRunning = false,
     this.onRefreshRwkvModels,
     this.onLaunchRwkvServer,
+    this.onStopRwkvServer,
     this.serverVariant,
     this.onServerVariantChanged,
     this.serverInstallProgress,
@@ -1924,6 +2016,13 @@ class _ConfigCard extends ConsumerWidget {
   final List<RwkvLocalModel>? rwkvModels;
   final bool rwkvScanning;
   final bool rwkvLaunching;
+  final bool rwkvStopping;
+
+  /// 本地 server 进程当前是否在运行（决定「停止」按钮是否可点）。
+  final bool rwkvServerRunning;
+
+  /// 手动停止本地 server。
+  final Future<void> Function()? onStopRwkvServer;
   final VoidCallback? onRefreshRwkvModels;
   final Future<void> Function()? onLaunchRwkvServer;
   final OfficialServerVariant? serverVariant;
@@ -2341,6 +2440,27 @@ class _ConfigCard extends ConsumerWidget {
                               : l10n.t('AIC.StartLocalRwkvServer',
                                   '启动本地 RWKV Server')),
                         ),
+                        const SizedBox(width: 6),
+                        // 手动停止：仅在进程确实在跑时可点（避免无意义点击）
+                        OutlinedButton.icon(
+                          onPressed:
+                              (rwkvStopping || !rwkvServerRunning ||
+                                      onStopRwkvServer == null)
+                                  ? null
+                                  : onStopRwkvServer,
+                          icon: rwkvStopping
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.stop_circle_outlined, size: 18),
+                          label: Text(rwkvStopping
+                              ? l10n.t('AIC.Stopping', '停止中…')
+                              : l10n.t('AIC.StopLocalRwkvServer',
+                                  '停止本地 Server')),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -2673,6 +2793,215 @@ class _StatChip extends ConsumerWidget {
   }
 }
 
+/// MainAgent / SubAgent 双代理写作流配置卡片。
+///
+/// 这是**全局**配置（不属于任何单个 provider），所以固定展示在右侧栏底部。
+/// 开关与下拉改完即落盘；四个文本框用「保存」显式提交，避免逐字敲键就写 KVStore。
+class _DualAgentCard extends ConsumerStatefulWidget {
+  const _DualAgentCard();
+
+  @override
+  ConsumerState<_DualAgentCard> createState() => _DualAgentCardState();
+}
+
+class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
+  late final TextEditingController _mainModelCtrl;
+  late final TextEditingController _mainRoleCtrl;
+  late final TextEditingController _subModelCtrl;
+  late final TextEditingController _subRoleCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final AgentRoleWorkflowSettings s = ref.read(dualAgentSettingsProvider);
+    _mainModelCtrl = TextEditingController(text: s.mainAgentModel);
+    _mainRoleCtrl = TextEditingController(text: s.mainAgentRoleDescription);
+    _subModelCtrl = TextEditingController(text: s.subAgentModel);
+    _subRoleCtrl = TextEditingController(text: s.subAgentRoleDescription);
+  }
+
+  @override
+  void dispose() {
+    _mainModelCtrl.dispose();
+    _mainRoleCtrl.dispose();
+    _subModelCtrl.dispose();
+    _subRoleCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final AgentRoleWorkflowSettings s = ref.read(dualAgentSettingsProvider);
+    await ref.read(dualAgentSettingsProvider.notifier).update(
+          s.copyWith(
+            mainAgentModel: _mainModelCtrl.text.trim(),
+            mainAgentRoleDescription: _mainRoleCtrl.text.trim().isEmpty
+                ? AgentRoleWorkflowSettings.defaults.mainAgentRoleDescription
+                : _mainRoleCtrl.text.trim(),
+            subAgentModel: _subModelCtrl.text.trim(),
+            subAgentRoleDescription: _subRoleCtrl.text.trim().isEmpty
+                ? AgentRoleWorkflowSettings.defaults.subAgentRoleDescription
+                : _subRoleCtrl.text.trim(),
+          ),
+        );
+  }
+
+  /// 可选项：ModelManager 已注册的 provider + 两个始终存在的 RWKV 单例。
+  List<String> _providerOptions(List<IModelProvider> registered) {
+    final Set<String> names = <String>{
+      for (final IModelProvider p in registered) p.providerName,
+      'RWKV',
+      'RWKV Cloud',
+    };
+    final List<String> list = names.toList()..sort();
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = ref.watch(l10nProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final mm = ref.watch(modelManagerProvider);
+    final AgentRoleWorkflowSettings s = ref.watch(dualAgentSettingsProvider);
+    final List<String> options = _providerOptions(mm.getAllProviders());
+    if (!options.contains(s.mainAgentProvider)) {
+      options.add(s.mainAgentProvider);
+    }
+    if (!options.contains(s.subAgentProvider)) {
+      options.add(s.subAgentProvider);
+    }
+
+    Future<void> patch({
+      bool? enable,
+      bool? archive,
+      String? mainProvider,
+      String? subProvider,
+    }) async {
+      await ref.read(dualAgentSettingsProvider.notifier).update(
+            s.copyWith(
+              enableDualAgentWorkflow: enable,
+              enableArchiveWrite: archive,
+              mainAgentProvider: mainProvider,
+              subAgentProvider: subProvider,
+            ),
+          );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(Icons.groups_outlined, size: 18, color: scheme.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  l10n.t('AICfg.DualAgentTitle', 'MainAgent / SubAgent 双代理配置'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await _save();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(l10n.t('Common.Saved', '已保存'))));
+                  }
+                },
+                child: Text(l10n.t('Common.Save', '保存')),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            l10n.t('AICfg.DualAgentDesc',
+                '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。'),
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: s.enableDualAgentWorkflow,
+            onChanged: (bool v) => patch(enable: v),
+            title: Text(l10n.t('AICfg.EnableDualAgent',
+                '启用 MainAgent / SubAgent 双代理写作流')),
+          ),
+          const SizedBox(height: 8),
+          _Field(
+            label: l10n.t('AICfg.HintMainAgentProvider', 'MainAgent 提供者'),
+            child: DropdownButtonFormField<String>(
+              initialValue: options.contains(s.mainAgentProvider)
+                  ? s.mainAgentProvider
+                  : options.first,
+              items: <DropdownMenuItem<String>>[
+                for (final String n in options)
+                  DropdownMenuItem<String>(value: n, child: Text(n)),
+              ],
+              onChanged: (String? v) {
+                if (v != null) patch(mainProvider: v);
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Field(
+            label: l10n.t('AICfg.HintMainAgentModel',
+                'MainAgent 模型（可选，留空使用提供者默认模型）'),
+            child: TextField(controller: _mainModelCtrl),
+          ),
+          const SizedBox(height: 12),
+          _Field(
+            label: l10n.t('AICfg.HintMainAgentRole', 'MainAgent 职责描述'),
+            child: TextField(controller: _mainRoleCtrl, maxLines: 2),
+          ),
+          const SizedBox(height: 16),
+          Divider(color: scheme.outlineVariant, height: 1),
+          const SizedBox(height: 16),
+          _Field(
+            label: l10n.t('AICfg.HintSubAgentProvider', 'SubAgent 提供者'),
+            child: DropdownButtonFormField<String>(
+              initialValue: options.contains(s.subAgentProvider)
+                  ? s.subAgentProvider
+                  : options.first,
+              items: <DropdownMenuItem<String>>[
+                for (final String n in options)
+                  DropdownMenuItem<String>(value: n, child: Text(n)),
+              ],
+              onChanged: (String? v) {
+                if (v != null) patch(subProvider: v);
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Field(
+            label: l10n.t('AICfg.HintSubAgentModel',
+                'SubAgent 模型（可选，留空使用提供者默认模型）'),
+            child: TextField(controller: _subModelCtrl),
+          ),
+          const SizedBox(height: 12),
+          _Field(
+            label: l10n.t('AICfg.HintSubAgentRole', 'SubAgent 职责描述'),
+            child: TextField(controller: _subRoleCtrl, maxLines: 2),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: s.enableArchiveWrite,
+            onChanged: (bool v) => patch(archive: v),
+            title: Text(l10n.t('AICfg.AllowArchiveWrite',
+                '允许 SubAgent 将纯净定稿写入正式项目档案库')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 String _formatBytes(int bytes) {
   if (bytes <= 0) return '0 B';
   const units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
@@ -2728,7 +3057,10 @@ Widget _buildProgressBlock(
                 children: [
                   Text(
                     l10n.tf('AIC.PhaseFailedLabel', '❌ {phaseLabel}',
-                        {'phaseLabel': progress.phase.label}),
+                        {
+                          'phaseLabel': l10n.t(
+                              progress.phase.labelKey, progress.phase.label)
+                        }),
                     style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: scheme.onErrorContainer),
@@ -2822,7 +3154,7 @@ Widget _buildProgressBlock(
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    Text(progress.phase.label,
+                    Text(l10n.t(progress.phase.labelKey, progress.phase.label),
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -2891,5 +3223,94 @@ Widget _buildProgressBlock(
             ),
         ],
       );
+  }
+}
+
+/// 功能 C：章节落库后自动同步世界观 —— 两级开关（规则同步默认开 / AI 抽取默认关）。
+class _ChapterSyncCard extends ConsumerStatefulWidget {
+  const _ChapterSyncCard();
+
+  @override
+  ConsumerState<_ChapterSyncCard> createState() => _ChapterSyncCardState();
+}
+
+class _ChapterSyncCardState extends ConsumerState<_ChapterSyncCard> {
+  bool _loading = true;
+  bool _ruleEnabled = true;
+  bool _aiEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    final post = ref.read(chapterPostProcessServiceProvider);
+    final bool rule = await post.ruleEnabled();
+    final bool ai = await post.aiEnabled();
+    if (!mounted) return;
+    setState(() {
+      _ruleEnabled = rule;
+      _aiEnabled = ai;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = ref.watch(l10nProvider);
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.t('SYN.GroupTitle', '章节自动同步（世界观联动）'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: scheme.primary,
+                    )),
+            if (_loading) ...[
+              const SizedBox(height: 12),
+              const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            ] else ...[
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _ruleEnabled,
+                onChanged: (bool v) async {
+                  setState(() => _ruleEnabled = v);
+                  await ref
+                      .read(chapterPostProcessServiceProvider)
+                      .setRuleEnabled(v);
+                },
+                title: Text(l10n.t('SYN.ToggleTitle', '章节保存后自动同步世界观')),
+                subtitle: Text(
+                  l10n.t('SYN.ToggleSub',
+                      '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _aiEnabled,
+                onChanged: (bool v) async {
+                  setState(() => _aiEnabled = v);
+                  await ref
+                      .read(chapterPostProcessServiceProvider)
+                      .setAiEnabled(v);
+                },
+                title: Text(l10n.t('SYN.AIToggleTitle', 'AI 状态抽取（实验）')),
+                subtitle: Text(
+                  l10n.t('SYN.AIToggleSub',
+                      '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

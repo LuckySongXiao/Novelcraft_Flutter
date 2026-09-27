@@ -1,0 +1,28 @@
+﻿Write a book chapter in the style of {Style}.
+
+【Chapter Info】
+Title: {Title}
+Type: {Type}
+Target length: about {TargetWordCount} words
+Writing style: {Style}
+
+【Outline】
+{Outline}
+
+【Key Plot】
+{KeyPlots}
+
+【Main Characters】
+{Characters}
+
+【Special Requirements】
+{SpecialRequirements}
+
+【Requirements】
+1. Follow the requested writing style throughout
+2. Tight plotting, vivid description, strong imagery
+3. Distinct characters with natural dialogue
+4. Around {TargetWordCount} words
+5. Complete and coherent as a chapter
+
+Write ALL content in ENGLISH. Output only the chapter text — no explanations, labels or markup.

@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 云端 AI 推理（RWKV Cloud 等通过 HTTPS 调用）必需；Flutter 默认模板只在
+         debug/profile manifest 里带 INTERNET，release 包必须显式声明。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="novelcraft"
         android:name="${applicationName}"
@@ -8,6 +11,7 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"

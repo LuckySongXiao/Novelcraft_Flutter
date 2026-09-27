@@ -51,3 +51,9 @@ app.*.map.json
 /rwkv_models/*.zip
 /rwkv_models/*.part
 /rwkv_models/*.tmp
+/rwkv_models/*.gguf
+
+# 签名与本地凭据（双保险：android/.gitignore 已含，此处兜底）
+key.properties
+**/*.keystore
+**/*.jks

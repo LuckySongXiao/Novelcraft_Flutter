@@ -166,6 +166,33 @@ extension RwkvDownloadPhaseX on RwkvDownloadPhase {
       this == RwkvDownloadPhase.done ||
       this == RwkvDownloadPhase.failed ||
       this == RwkvDownloadPhase.cancelled;
+
+  /// 本地化 key —— 表现层用 `l10n.t(phase.labelKey, phase.label)` 取词。
+  ///
+  /// `lib/ai` 是纯 Dart 层（不能依赖 Flutter 的 `L10n`），因此这里只给 key，
+  /// 中文 [label] 作为 `t()` 的 fallback 保留。
+  String get labelKey {
+    switch (this) {
+      case RwkvDownloadPhase.idle:
+        return 'AIC.Phase.Idle';
+      case RwkvDownloadPhase.fetchingMeta:
+        return 'AIC.Phase.FetchingMeta';
+      case RwkvDownloadPhase.downloading:
+        return 'AIC.Phase.Downloading';
+      case RwkvDownloadPhase.verifying:
+        return 'AIC.Phase.Verifying';
+      case RwkvDownloadPhase.extracting:
+        return 'AIC.Phase.Extracting';
+      case RwkvDownloadPhase.installing:
+        return 'AIC.Phase.Installing';
+      case RwkvDownloadPhase.done:
+        return 'AIC.Phase.Done';
+      case RwkvDownloadPhase.failed:
+        return 'AIC.Phase.Failed';
+      case RwkvDownloadPhase.cancelled:
+        return 'AIC.Phase.Cancelled';
+    }
+  }
 }
 
 class RwkvDownloadProgress {

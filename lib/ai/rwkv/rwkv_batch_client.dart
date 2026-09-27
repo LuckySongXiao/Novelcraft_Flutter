@@ -102,18 +102,19 @@ class RwkvBatchClient {
         rel.startsWith('multi_state/') ||
         rel.startsWith('translate/') ||
         rel.startsWith('openai/')) {
-      final String root =
-          base.endsWith('/v1') ? base.substring(0, base.length - 3) : base;
+      final String root = base.endsWith('/v1')
+          ? base.substring(0, base.length - 3)
+          : base;
       return '$root/$rel';
     }
     return base.endsWith('/v1') ? '$base/$rel' : '$base/v1/$rel';
   }
 
   Map<String, String> _requestHeaders({bool sse = false}) => <String, String>{
-        'Content-Type': 'application/json',
-        if (sse) 'Accept': 'text/event-stream',
-        ...headers(),
-      };
+    'Content-Type': 'application/json',
+    if (sse) 'Accept': 'text/event-stream',
+    ...headers(),
+  };
 
   // -------------------------------------------------------------------------
   // 非流式批量
@@ -124,49 +125,60 @@ class RwkvBatchClient {
   /// 内部会自动处理 4 类失败（见文件头注释）：`bsz overflow` 拆小、
   /// 5xx 退避、200+error 重试、条数不足子集重试。
   Future<List<String?>> chat(RwkvBatchRequest request) async {
-    _logger.info('批量补全 ${request.contents.length} 条'
-        '（max_tokens=${request.maxTokens} stream=false）');
+    _logger.info(
+      '批量补全 ${request.contents.length} 条'
+      '（max_tokens=${request.maxTokens} stream=false）',
+    );
     final Stopwatch sw = Stopwatch()..start();
     // 统计**实际**发出的 POST 次数：拆批/子集重试都会让它 > 1，
     // 这正是面板要暴露的"拆批开销"（PITFALLS §33.2）。
     int posts = 0;
     try {
-      final List<String?> out = await _chatWithRetry(request,
-          depth: 0, onPost: () => posts++);
+      final List<String?> out = await _chatWithRetry(
+        request,
+        depth: 0,
+        onPost: () => posts++,
+      );
       sw.stop();
-      stats?.record(AiRequestSample(
-        provider: statsProvider,
-        operation: 'batch',
-        success: true,
-        latency: sw.elapsed,
-        itemCount: request.contents.length,
-        httpPosts: posts,
-      ));
+      stats?.record(
+        AiRequestSample(
+          provider: statsProvider,
+          operation: 'batch',
+          success: true,
+          latency: sw.elapsed,
+          itemCount: request.contents.length,
+          httpPosts: posts,
+        ),
+      );
       return out;
     } on RwkvBatchException catch (e) {
       sw.stop();
-      stats?.record(AiRequestSample(
-        provider: statsProvider,
-        operation: 'batch',
-        success: false,
-        latency: sw.elapsed,
-        itemCount: request.contents.length,
-        // 直接用失败分类名：面板上「该拆批」和「该换 Token」天然分开
-        failureKind: e.kind.name,
-        httpPosts: posts,
-      ));
+      stats?.record(
+        AiRequestSample(
+          provider: statsProvider,
+          operation: 'batch',
+          success: false,
+          latency: sw.elapsed,
+          itemCount: request.contents.length,
+          // 直接用失败分类名：面板上「该拆批」和「该换 Token」天然分开
+          failureKind: e.kind.name,
+          httpPosts: posts,
+        ),
+      );
       rethrow;
     } on Object {
       sw.stop();
-      stats?.record(AiRequestSample(
-        provider: statsProvider,
-        operation: 'batch',
-        success: false,
-        latency: sw.elapsed,
-        itemCount: request.contents.length,
-        failureKind: 'unexpected',
-        httpPosts: posts,
-      ));
+      stats?.record(
+        AiRequestSample(
+          provider: statsProvider,
+          operation: 'batch',
+          success: false,
+          latency: sw.elapsed,
+          itemCount: request.contents.length,
+          failureKind: 'unexpected',
+          httpPosts: posts,
+        ),
+      );
       rethrow;
     }
   }
@@ -180,6 +192,8 @@ class RwkvBatchClient {
     final int n = request.contents.length;
     if (n == 0) return <String?>[];
 
+    // 功能：动态并发许可 —— 吃满服务端容量的同时防本地在途失控
+    await concurrency?.waitForPermit();
     concurrency?.enterInFlight();
     http.Response? resp;
     try {
@@ -194,11 +208,16 @@ class RwkvBatchClient {
     } on Object catch (e) {
       concurrency?.leaveInFlight();
       final RwkvBatchException ex = RwkvBatchException(
-        kind: RwkvBatchFailureKind.truncated,
+        kind: RwkvBatchFailureKind.network,
         message: '网络异常：$e',
       );
-      return _handleFailure(request, ex,
-          depth: depth, attempt: attempt, onPost: onPost);
+      return _handleFailure(
+        request,
+        ex,
+        depth: depth,
+        attempt: attempt,
+        onPost: onPost,
+      );
     }
     concurrency?.leaveInFlight();
 
@@ -209,7 +228,8 @@ class RwkvBatchClient {
       throw RwkvBatchException(
         kind: RwkvBatchFailureKind.authFailed,
         statusCode: resp.statusCode,
-        message: 'Cloudflare Access 认证失败：返回的是 HTML 而不是 JSON。'
+        message:
+            'Cloudflare Access 认证失败：返回的是 HTML 而不是 JSON。'
             '请检查 CF-Access-Client-Id / CF-Access-Client-Secret 的精确大小写。'
             '（PITFALLS §27.2）前 160 字：'
             '${body.length > 160 ? body.substring(0, 160) : body}',
@@ -331,8 +351,12 @@ class RwkvBatchClient {
         return out;
       }
       final RwkvBatchRequest sub = request.subset(missing);
-      final List<String?> subOut = await _chatWithRetry(sub,
-          depth: depth + 1, attempt: attempt + 1, onPost: onPost);
+      final List<String?> subOut = await _chatWithRetry(
+        sub,
+        depth: depth + 1,
+        attempt: attempt + 1,
+        onPost: onPost,
+      );
       for (int i = 0; i < missing.length; i++) {
         out[missing[i]] = subOut.length > i ? subOut[i] : null;
       }
@@ -362,22 +386,34 @@ class RwkvBatchClient {
       final int half = suggested < n ? suggested : (n ~/ 2).clamp(1, n);
       _logger.warning('并发超限，把 $n 条拆成 $half + ${n - half} 条重试');
       final List<String?> head = await _chatWithRetry(
-          request.subset(<int>[for (int i = 0; i < half; i++) i]),
-          depth: depth + 1, attempt: attempt, onPost: onPost);
+        request.subset(<int>[for (int i = 0; i < half; i++) i]),
+        depth: depth + 1,
+        attempt: attempt,
+        onPost: onPost,
+      );
       final List<String?> tail = await _chatWithRetry(
-          request.subset(<int>[for (int i = half; i < n; i++) i]),
-          depth: depth + 1, attempt: attempt, onPost: onPost);
+        request.subset(<int>[for (int i = half; i < n; i++) i]),
+        depth: depth + 1,
+        attempt: attempt,
+        onPost: onPost,
+      );
       return <String?>[...head, ...tail];
     }
 
     // ② 其余可重试 → 指数退避
     if (ex.isRetryable && attempt < maxRetries) {
       final Duration delay = _backoff(attempt);
-      _logger.warning('${ex.kind.name} 第 ${attempt + 1} 次重试，'
-          '${delay.inMilliseconds}ms 后：${ex.message}');
+      _logger.warning(
+        '${ex.kind.name} 第 ${attempt + 1} 次重试，'
+        '${delay.inMilliseconds}ms 后：${ex.message}',
+      );
       await Future<void>.delayed(delay);
-      return _chatWithRetry(request,
-          depth: depth, attempt: attempt + 1, onPost: onPost);
+      return _chatWithRetry(
+        request,
+        depth: depth,
+        attempt: attempt + 1,
+        onPost: onPost,
+      );
     }
 
     throw ex;
@@ -399,7 +435,9 @@ class RwkvBatchClient {
   Stream<RwkvBatchProgress> chatStream(RwkvBatchRequest request) async* {
     final int n = request.contents.length;
     final Stopwatch sw = Stopwatch()..start();
-    _logger.info('流式批量补全 $n 条（chunk_size=${request.chunkSize ?? kRwkvDefaultBatchChunkSize}）');
+    _logger.info(
+      '流式批量补全 $n 条（chunk_size=${request.chunkSize ?? kRwkvDefaultBatchChunkSize}）',
+    );
     // ⚠ SSE 里不同 index 交错到达 → 按 index 分组，绝不按到达顺序 append
     final Map<int, StringBuffer> buffers = <int, StringBuffer>{
       for (int i = 0; i < n; i++) i: StringBuffer(),
@@ -414,6 +452,8 @@ class RwkvBatchClient {
     req.headers.addAll(_requestHeaders(sse: true));
     req.body = jsonEncode(request.toJson());
 
+    // 功能：动态并发许可 —— 吃满服务端容量的同时防本地在途失控
+    await concurrency?.waitForPermit();
     concurrency?.enterInFlight();
     http.StreamedResponse resp;
     try {
@@ -434,9 +474,10 @@ class RwkvBatchClient {
     }
 
     final StringBuffer raw = StringBuffer();
-    await for (final String line in resp.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())) {
+    await for (final String line
+        in resp.stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
       if (line.isEmpty) continue;
       if (!line.startsWith('data:')) continue;
       final String payload = line.substring(5).trim();
@@ -492,15 +533,31 @@ class RwkvBatchClient {
       );
     }
 
-    concurrency?.noteSuccess();
-    stats?.record(AiRequestSample(
-      provider: statsProvider,
-      operation: 'batchStream',
-      success: true,
-      latency: sw.elapsed,
-      itemCount: n,
-      httpPosts: 1,
-    ));
+    // 完整性校验：断流/槽位未收齐时绝不能静默当成功（PITFALLS §31.4 实测会截断）。
+    // 缺槽只告警与统计 —— 不在此重试：调用方已收到部分快照，补拉语义由上层决定。
+    final List<int> unfinished = <int>[
+      for (int i = 0; i < n; i++)
+        if (!finished.contains(i)) i,
+    ];
+    if (unfinished.isNotEmpty) {
+      _logger.warning(
+        '流式批量结束但有 ${unfinished.length}/$n 个槽位未收到 finish：$unfinished'
+        '（连接可能中断；上层应把对应槽位视为缺失，勿静默成文）',
+      );
+    } else {
+      concurrency?.noteSuccess();
+    }
+    stats?.record(
+      AiRequestSample(
+        provider: statsProvider,
+        operation: 'batchStream',
+        success: unfinished.isEmpty,
+        latency: sw.elapsed,
+        itemCount: n,
+        failureKind: unfinished.isEmpty ? null : 'truncated',
+        httpPosts: 1,
+      ),
+    );
     yield RwkvBatchProgress(
       partial: <int, String>{
         for (final MapEntry<int, StringBuffer> e in buffers.entries)
@@ -550,15 +607,19 @@ class RwkvBatchClient {
     Duration timeout = const Duration(seconds: 120),
   }) async {
     final http.Response resp = await client
-        .post(Uri.parse(_url(route)),
-            headers: _requestHeaders(), body: jsonEncode(body))
+        .post(
+          Uri.parse(_url(route)),
+          headers: _requestHeaders(),
+          body: jsonEncode(body),
+        )
         .timeout(timeout);
     final String text = resp.body;
     if (text.trimLeft().startsWith('<')) {
       throw RwkvBatchException(
         kind: RwkvBatchFailureKind.authFailed,
         statusCode: resp.statusCode,
-        message: 'Cloudflare Access 认证失败：收到 HTML 而非 JSON。'
+        message:
+            'Cloudflare Access 认证失败：收到 HTML 而非 JSON。'
             '检查 CF-Access-Client-Id / CF-Access-Client-Secret 的精确大小写。'
             '前 160 字：${text.length > 160 ? text.substring(0, 160) : text}',
       );
@@ -578,7 +639,8 @@ class RwkvBatchClient {
       throw RwkvBatchException(
         kind: RwkvBatchFailureKind.fatal,
         statusCode: 404,
-        message: '路由不存在：$route（官方标为「可选」的能力，'
+        message:
+            '路由不存在：$route（官方标为「可选」的能力，'
             '请先用 routeExists() 探测；PITFALLS §31.5）',
       );
     }
@@ -610,8 +672,11 @@ class RwkvBatchClient {
   Future<bool> routeExists(String route) async {
     try {
       final http.Response resp = await client
-          .post(Uri.parse(_url(route)),
-              headers: _requestHeaders(), body: jsonEncode(<String, dynamic>{}))
+          .post(
+            Uri.parse(_url(route)),
+            headers: _requestHeaders(),
+            body: jsonEncode(<String, dynamic>{}),
+          )
           .timeout(const Duration(seconds: 15));
       // 404 → 不存在；400/422 → 存在但参数不对（正是我们要的"存在"信号）
       return resp.statusCode != 404;

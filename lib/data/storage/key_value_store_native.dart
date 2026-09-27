@@ -1,13 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
+
 import 'key_value_store.dart';
 
 /// Native 端实现：JSON 文件
 ///
-/// 目录结构与 C# 版保持一致：
-/// `{ApplicationDocumentsDirectory}/NovelManagement/{scope}/{key}.json`
-/// 便于用户已有的数据目录被直接复用。
+/// 目录结构：
+/// - Windows：`%APPDATA%\NovelManagement\{scope}\{key}.json`
+///   （与 C# 版保持一致，用户已有的数据目录被直接复用）；
+/// - 其它平台（安卓/iOS/macOS/Linux）：`{应用支持目录}/NovelManagement/{scope}/{key}.json`
+///   （path_provider 解析到应用私有可写目录，安卓上无需任何权限）。
+///
+/// ⚠ 不能用 `Platform.environment['APPDATA']` 一把梭：安卓上 APPDATA/HOME
+/// 均为 null，退到 `Directory.current`（只读的根目录 `/`），创建
+/// `//NovelManagement` 直接报 `FileSystemException errno 30`（真机已踩）。
 class NativeKeyValueStore implements KeyValueStore {
   Directory? _root;
 
@@ -15,10 +23,15 @@ class NativeKeyValueStore implements KeyValueStore {
   Future<void> init() async {
     if (_root != null) return;
     // 延迟获取，避免构造期触发平台通道
-    final base = Platform.environment['APPDATA'] ??
-        Platform.environment['HOME'] ??
-        Directory.current.path;
-    _root = Directory('$base${Platform.pathSeparator}NovelManagement');
+    if (Platform.isWindows) {
+      final base = Platform.environment['APPDATA'] ?? Directory.current.path;
+      _root = Directory('$base${Platform.pathSeparator}NovelManagement');
+    } else {
+      final support = await getApplicationSupportDirectory();
+      _root = Directory(
+        '${support.path}${Platform.pathSeparator}NovelManagement',
+      );
+    }
     if (!_root!.existsSync()) {
       _root!.createSync(recursive: true);
     }

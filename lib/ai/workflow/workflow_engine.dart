@@ -25,6 +25,7 @@ import '../providers/rwkv_provider.dart';
 import '../rwkv/rwkv_session_archive.dart';
 import 'agent_batch_settings.dart';
 import 'batch_agent_executor.dart';
+import 'dispatch_planner.dart';
 import 'task_queue.dart';
 import 'workflow.dart';
 
@@ -47,6 +48,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
   /// state 导出端点，客户端的 `RwkvState.bytes` 一直是空占位（PITFALLS §39.1）。
   /// 恢复 = 把转录本重放一次进 `/state/chat/completions` 重建服务端 state。
   final RwkvSessionArchive? _sessionArchive;
+
+  /// 功能：分派规划器 —— 跑之前探测最大并发 + 主 Agent 自主决定分派数。
+  /// null = 未装配（按原并发执行）。
+  final WorkflowDispatchPlanner? _dispatchPlanner;
 
   /// 是否让**所有**可批任务都走攒批。
   ///
@@ -91,23 +96,29 @@ class NovelWorkflowEngine implements IWorkflowEngine {
     bool batchAllTasks = false,
     AgentBatchSettings Function()? batchSettings,
     RwkvSessionArchive? sessionArchive,
-  })  : _rwkvProvider = rwkvProvider,
-        _batchExecutor = batchExecutor,
-        _batchAllTasks = batchAllTasks,
-        _batchSettings = batchSettings,
-        _sessionArchive = sessionArchive {
+    WorkflowDispatchPlanner? dispatchPlanner,
+  }) : _rwkvProvider = rwkvProvider,
+       _batchExecutor = batchExecutor,
+       _batchAllTasks = batchAllTasks,
+       _batchSettings = batchSettings,
+       _sessionArchive = sessionArchive,
+       _dispatchPlanner = dispatchPlanner {
     _taskQueue.taskStatusChanged.listen(_onTaskStatusChanged);
     final ex = batchExecutor;
     if (ex != null) {
       final int conc = _taskQueue.maxConcurrentTasks;
       if (conc < ex.maxBatchSize) {
         // 这类配置错很隐蔽：攒批会「永远攒不满」，看起来像批量没生效
-        _logger.warning('队列并发上限 ($conc) 小于批量上限 (${ex.maxBatchSize})，'
-            '攒批永远攒不满 —— 请把 TaskQueue.maxConcurrentTasks 提到 '
-            '${ex.maxBatchSize} 以上（PITFALLS §33.7）');
+        _logger.warning(
+          '队列并发上限 ($conc) 小于批量上限 (${ex.maxBatchSize})，'
+          '攒批永远攒不满 —— 请把 TaskQueue.maxConcurrentTasks 提到 '
+          '${ex.maxBatchSize} 以上（PITFALLS §33.7）',
+        );
       } else {
-        _logger.info('WorkflowEngine 已启用攒批：maxBatchSize=${ex.maxBatchSize}, '
-            '队列并发=$conc, batchAllTasks=$batchAllTasks');
+        _logger.info(
+          'WorkflowEngine 已启用攒批：maxBatchSize=${ex.maxBatchSize}, '
+          '队列并发=$conc, batchAllTasks=$batchAllTasks',
+        );
       }
     }
   }
@@ -130,8 +141,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
     // 那个每次开新会话都会变，存了也找不回来。放在 try 外层：存档点在 runAll 之后。
     final String archiveKey = _archiveKeyFor(workflowDefinition);
     try {
-      _logger.info('开始执行工作流: ${workflowDefinition.name} '
-          '(ID: ${workflowDefinition.id})');
+      _logger.info(
+        '开始执行工作流: ${workflowDefinition.name} '
+        '(ID: ${workflowDefinition.id})',
+      );
 
       workflowDefinition.status = WorkflowStatus.running;
       workflowDefinition.startedAt = DateTime.now();
@@ -150,8 +163,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         for (final task in workflowDefinition.tasks) {
           task.parameters.putIfAbsent('rwkvSessionId', () => rwkvSessionId);
         }
-        _logger.info('工作流 ${workflowDefinition.name} 绑定 RWKV session: '
-            '$rwkvSessionId');
+        _logger.info(
+          '工作流 ${workflowDefinition.name} 绑定 RWKV session: '
+          '$rwkvSessionId',
+        );
 
         // --- P4-27 会话存档恢复 ---
         // 模型不匹配 / 没有存档 / 为空 都会静默跳过（从零开始，绝不硬塞错误记忆）
@@ -166,6 +181,34 @@ class NovelWorkflowEngine implements IWorkflowEngine {
 
       // 真实 Kahn 拓扑排序：既用于入队顺序，也在存在环时报错。
       final order = _topologicalSort(workflowDefinition.tasks);
+
+      // --- 功能：跑之前探测最大并发 + 主 Agent 自主决定分派数 ---
+      final planner = _dispatchPlanner;
+      if (planner != null) {
+        try {
+          final int parallelizable = order
+              .where((WorkflowTask t) => t.dependencies.isEmpty)
+              .length;
+          final DispatchPlan plan = await planner.decide(
+            workflowName: workflowDefinition.name,
+            taskCount: workflowDefinition.tasks.length,
+            parallelizable: parallelizable,
+          );
+          _taskQueue.setMaxConcurrentTasks(plan.effective);
+          workflowDefinition.configuration['dispatchConcurrency'] =
+              plan.effective;
+          workflowDefinition.configuration['dispatchProbedMax'] =
+              plan.probedMax;
+          _logger.info(
+            '主 Agent 分派决策：探测 ${plan.probedMax}'
+            '（${plan.source}）· 主Agent表态 ${plan.mainAgentDecision}'
+            ' → 生效并发 ${plan.effective}',
+          );
+        } on Object catch (e) {
+          // 规划失败按原并发执行，绝不阻塞工作流
+          _logger.warning('并发探测/分派决策失败（按原并发执行）: $e');
+        }
+      }
 
       _taskQueue.enqueueAll(order);
       await _taskQueue.runAll(_runTask);
@@ -183,8 +226,9 @@ class NovelWorkflowEngine implements IWorkflowEngine {
           .where((t) => t.status == WorkflowStatus.failed)
           .length;
 
-      workflowDefinition.status =
-          failed > 0 ? WorkflowStatus.failed : WorkflowStatus.completed;
+      workflowDefinition.status = failed > 0
+          ? WorkflowStatus.failed
+          : WorkflowStatus.completed;
       workflowDefinition.completedAt = DateTime.now();
       workflowDefinition.progress = 100;
       _cleanupSession(workflowDefinition.id);
@@ -205,9 +249,11 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         metadata: metadata,
       );
 
-      _logger.info('工作流执行完成: ${workflowDefinition.name}, '
-          '成功: ${result.isSuccess}, '
-          '耗时: ${executionTime.inMilliseconds / 1000}秒');
+      _logger.info(
+        '工作流执行完成: ${workflowDefinition.name}, '
+        '成功: ${result.isSuccess}, '
+        '耗时: ${executionTime.inMilliseconds / 1000}秒',
+      );
       return result;
     } catch (e, st) {
       _logger.severe('工作流执行失败: ${workflowDefinition.name}', e, st);
@@ -258,7 +304,9 @@ class NovelWorkflowEngine implements IWorkflowEngine {
       workflow.status = WorkflowStatus.cancelled;
       workflow.completedAt = DateTime.now();
       for (final task in workflow.tasks.where(
-        (t) => t.status == WorkflowStatus.pending || t.status == WorkflowStatus.running,
+        (t) =>
+            t.status == WorkflowStatus.pending ||
+            t.status == WorkflowStatus.running,
       )) {
         _taskQueue.cancel(task.id);
       }
@@ -368,14 +416,20 @@ class NovelWorkflowEngine implements IWorkflowEngine {
     final rp = _rwkvProvider;
     if (archive == null || rp == null) return;
     try {
-      final (RwkvSessionArchiveEntry? entry, RwkvArchiveMismatch? why) =
-          await archive.loadCompatible(
-              archiveKey: archiveKey, currentModelId: rp.modelId);
+      final (
+        RwkvSessionArchiveEntry? entry,
+        RwkvArchiveMismatch? why,
+      ) = await archive.loadCompatible(
+        archiveKey: archiveKey,
+        currentModelId: rp.modelId,
+      );
       if (entry == null) {
         if (why == RwkvArchiveMismatch.modelMismatch) {
-          _logger.warning('跳过会话恢复：存档是用模型「${entry?.modelId}」产生的，'
-              '与当前模型「${rp.modelId}」不一致 —— 重放会得到另一个模型的记忆，'
-              '故从零开始');
+          _logger.warning(
+            '跳过会话恢复：存档是用模型「${entry?.modelId}」产生的，'
+            '与当前模型「${rp.modelId}」不一致 —— 重放会得到另一个模型的记忆，'
+            '故从零开始',
+          );
         }
         return;
       }
@@ -384,8 +438,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
       if (ok) {
         w.configuration['sessionRestored'] = true;
         w.configuration['sessionRestoredTurns'] = entry.turns.length;
-        _logger.info('工作流 ${w.name} 已从存档恢复会话'
-            '（${entry.turns.length} 轮 / ${entry.totalChars} 字）');
+        _logger.info(
+          '工作流 ${w.name} 已从存档恢复会话'
+          '（${entry.turns.length} 轮 / ${entry.totalChars} 字）',
+        );
       }
     } on Object catch (e) {
       _logger.warning('会话恢复失败（不影响本次执行，从零开始）：$e');
@@ -414,8 +470,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         ],
       );
       await archive.save(entry);
-      _logger.info('工作流 ${w.name} 已存档会话'
-          '（${entry.turns.length} 轮 / ${entry.totalChars} 字，key=$archiveKey）');
+      _logger.info(
+        '工作流 ${w.name} 已存档会话'
+        '（${entry.turns.length} 轮 / ${entry.totalChars} 字，key=$archiveKey）',
+      );
     } on Object catch (e) {
       _logger.warning('会话存档失败（不影响本次执行）：$e');
     }
@@ -424,8 +482,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
   Future<AgentTaskResult> _runTask(WorkflowTask task) async {
     final agent = _resolveAgent(task.targetAgentId);
     if (agent == null) {
-      throw StateError('任务 ${task.name} 的目标 Agent '
-          '${task.targetAgentId} 未注册');
+      throw StateError(
+        '任务 ${task.name} 的目标 Agent '
+        '${task.targetAgentId} 未注册',
+      );
     }
     final BatchAgentExecutor? ex = _batchExecutor;
     if (ex != null && _shouldBatch(task, agent)) {
@@ -435,8 +495,10 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         if (g != null) task.parameters['batchGroupId'] = g;
       }
       final String group = task.parameters['batchGroupId']?.toString() ?? '-';
-      _logger.info('执行任务 ${task.name} 委派给 Agent ${agent.name}'
-          '（走攒批，group=$group）');
+      _logger.info(
+        '执行任务 ${task.name} 委派给 Agent ${agent.name}'
+        '（走攒批，group=$group）',
+      );
       try {
         return await ex.submit(agent as BaseAgent, task);
       } on Object catch (e) {
@@ -445,7 +507,8 @@ class NovelWorkflowEngine implements IWorkflowEngine {
         _logger.severe('任务 ${task.name} 攒批执行失败（不自动降级为单路）：$e');
         return AgentTaskResult(
           isSuccess: false,
-          errorMessage: '攒批执行失败：$e\n'
+          errorMessage:
+              '攒批执行失败：$e\n'
               '（如需退回单路，请在该任务参数里设 useBatch: false）',
           metadata: <String, dynamic>{'batch': true, 'batchGroupId': group},
         );
@@ -467,7 +530,8 @@ class NovelWorkflowEngine implements IWorkflowEngine {
       if (_resolveAgent(task.targetAgentId) == null) {
         return WorkflowValidationResult(
           isValid: false,
-          errorMessage: '任务 ${task.name} 的目标 Agent '
+          errorMessage:
+              '任务 ${task.name} 的目标 Agent '
               '${task.targetAgentId} 未注册',
         );
       }
@@ -497,11 +561,12 @@ class NovelWorkflowEngine implements IWorkflowEngine {
 
     final queue = Queue<String>();
     // 稳定排序：优先级高者先入队。
-    final zeroInDegree = inDegree.entries
-        .where((e) => e.value == 0)
-        .map((e) => idToTask[e.key]!)
-        .toList()
-      ..sort((a, b) => b.priority.compareTo(a.priority));
+    final zeroInDegree =
+        inDegree.entries
+            .where((e) => e.value == 0)
+            .map((e) => idToTask[e.key]!)
+            .toList()
+          ..sort((a, b) => b.priority.compareTo(a.priority));
     for (final t in zeroInDegree) {
       queue.addLast(t.id);
     }
@@ -594,37 +659,35 @@ class NovelWorkflowEngine implements IWorkflowEngine {
 
   WorkflowDefinition _createContentReviewWorkflow(
     Map<String, dynamic> parameters,
-  ) =>
-      WorkflowDefinition(
-        name: '内容审查工作流',
-        description: '对内容进行全面审查',
-        tasks: [
-          WorkflowTask(
-            name: '内容审查',
-            taskType: 'ContentReview',
-            targetAgentId: 'editor',
-            parameters: parameters,
-            priority: 10,
-          ),
-        ],
-      );
+  ) => WorkflowDefinition(
+    name: '内容审查工作流',
+    description: '对内容进行全面审查',
+    tasks: [
+      WorkflowTask(
+        name: '内容审查',
+        taskType: 'ContentReview',
+        targetAgentId: 'editor',
+        parameters: parameters,
+        priority: 10,
+      ),
+    ],
+  );
 
   WorkflowDefinition _createConsistencyCheckWorkflow(
     Map<String, dynamic> parameters,
-  ) =>
-      WorkflowDefinition(
-        name: '一致性检查工作流',
-        description: '检查内容的一致性',
-        tasks: [
-          WorkflowTask(
-            name: '一致性检查',
-            taskType: 'ConsistencyCheck',
-            targetAgentId: 'editor',
-            parameters: parameters,
-            priority: 10,
-          ),
-        ],
-      );
+  ) => WorkflowDefinition(
+    name: '一致性检查工作流',
+    description: '检查内容的一致性',
+    tasks: [
+      WorkflowTask(
+        name: '一致性检查',
+        taskType: 'ConsistencyCheck',
+        targetAgentId: 'editor',
+        parameters: parameters,
+        priority: 10,
+      ),
+    ],
+  );
 
   // ----- 事件 -----
 

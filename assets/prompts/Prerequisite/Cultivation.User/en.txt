@@ -1,0 +1,24 @@
+﻿Design a cultivation / power progression system for this novel project. Requirements:
+1. Define the system name, type and core cultivation method first (must fit the project genre and worldview; names are fully custom).
+2. Then define 8-12 ranks from lowest to highest; each rank needs a description, a breakthrough condition and ability features. The advancement logic must be progressive and self-consistent.
+3. Do NOT copy common templates such as Qi Refining / Foundation Building / Golden Core.
+
+Output ONLY the plain-text structure below. No markdown code blocks, no explanations, no preamble. Write every value in ENGLISH and keep the field labels EXACTLY as shown:
+
+【Cultivation System】
+System Name:
+System Type:
+Cultivation Method:
+1.
+Rank Name:
+Description:
+Breakthrough Condition:
+Ability Features:
+
+2.
+Rank Name:
+Description:
+Breakthrough Condition:
+Ability Features:
+
+(list all ranks from lowest to highest)

@@ -139,20 +139,20 @@ class RwkvBatchRequest {
 
   /// 造一个只含指定槽位的子集请求（用于**部分失败子集重试**）。
   RwkvBatchRequest subset(List<int> indices) => RwkvBatchRequest(
-        contents: <String>[for (final int i in indices) contents[i]],
-        model: model,
-        temperature: temperature,
-        topP: topP,
-        topK: topK,
-        alphaPresence: alphaPresence,
-        alphaFrequency: alphaFrequency,
-        alphaDecay: alphaDecay,
-        maxTokens: maxTokens,
-        stopTokens: stopTokens,
-        stream: stream,
-        chunkSize: chunkSize,
-        metrics: metrics,
-      );
+    contents: <String>[for (final int i in indices) contents[i]],
+    model: model,
+    temperature: temperature,
+    topP: topP,
+    topK: topK,
+    alphaPresence: alphaPresence,
+    alphaFrequency: alphaFrequency,
+    alphaDecay: alphaDecay,
+    maxTokens: maxTokens,
+    stopTokens: stopTokens,
+    stream: stream,
+    chunkSize: chunkSize,
+    metrics: metrics,
+  );
 }
 
 /// 批量补全的一条 choice。
@@ -227,8 +227,9 @@ class RwkvBatchResponse {
         if (c is Map<String, dynamic>) out.add(RwkvBatchChoice.fromJson(c));
       }
     }
-    out.sort((RwkvBatchChoice a, RwkvBatchChoice b) =>
-        a.index.compareTo(b.index));
+    out.sort(
+      (RwkvBatchChoice a, RwkvBatchChoice b) => a.index.compareTo(b.index),
+    );
     return RwkvBatchResponse(
       id: json['id'] as String?,
       model: json['model'] as String?,
@@ -277,6 +278,11 @@ enum RwkvBatchFailureKind {
   /// 响应条数不足 / JSON 解析失败（网络截断，实测 N=16 时 UTF-8 被截断）→ 子集重试
   truncated,
 
+  /// 网络层异常（连接失败 / 超时 / DNS 等，未拿到 HTTP 响应）→ 指数退避重试。
+  ///
+  /// 与 [truncated] 分开统计：面板上一眼区分「链路断了」和「响应被截断」。
+  network,
+
   /// 认证失败（CF 返回 HTML 登录页）
   authFailed,
 
@@ -320,6 +326,7 @@ class RwkvBatchException implements Exception {
   }
 
   @override
-  String toString() => 'RwkvBatchException(${kind.name}'
+  String toString() =>
+      'RwkvBatchException(${kind.name}'
       '${statusCode == null ? '' : ' HTTP $statusCode'}): $message';
 }

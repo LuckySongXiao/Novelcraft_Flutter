@@ -1,7 +1,14 @@
+import 'dart:async';
+// `AppExitResponse` 在 Flutter 3.13+ 由 `dart:ui` 定义（services.dart 不再导出它）
+import 'dart:ui' show AppExitResponse;
+
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'ai/inference/inference_launcher.dart';
 import 'core/di.dart';
 import 'l10n/l10n.dart';
 import 'theme/app_theme.dart';
@@ -19,14 +26,54 @@ import 'ui/layout/app_shell.dart';
 /// 再走 DatabaseSeeder。
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 启动即回收上次异常退出遗留的本地推理进程（显存被孤儿进程长期占用是本项目的
+  // 已知问题）。不阻塞首帧：没有 pid 记录文件时几乎零开销。
+  unawaited(InferenceProcessLauncher.reclaimOrphaned());
   runApp(const ProviderScope(child: NovelCraftApp()));
 }
 
-class NovelCraftApp extends ConsumerWidget {
+class NovelCraftApp extends ConsumerStatefulWidget {
   const NovelCraftApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NovelCraftApp> createState() => _NovelCraftAppState();
+}
+
+class _NovelCraftAppState extends ConsumerState<NovelCraftApp> {
+  /// 应用级生命周期监听：窗口关闭 / 进程分离时回收本地推理进程。
+  ///
+  /// 桌面端「关窗口」若走不到 Riverpod 的 dispose（例如直接结束进程），
+  /// 本地 server 会变成孤儿并持续占用 GPU 显存 —— 这里按 pid 记录文件兜底。
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycle = AppLifecycleListener(
+      onExitRequested: () async {
+        await _reclaimLocalInference();
+        return AppExitResponse.exit;
+      },
+      onDetach: () => unawaited(_reclaimLocalInference()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reclaimLocalInference() async {
+    try {
+      await InferenceProcessLauncher.reclaimOrphaned();
+    } on Object {
+      // 退出路径不允许抛异常，否则会卡住关窗流程
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final locale = ref.watch(localeControllerProvider);
     final themeState = ref.watch(themeControllerProvider);
 
@@ -63,6 +110,23 @@ class NovelCraftApp extends ConsumerWidget {
           if (loc.languageCode == 'en') return AppLocales.en;
         }
         return AppLocales.zh;
+      },
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        // 安卓：系统字体缩放常被调到 1.3+，而本应用按桌面密度设计，
+        // 直接把布局挤爆（真机横屏踩坑：导航标签换行、卡片溢出、
+        // 内容区控件看不全）。真机反馈 1.2 仍偏大 → 干脆钳到 1.0，
+        // 完全按设计密度渲染；桌面 / Web 不干预。
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+          return MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler:
+                  MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.0),
+            ),
+            child: child,
+          );
+        }
+        return child;
       },
       home: home,
     );

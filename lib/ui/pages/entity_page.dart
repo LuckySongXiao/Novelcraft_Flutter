@@ -75,6 +75,7 @@ class EntityPageConfig {
     required this.sourceBuilder,
     this.nameField = 'name',
     this.summaryField,
+    this.previewBuilder,
   });
 
   final String titleZh;
@@ -88,6 +89,12 @@ class EntityPageConfig {
 
   /// 列表副标题使用的字段 key
   final String? summaryField;
+
+  /// 可选的「预览」入口：提供后，选中记录时表单区顶部出现预览按钮，
+  /// 点击把**当前表单快照**（含未保存改动 + 选中行的元信息）交给预览页。
+  /// 功能 A：仅 chapterEntityConfig 提供（章节只读预览）。
+  final Widget Function(BuildContext context, Map<String, dynamic> values)?
+      previewBuilder;
 
   final EntityDataSource Function(WidgetRef ref) sourceBuilder;
 
@@ -445,9 +452,34 @@ class _EntityPageState extends ConsumerState<EntityPage> {
   }
 
   Widget _buildForm(bool isEnglish) {
+    final preview = widget.config.previewBuilder;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // 功能 A：选中记录后提供只读预览（表单快照 + 行元信息一起带走）
+        if (preview != null && _selected != null) ...[
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.chrome_reader_mode_outlined, size: 18),
+              label: Text(ref
+                  .read(l10nProvider)
+                  .t('CPV.Open', '预览本章')),
+              onPressed: () {
+                final values = Map<String, dynamic>.of(_selected!);
+                // 表单当前值覆盖：未保存的改动也进预览
+                for (final f in widget.config.fields) {
+                  values[f.key] = _formCtrl[f.key]!.text;
+                }
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => preview(context, values)),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         for (final f in widget.config.fields) ...[
           _buildField(f, isEnglish),
           const SizedBox(height: 12),

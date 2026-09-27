@@ -33,6 +33,7 @@ class AIOutputSanitizer {
     content = _tryExtractFromJson(content, preferredJsonKeys ?? const []);
     content = _unescapeCommonSequences(content);
     content = _stripThinkingBlocks(content);
+    content = _stripLeadingQuoteBlock(content);
     content = _stripPolitenessPreamble(content);
     return content.trim();
   }
@@ -131,6 +132,30 @@ class AIOutputSanitizer {
     //   不能连带删掉（宁可少删，不可误删正文）。
     if (_unclosedThinkingRegex.hasMatch(withoutPaired)) return '';
     return withoutPaired;
+  }
+
+  static final RegExp _quoteLineRegex = RegExp(r'^\s*>\s?');
+
+  /// 剥掉**开头连续**的 Markdown 引用块标记（`>`）。
+  ///
+  /// 实测（`rwkv7-g1j-7.2b`，2026-09-17 真机验收）：该模型在「给定原文 + 处理要求」
+  /// 的提示结构下，习惯把产出当成引用 —— **改写正文与章节问答的产出首行都以 `>`
+  /// 开头**（12 秒内两条用例全部复现，属系统性行为而非偶发）。不剥的话，
+  /// 写进章节的正文第一行就带脏字符。
+  ///
+  /// 只剥「从开头起连续」的引用行：正文中间出现的 `>` 一律保留
+  /// （宁可少删，不可误删正文）。
+  static String _stripLeadingQuoteBlock(String content) {
+    if (!_quoteLineRegex.hasMatch(content)) return content;
+    final List<String> lines = content.split('\n');
+    int stripped = 0;
+    while (stripped < lines.length &&
+        _quoteLineRegex.hasMatch(lines[stripped])) {
+      lines[stripped] = lines[stripped].replaceFirst(_quoteLineRegex, '');
+      stripped++;
+    }
+    if (stripped == 0) return content;
+    return lines.join('\n').trim();
   }
 
   static final RegExp _politenessRegex =

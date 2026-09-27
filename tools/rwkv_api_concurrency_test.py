@@ -4,8 +4,8 @@
 响应体与 -w 统计互不串流。"""
 import os, json, glob, time, subprocess, statistics
 
-CF_ID = '7e06b7648f552e22842e308939e68be6.access'
-CF_SECRET = '8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a'
+CF_ID = os.environ.get('RWKV_CF_ID', '')
+CF_SECRET = os.environ.get('RWKV_CF_SECRET', '')
 URL = 'https://api-7b.rwkvos.com/v1/chat/completions'
 MODEL = 'rwkv7-g1j-7.2b-20260831-ctx16384'
 T = r'F:/30_Novelcraft_Flutter/_tmp/par2'

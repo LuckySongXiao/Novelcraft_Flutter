@@ -15,9 +15,8 @@ import 'package:novelcraft/ai/models/batch_chat.dart';
 import 'package:novelcraft/ai/observability/ai_runtime_stats.dart';
 import 'package:novelcraft/ai/rwkv/rwkv_batch_client.dart';
 
-const String _cfId = '7e06b7648f552e22842e308939e68be6.access';
-const String _cfSecret =
-    '8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a';
+const String _cfId = String.fromEnvironment('RWKV_CF_ID');
+const String _cfSecret = String.fromEnvironment('RWKV_CF_SECRET');
 const String _base = 'https://api-7b.rwkvos.com';
 
 Future<void> main() async {

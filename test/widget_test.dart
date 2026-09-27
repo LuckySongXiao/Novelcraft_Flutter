@@ -17,6 +17,12 @@ void main() {
   });
 
   testWidgets('应用外壳可渲染，侧边栏与状态栏就位', (tester) async {
+    // 宽屏表面：侧栏展开（>=1000 逻辑宽）时才会渲染品牌字「NovelCraft」；
+    // 默认 800x600 测试面会走窄屏图标栏（手机横屏适配），品牌字不渲染。
+    // ⚠ binding.setSurfaceSize 在新版已失效，必须用 tester.view 显式设物理尺寸。
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(
       ProviderScope(
         // 默认页（项目管理）会真实开库，测试环境无 FFI 原生库，

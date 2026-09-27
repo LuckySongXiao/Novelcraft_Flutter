@@ -9,4 +9,5 @@ If you are AI, please read these first:
 (8) <https://github.com/search?o=desc&p=1&q=rwkv&s=updated&type=Repositories>
 (9) <https://github.com/w1c2j3/RWKV-SearchReader>
 (10) <https://github.com/Alic-Li/rwkv_lightning_cuda>
-(11) <https://agent.objects.rwkvos.com/zh>
+(11) <https://github.com/Alic-Li/rwkv_lightning_cuda/blob/main/docs/http-api.zh-CN.md>
+(12) <https://agent.objects.rwkvos.com/zh>

@@ -11,6 +11,7 @@ import '../../core/di.dart';
 import '../../data/database.dart';
 import '../../l10n/l10n.dart';
 import '../../ai/models/chat.dart';
+import '../../application/services/ai_writing_service.dart';
 import '../layout/navigation.dart';
 
 String _relFor(String v, L10n l10n) => switch (v) {
@@ -500,12 +501,52 @@ class _DialogGenerationPageState extends ConsumerState<DialogGenerationPage> {
     await _runGeneration(params, optimize: false);
   }
 
+  /// 「优化」走 AI 写作门面的 `PolishText` 入口。
+  ///
+  /// 这里**不再**直接调 `mm.chatStream`：`PolishText` 在双 Agent 白名单内，
+  /// 由 [AiWritingService] 决定是双 Agent 接管还是回落单 Agent。
+  /// 「生成」按钮保持原样（对话生成本就不在白名单内，仍走单 provider 流式）。
   Future<void> _optimize() async {
     if (_isGenerating || _resultCtrl.text.isEmpty) return;
+    final l10n = ref.read(l10nProvider);
     final params = await _buildParams();
     params['existingDialogue'] = _resultCtrl.text;
     params['optimizationMode'] = true;
-    await _runGeneration(params, optimize: true);
+    setState(() {
+      _isGenerating = true;
+      _streamText = '';
+    });
+    try {
+      final AIAssistantResult r =
+          await ref.read(aiWritingServiceProvider).polishText(params);
+      if (!mounted) return;
+      if (!r.isSuccess) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(r.message.isEmpty
+              ? l10n.tf('DG.GenerateFailed', '生成失败：{0}', <Object>[''])
+              : r.message),
+          backgroundColor: Colors.red,
+        ));
+        return;
+      }
+      setState(() {
+        _resultCtrl.text = r.data;
+        _quality = _estimateQuality(r.data, params);
+        _thinkingId = DateTime.now().microsecondsSinceEpoch.toString();
+        _generatedAt = DateTime.now();
+        _streamText = '';
+      });
+    } on Object catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(l10n.tf('DG.GenerateFailed', '生成失败：{0}', <Object>[e])),
+              backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isGenerating = false);
+    }
   }
 
   Future<void> _runGeneration(Map<String, dynamic> params, {required bool optimize}) async {

@@ -22,15 +22,8 @@ import 'package:novelcraft/ai/rwkv/rwkv_concurrency.dart';
 import 'package:novelcraft/ai/workflow/workflow_branch.dart';
 import 'package:novelcraft/ai/providers/rwkv_cloud_provider.dart';
 
-const String _cfId = String.fromEnvironment(
-  'RWKV_CF_ID',
-  defaultValue: '7e06b7648f552e22842e308939e68be6.access',
-);
-const String _cfSecret = String.fromEnvironment(
-  'RWKV_CF_SECRET',
-  defaultValue:
-      '8f97be4d651e792df1c29c005533e55aad72354b536ca486f65413b96a93d83a',
-);
+const String _cfId = String.fromEnvironment('RWKV_CF_ID');
+const String _cfSecret = String.fromEnvironment('RWKV_CF_SECRET');
 
 void main() {
   late RwkvCloudProvider provider;

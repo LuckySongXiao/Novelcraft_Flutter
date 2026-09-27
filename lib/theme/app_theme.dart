@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -191,7 +193,8 @@ class ThemeController extends Notifier<ThemeState> {
 
   /// 保存用户自定义皮肤（C# 的 SaveCustomSkin）
   Future<void> saveCustomSkin(String id, Color seed) async {
-    final next = Map<String, int>.from(state.customSkins)..[id] = seed.toARGB32();
+    final next = Map<String, int>.from(state.customSkins)
+      ..[id] = seed.toARGB32();
     state = state.copyWith(skinId: id, customSkins: next);
     await _save(state);
   }
@@ -204,8 +207,9 @@ class ThemeController extends Notifier<ThemeState> {
   }
 }
 
-final themeControllerProvider =
-    NotifierProvider<ThemeController, ThemeState>(ThemeController.new);
+final themeControllerProvider = NotifierProvider<ThemeController, ThemeState>(
+  ThemeController.new,
+);
 
 /// 由主题状态生成 ThemeData
 ///
@@ -217,14 +221,21 @@ ThemeData buildTheme(ThemeSkin skin) {
     brightness: skin.brightness,
   );
   final isDark = skin.brightness == Brightness.dark;
+  // 安卓触控优化：桌面保持紧凑输入框（isDense + 窄内边距），
+  // 移动端放宽高度 —— isDense 的输入框在触屏上难点准（操控性反馈）。
+  final bool isTouchPlatform =
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     brightness: skin.brightness,
     // C# 版中文用 SimSun、英文用 Segoe UI；Flutter 侧交给默认字体族
-    scaffoldBackgroundColor:
-        isDark ? const Color(0xFF121212) : const Color(0xFFFAFAFA),
+    scaffoldBackgroundColor: isDark
+        ? const Color(0xFF121212)
+        : const Color(0xFFFAFAFA),
     appBarTheme: AppBarTheme(
       centerTitle: false,
       elevation: 0,
@@ -248,8 +259,11 @@ ThemeData buildTheme(ThemeSkin skin) {
     ),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      isDense: true,
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: isTouchPlatform ? 14 : 10,
+      ),
+      isDense: !isTouchPlatform,
     ),
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant.withValues(alpha: 0.4),

@@ -83,7 +83,31 @@ void main() {
 
   print('');
   print('=' * 78);
-  print('[5] 边界：空 / 全空白 / 只有标签');
+  print('[5] 行首 Markdown 引用符 `>`（2026-09-17 真机验收实测）');
+  print('=' * 78);
+  // 实测样本：rwkv7-g1j-7.2b 在「原文 + 处理要求」结构下，改写与问答的产出
+  // 首行都以 `>` 开头（两条用例全部复现）→ 不剥就会写进章节正文。
+  final String quoted =
+      '>叶知秋立于演武场中央，衣袂未动。\n第一招，他没有守。\n叶知秋收剑入鞘。';
+  final String qc = clean(quoted);
+  check('首行引用符被剥掉', qc.startsWith('叶知秋'), qc.split('\n').first);
+  check('其余行原样保留', qc.contains('第一招，他没有守。'), 'ok');
+  check('引用符不会残留', !qc.contains('>'), 'ok');
+
+  final String quotedAll = '>第一行\n>第二行';
+  check('连续多行引用整体剥掉', clean(quotedAll) == '第一行\n第二行',
+      clean(quotedAll).replaceAll('\n', r'\n'));
+
+  final String midQuote = '第一行\n>第二行（正文里的引用，不该动）';
+  check('非开头的 `>` 一律保留',
+      clean(midQuote).contains('>第二行（正文里的引用，不该动）'),
+      clean(midQuote).replaceAll('\n', r'\n'));
+
+  check('比较运算符不受影响（不在行首）', clean('a > b').contains('a > b'), 'ok');
+
+  print('');
+  print('=' * 78);
+  print('[6] 边界：空 / 全空白 / 只有标签');
   print('=' * 78);
   check('空字符串', clean('') == '', 'ok');
   check('全空白', clean('   \n  ').trim().isEmpty, 'ok');

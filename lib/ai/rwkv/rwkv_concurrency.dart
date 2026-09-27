@@ -73,8 +73,10 @@ class RwkvServerCapacity {
 class RwkvConcurrencyController {
   /// 客户端侧**保守**硬上限。
   ///
-  /// 即使服务端报 169，也不该真的开 169 路 —— 跨境网络 + CF 边缘会让尾延迟暴涨。
-  /// 实测吞吐峰值在 ~16，故默认取 16。
+  /// 服务端自带 FIFO admission queue + `dynamic_max_bsz` 自保护（官方标称
+  /// 单卡 4090 可扛 900+ 并发；实测节点 hard=169 bsz）。客户端这个数**不限制
+  /// 服务端**，只防止本地（尤其移动端）同时挂起过多 HTTP 导致内存/套接字失控。
+  /// 实测 48 路并行吞吐 16.42 req/s 仍远未触顶 → 默认放到 64。
   final int clientHardCap;
 
   /// 从服务端取回的新鲜度窗口。
@@ -101,7 +103,7 @@ class RwkvConcurrencyController {
 
   RwkvConcurrencyController({
     this.probe,
-    this.clientHardCap = 16,
+    this.clientHardCap = 64,
     this.capacityTtl = const Duration(seconds: 15),
     Logger? logger,
   }) : _logger = logger ?? Logger('RwkvConcurrency');
@@ -109,10 +111,25 @@ class RwkvConcurrencyController {
   int get inFlight => _inFlight;
   RwkvServerCapacity? get lastCapacity => _cached;
 
+  /// 动态许可门控：在途数达到当前许可上限时等待（每 200ms 复查）。
+  ///
+  /// 许可 = min(clientHardCap, 服务端 available，排队再折半，惩罚档再收紧)。
+  /// 这是「尽可能吃满服务端并发」与「本地资源不失控」的折中执行点：
+  /// 服务端容量大 → 许可≈clientHardCap（64）；服务端报紧 → 自动跟随。
+  Future<void> waitForPermit() async {
+    while (true) {
+      final int permits = await effectivePermits();
+      if (_inFlight < permits) return;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
   /// 当前允许的最大并发。
   ///
   /// 计算顺序：服务端可用值 → 客户端硬上限 → 惩罚档，取**最小**。
-  /// 探测失败时回退到 [clientHardCap] 的保守一半（宁可慢，不可把服务端打挂）。
+  /// 探测失败时沿用 [clientHardCap]：服务端自带 FIFO admission queue，
+  /// 超限会以 `bsz overflow` 快速失败并触发 [noteBszOverflow] 惩罚档，
+  /// 兜底链已完整，本地无需再减半（避免探测抖动时无谓降速）。
   Future<int> effectivePermits({bool force = false}) async {
     final RwkvServerCapacity? cap = await _capacity(force: force);
     int limit = clientHardCap;
@@ -141,7 +158,8 @@ class RwkvConcurrencyController {
     if (_penaltyCap == null || next < _penaltyCap!) {
       _penaltyCap = next;
       _logger.warning(
-          'bsz overflow（request=$requestBsz max=$maxBsz）→ 并发档位暂降到 $next');
+        'bsz overflow（request=$requestBsz max=$maxBsz）→ 并发档位暂降到 $next',
+      );
     }
   }
 
@@ -183,8 +201,10 @@ class RwkvConcurrencyController {
         // 服务端报的硬上限若比客户端保守上限还小，说明客户端该更保守
         final int? hard = fresh.hardMaxBsz;
         if (hard != null && hard > 0 && hard < clientHardCap) {
-          _logger.info('服务端 hard_max_bsz=$hard 小于客户端上限 $clientHardCap，'
-              '按服务端收紧（PITFALLS §31.3）');
+          _logger.info(
+            '服务端 hard_max_bsz=$hard 小于客户端上限 $clientHardCap，'
+            '按服务端收紧（PITFALLS §31.3）',
+          );
         }
       }
       return fresh;

@@ -16,6 +16,12 @@ class InferenceProcessLauncher {
   /// 当前是否在运行中（Web 恒为 false）。
   bool get isRunning => false;
 
+  /// Web 平台无本地进程 → 永远为 null。
+  int? get pid => null;
+
+  /// pid 记录文件路径（Web 端不落盘，恒为空串）。
+  static String get pidRecordPath => '';
+
   /// 最近一次退出码（Web 恒为 null）。
   int? get lastExitCode => null;
 
@@ -48,4 +54,7 @@ class InferenceProcessLauncher {
 
   /// 停止本地推理进程（Web 无进程可停止）。
   Future<void> stop() async {}
+
+  /// 回收遗留推理进程（Web 平台无本地进程可回收，恒为 0）。
+  static Future<int> reclaimOrphaned() async => 0;
 }

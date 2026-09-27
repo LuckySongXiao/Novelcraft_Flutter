@@ -18,6 +18,12 @@ class InferenceProcessLauncher {
   /// 当前是否在运行中（stub 恒为 false）。
   bool get isRunning => false;
 
+  /// 无本地进程（Stub 平台）→ 永远为 null。
+  int? get pid => null;
+
+  /// pid 记录文件路径（stub 平台不落盘，恒为空串）。
+  static String get pidRecordPath => '';
+
   /// 最近一次退出码（stub 恒为 null）。
   int? get lastExitCode => null;
 
@@ -52,4 +58,7 @@ class InferenceProcessLauncher {
   Future<void> stop() async {
     // stub 实现没有可停止的进程。
   }
+
+  /// 回收遗留推理进程（stub 平台无进程可回收，恒为 0）。
+  static Future<int> reclaimOrphaned() async => 0;
 }

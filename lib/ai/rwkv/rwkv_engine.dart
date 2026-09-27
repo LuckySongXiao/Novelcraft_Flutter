@@ -39,6 +39,7 @@ import 'rwkv_lightning_launch_args.dart';
 import 'rwkv_models.dart';
 import 'rwkv_official_resources.dart' show OfficialServerVariant;
 import 'rwkv_session.dart';
+import 'rwkv_sampling.dart';
 import 'rwkv_state.dart';
 
 /// 单次推理的引擎级结果（比 [ChatResponse] 多了 state 指针信息）。
@@ -377,6 +378,35 @@ class RwkvEngine {
     return launcher != null && launcher.isRunning;
   }
 
+  /// **手动停止**本地 server 进程。
+  ///
+  /// 走 `InferenceProcessLauncher.stop()`：先 `SIGTERM` 等 5s，超时强杀。
+  /// 停止后把 `_launcherStarted` 复位，用户可再次 [ensureLocalServer] 重新拉起；
+  /// 同时清空上一次的启动诊断（否则「停止后」还会显示旧的报错面板内容）。
+  ///
+  /// 最后再调一次 `reclaimOrphaned()`：引擎重建 / App 上次异常退出遗留的进程
+  /// 不在本 launcher 句柄里，只能按 pid 记录文件回收 —— 否则「点了停止，显存
+  /// 还是被占着」，这正是用户报的显存残留问题。
+  ///
+  /// 返回是否真的停掉了本地 server（含回收到的孤儿进程；都没有 → false）。
+  Future<bool> stopLocalServer() async {
+    final launcher = _processLauncher;
+    bool stopped = false;
+    if (launcher != null && launcher.isRunning) {
+      final int? pid = launcher.pid;
+      await launcher.stop();
+      stopped = true;
+      _logger.info('本地 RWKV server 已停止${pid == null ? '' : '（pid=$pid）'}');
+    }
+    _launcherStarted = false;
+    _lastLaunchDiagnostics = null;
+    final int reclaimed = await InferenceProcessLauncher.reclaimOrphaned();
+    if (reclaimed > 0) {
+      _logger.info('额外回收了 $reclaimed 个遗留的本地推理进程');
+    }
+    return stopped || reclaimed > 0;
+  }
+
   // ---------- 公共：生命周期 ----------
 
   /// 启动本地 server 进程（若配置了本地 server 可执行文件与模型路径）。
@@ -604,6 +634,77 @@ class RwkvEngine {
     return r.chat;
   }
 
+  /// 原始 prompt 补全 —— 对应 C# `IRwkvLightningService.CompleteAsync(prompt, maxTokens)`。
+  ///
+  ///  为什么不能复用 [chatWithSession]：调用方传入的 [prompt] **已经自带**
+  /// `User: … \n\nAssistant:  thinking</think` 完整模板（C# 侧就是这么硬拼的，
+  /// 见 `PrerequisiteGenerationService` 的修炼体系生成）。走 chat 通道会被再包一层
+  /// `messages` 模板，小模型几乎必然跑偏。这里走 `contents`（纯文本数组）通道，
+  /// 服务端原样续写。
+  ///
+  /// 采样参数：只暴露 `temperature / topP / topK`；RWKV 原生的
+  /// `alpha_presence` / `alpha_frequency` / `alpha_decay` / `stop_tokens` / `chunk_size`
+  /// 由 [config] 的 `nativeOptions` 提供（**不额外暴露 presence/frequency penalty**——
+  /// 那两个是 OpenAI 系参数名，原生路由不认，传了会被静默忽略 = 假开关）。
+  ///
+  /// 失败/不可用时返回 null（调用方回退代码内置模板），绝不抛异常。
+  Future<String?> rawCompletion(
+    String prompt, {
+    int maxTokens = 2048,
+    double temperature = 0.9,
+    double topP = 0.85,
+    int topK = 0,
+  }) async {
+    final String text = prompt;
+    if (text.trim().isEmpty) return null;
+
+    final Map<String, dynamic> body = <String, dynamic>{
+      'contents': <String>[text],
+      'stream': false,
+      'max_tokens': maxTokens < 1 ? 1 : maxTokens,
+      'temperature': temperature.clamp(0.0, 2.0),
+      'top_p': topP,
+    };
+    if (topK > 0) body['top_k'] = topK;
+    // 防复读采样参数（RWKV alpha_* + llama.cpp DRY）打底，调用方显式给的值优先。
+    // 与 chat 通道保持一致：长文生成最容易踩的坑就是复读。
+    kRwkvAntiRepeatSampling
+        .forEach((String k, Object? v) => body.putIfAbsent(k, () => v));
+    // 原生生成参数（含 stop_tokens：批量/contents 路由不传它会返回空文本）展平到顶层。
+    // 调用方显式给的值优先。
+    config.nativeOptions
+        .toRequestBody()
+        .forEach((String k, dynamic v) => body.putIfAbsent(k, () => v));
+
+    try {
+      final http.Response resp = await _client.post(
+        Uri.parse(_endpoint('chat/completions')),
+        headers: const <String, String>{'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        _logger.warning('rawCompletion 失败：HTTP ${resp.statusCode}');
+        return null;
+      }
+      final Object? parsed = jsonDecode(resp.body);
+      if (parsed is! Map<String, dynamic>) return null;
+      final List<dynamic> choicesRaw =
+          parsed['choices'] as List<dynamic>? ?? const <dynamic>[];
+      if (choicesRaw.isEmpty) return null;
+      final Map<String, dynamic> first =
+          choicesRaw.first as Map<String, dynamic>;
+      // 兼容两种响应形态：`choices[0].text`（completions 风格）
+      // 与 `choices[0].message.content`（chat 风格）。
+      final String raw = (first['text'] as String?) ??
+          ((first['message'] as Map<String, dynamic>?)?['content'] as String?) ??
+          '';
+      return raw.isEmpty ? null : raw;
+    } on Object catch (e) {
+      _logger.warning('rawCompletion 异常：$e');
+      return null;
+    }
+  }
+
   /// 用「重放转录本」重建服务端 state —— **P4-27 的真正实现**。
   ///
   /// ⚠ 为什么不是"恢复 state 字节"：rwkv_lightning **没有 state 导出端点**，
@@ -685,6 +786,17 @@ class RwkvEngine {
     _idleGCTimer?.cancel();
     _sessionManager.closeAll();
     _stateCache.clear();
+    // ⚠ 必须连本地 server 进程一起回收。
+    //
+    // 早期实现只关 client：引擎被重建（改 baseUrl）或 App 退出后，llama-server /
+    // rwkv_lightning 进程仍在跑，GPU 显存被长期占用，下一轮拉模型直接 OOM。
+    // dispose 是同步签名，这里 fire-and-forget；pid 记录文件保证「App 被强杀」
+    // 也能在下次启动时被 reclaimOrphaned 精确回收。
+    final launcher = _processLauncher;
+    if (launcher != null && launcher.isRunning) {
+      _launcherStarted = false;
+      unawaited(launcher.stop());
+    }
     // 只关自建的 client；外部注入的由注入方负责（见 _ownsClient 注释）
     if (_ownsClient) _client.close();
   }

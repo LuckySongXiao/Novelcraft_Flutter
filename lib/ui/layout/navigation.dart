@@ -20,6 +20,9 @@ enum NavigationTarget {
   worldSettingManagement,
   dialogGeneration,
   projectHealthCheck,
+  prerequisiteGeneration,
+  // 功能 B：写作过程档案（生成归档 + 大纲阅读）
+  generationArchive,
   // 世界观体系页（C# 侧走老 Click 路径，Dart 侧纳入统一导航）
   cultivationSystem,
   politicalSystem,
@@ -122,7 +125,9 @@ const aiGroupTargets = <NavigationTarget>[
   NavigationTarget.aiCollaboration,
   NavigationTarget.aiConfiguration,
   NavigationTarget.dialogGeneration,
+  NavigationTarget.prerequisiteGeneration,
   NavigationTarget.projectHealthCheck,
+  NavigationTarget.generationArchive,
 ];
 
 /// 导航上下文 —— 对应 C# 的 NavigationContext
