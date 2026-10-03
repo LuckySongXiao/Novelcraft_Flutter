@@ -164,17 +164,7 @@ class ProjectContentArchiveService {
           metadata: metadata ?? const <String, String>{},
         ),
       );
-      final List<ProjectArchiveEntry> trimmed =
-          entries.length > maxEntriesPerProject
-              ? entries.sublist(0, maxEntriesPerProject)
-              : entries;
-      await kv.writeJson(
-        scope,
-        keyFor(pid),
-        jsonEncode(<Object?>[
-          for (final ProjectArchiveEntry e in trimmed) e.toMap(),
-        ]),
-      );
+      await _writeAll(kv, pid, entries);
       return const ProjectArchiveWriteResult.ok();
     } on Object {
       return const ProjectArchiveWriteResult.failed();
@@ -196,6 +186,76 @@ class ProjectContentArchiveService {
     } on Object {
       return const <ProjectArchiveEntry>[];
     }
+  }
+
+  /// 手动删除一条归档（下标按 [listEntries] 的返回顺序，0 = 最新）。
+  ///
+  /// 编辑 / 删除都走「读全量 → 改 → 整体回写」，因此下标必须在同一次读取
+  /// 得到的列表上使用 —— UI 每次操作后都会重新 `listEntries`。
+  Future<bool> deleteEntry(String projectId, int index) async {
+    final String pid = projectId.trim();
+    if (pid.isEmpty || index < 0) return false;
+    try {
+      final KeyValueStore kv = await _store();
+      final List<ProjectArchiveEntry> entries = await _read(kv, pid);
+      if (index >= entries.length) return false;
+      entries.removeAt(index);
+      await _writeAll(kv, pid, entries);
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// 手动修改一条归档的标题 / 正文（下标同 [deleteEntry]）。
+  ///
+  /// 传 null 表示该字段保持不变；元数据（档案描述 / 过程数据）不动。
+  Future<bool> updateEntry(
+    String projectId,
+    int index, {
+    String? title,
+    String? content,
+  }) async {
+    final String pid = projectId.trim();
+    if (pid.isEmpty || index < 0) return false;
+    try {
+      final KeyValueStore kv = await _store();
+      final List<ProjectArchiveEntry> entries = await _read(kv, pid);
+      if (index >= entries.length) return false;
+      final ProjectArchiveEntry old = entries[index];
+      entries[index] = ProjectArchiveEntry(
+        projectId: old.projectId,
+        projectName: old.projectName,
+        taskType: old.taskType,
+        title: title ?? old.title,
+        content: content ?? old.content,
+        createdAtMs: old.createdAtMs,
+        metadata: old.metadata,
+      );
+      await _writeAll(kv, pid, entries);
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// 整体回写某项目的归档列表（超上限裁掉最旧的）。
+  Future<void> _writeAll(
+    KeyValueStore kv,
+    String pid,
+    List<ProjectArchiveEntry> entries,
+  ) async {
+    final List<ProjectArchiveEntry> trimmed =
+        entries.length > maxEntriesPerProject
+            ? entries.sublist(0, maxEntriesPerProject)
+            : entries;
+    await kv.writeJson(
+      scope,
+      keyFor(pid),
+      jsonEncode(<Object?>[
+        for (final ProjectArchiveEntry e in trimmed) e.toMap(),
+      ]),
+    );
   }
 
   /// 读取并反序列化；损坏的存档当作空列表（绝不抛出去炸 UI）。

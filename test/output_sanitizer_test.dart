@@ -52,6 +52,16 @@ void main() {
       expect(AIOutputSanitizer.extractCleanOutput(prose), prose);
     });
 
+    test('JSON 前有说明文字时仍提取正文', () {
+      const raw = '以下是结果：\n{"content":"正文内容。"}';
+      expect(AIOutputSanitizer.extractCleanOutput(raw), '正文内容。');
+    });
+
+    test('JSON 字符串中的括号不影响嵌入对象配平', () {
+      const raw = '结果：{"content":"正文（测试）"}';
+      expect(AIOutputSanitizer.extractCleanOutput(raw), '正文（测试）');
+    });
+
     test('思维链 + 模板混合：模板先清，思维链再剥', () {
       const raw = 'We need to write.\n<|im_end|>\n真正的正文在这里。';
       expect(AIOutputSanitizer.extractCleanOutput(raw), contains('真正的正文在这里'));

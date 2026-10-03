@@ -12,6 +12,7 @@ import '../../ai/providers/ollama_provider.dart';
 import '../../ai/providers/rwkv_provider.dart';
 import '../../ai/providers/rwkv_cloud_provider.dart';
 import '../../ai/rwkv/rwkv_engine.dart' show RwkvEngineConfig, RwkvNativeOptions;
+import '../../ai/runtime_settings.dart';
 import '../../ai/rwkv/rwkv_gpu_probe.dart';
 import '../../ai/rwkv/rwkv_model_fit.dart';
 import '../../ai/rwkv/rwkv_models.dart' show RwkvLocalModel;
@@ -27,12 +28,16 @@ import '../../ai/rwkv/rwkv_official_resources.dart'
         RwkvOfficialModel,
         RwkvModelQuantX;
 import '../../ai/providers/deepseek_provider.dart';
+import '../../ai/providers/openrouter_provider.dart';
 import '../../ai/providers/zhipu_provider.dart';
 import '../../ai/workflow/dual_agent_workflow.dart';
 
 enum _ProviderKind {
   deepseek,
   zhipu,
+
+  /// OpenRouter（OpenAI 兼容聚合平台，默认模型 `apodex/apodex-1.1-mini:free`）。
+  openrouter,
   ollama,
   rwkv,
 
@@ -44,6 +49,7 @@ enum _ProviderKind {
 String _pvdLabel(_ProviderKind kind, bool isEnglish) => switch (kind) {
       _ProviderKind.deepseek => 'DeepSeek',
       _ProviderKind.zhipu => isEnglish ? 'Zhipu AI' : '智谱 AI',
+      _ProviderKind.openrouter => 'OpenRouter',
       _ProviderKind.ollama => isEnglish ? 'Ollama (Local)' : 'Ollama (本地)',
       _ProviderKind.rwkv => isEnglish ? 'RWKV (Local)' : 'RWKV (本地)',
       _ProviderKind.rwkvCloud =>
@@ -56,6 +62,7 @@ extension _ProviderKindX on _ProviderKind {
   IconData get icon => switch (this) {
         _ProviderKind.deepseek => Icons.auto_awesome,
         _ProviderKind.zhipu => Icons.lightbulb_outline,
+        _ProviderKind.openrouter => Icons.hub_outlined,
         _ProviderKind.ollama => Icons.computer_outlined,
         _ProviderKind.rwkv => Icons.memory_outlined,
         _ProviderKind.rwkvCloud => Icons.cloud_outlined,
@@ -116,6 +123,7 @@ class _ProviderConfig {
       : baseUrl = switch (kind) {
           _ProviderKind.deepseek => 'https://api.deepseek.com/v1',
           _ProviderKind.zhipu => 'https://open.bigmodel.cn/api/paas/v4',
+          _ProviderKind.openrouter => kOpenRouterDefaultBaseUrl,
           _ProviderKind.ollama => 'http://localhost:11434',
           _ProviderKind.rwkv => 'http://localhost:8000',
           _ProviderKind.rwkvCloud => kRwkvCloudDefaultBaseUrl,
@@ -125,6 +133,7 @@ class _ProviderConfig {
         defaultModel = switch (kind) {
           _ProviderKind.deepseek => 'deepseek-chat',
           _ProviderKind.zhipu => 'glm-4-flash',
+          _ProviderKind.openrouter => kOpenRouterDefaultModel,
           _ProviderKind.ollama => 'qwen2.5:7b',
           _ProviderKind.rwkv => 'rwkv7-g1i',
           _ProviderKind.rwkvCloud => kRwkvCloudDefaultModel,
@@ -138,11 +147,17 @@ class _ProviderConfig {
   String get registeredName => switch (kind) {
         _ProviderKind.deepseek => 'DeepSeek',
         _ProviderKind.zhipu => 'ZhipuAI',
+      _ProviderKind.openrouter => 'OpenRouter',
         _ProviderKind.ollama => 'Ollama',
         _ProviderKind.rwkv => 'RWKV',
         _ProviderKind.rwkvCloud => 'RWKV Cloud',
         _ProviderKind.custom => 'Custom',
       };
+
+  /// 模型最大参考长度 —— **恒等于「最大令牌数」**（用户约定：两者必须相等）。
+  ///
+  /// 用 getter 而非独立字段，从根本上杜绝「保存后两处数值漂移」。
+  int get maxReferenceLength => defaultMaxTokens;
 }
 
 class AIConfigurationPage extends ConsumerStatefulWidget {
@@ -223,6 +238,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadPersistedRwkvPrefs();
+      await _loadPersistedProviderConfigs();
       _refreshFromManager();
       _ensureRwkvScanned();
     });
@@ -313,6 +329,100 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     } catch (_) {}
   }
 
+  /// 启动时把持久化的 provider 配置回填到页面字段（`provider_cfg.*`）。
+  ///
+  /// 写入方是 [_persistProviderConfig]，实例侧恢复方是 `ProviderAutoRestore`
+  /// （启动时 initialize + 注册）。**本方法补的是 UI 侧**：缺了它，provider
+  /// 实例虽已恢复，但页面字段仍是 `_ProviderConfig(kind)` 的默认值，用户看到
+  /// 「配置全没了 / 重启后取不到模型配置」，只能重填一遍。
+  Future<void> _loadPersistedProviderConfigs() async {
+    Map<String, Map<String, Object?>> all;
+    String? def;
+    try {
+      all = await ref.read(modelConfigStoreProvider).loadAll();
+      def = await ref.read(modelConfigStoreProvider).loadDefault();
+    } on Object {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      for (final MapEntry<String, Map<String, Object?>> e in all.entries) {
+        final _ProviderKind? kind = _kindByStorageKey(e.key);
+        if (kind == null) continue;
+        _applyPersistedJson(_configs[kind]!, e.value);
+      }
+      if (def != null && def.isNotEmpty) _defaultProvider = def;
+    });
+  }
+
+  /// 存储键（`provider_cfg.{kind}` 的 `{kind}`）→ 页面 provider 枚举。
+  static _ProviderKind? _kindByStorageKey(String key) {
+    for (final _ProviderKind k in _ProviderKind.values) {
+      if (k.name == key) return k;
+    }
+    return null;
+  }
+
+  /// 把持久化 JSON 写回 [_ProviderConfig]（字段名与 [_snapshotToJson] 对齐）。
+  ///
+  /// 约定：**键存在即覆盖**（含空值 —— 用户清空 API Key 也应当被尊重）；
+  /// 仅 RWKV 本地路径类字段跳过空值，避免覆盖 legacy 键里更完整的旧配置。
+  static void _applyPersistedJson(
+    _ProviderConfig c,
+    Map<String, Object?> j,
+  ) {
+    void str(String k, void Function(String v) apply) {
+      final Object? v = j[k];
+      if (v is String) apply(v);
+    }
+
+    void num_(String k, void Function(num v) apply) {
+      final Object? v = j[k];
+      if (v is num) apply(v);
+    }
+
+    void boolean(String k, void Function(bool v) apply) {
+      final Object? v = j[k];
+      if (v is bool) apply(v);
+    }
+
+    str('baseUrl', (String v) => c.baseUrl = v);
+    str('apiKey', (String v) => c.apiKey = v);
+    str('defaultModel', (String v) => c.defaultModel = v);
+    num_('timeoutSeconds', (num v) => c.timeoutSeconds = v.toInt());
+    num_('defaultTemperature',
+        (num v) => c.defaultTemperature = v.toDouble());
+    num_('defaultMaxTokens', (num v) => c.defaultMaxTokens = v.toInt());
+    boolean('enableStreaming', (bool v) => c.enableStreaming = v);
+    str('rwkvThinkType', (String v) {
+      if (v.isNotEmpty) c.rwkvThinkType = v;
+    });
+    boolean('rwkvUseStatefulRoute',
+        (bool v) => c.rwkvUseStatefulRoute = v);
+    num_('rwkvMaxConcurrentSessions',
+        (num v) => c.rwkvMaxConcurrentSessions = v.toInt());
+    str('rwkvLocalExecutable', (String v) {
+      if (v.isNotEmpty) c.rwkvLocalExecutable = v;
+    });
+    str('rwkvLocalModelPath', (String v) {
+      if (v.isNotEmpty) c.rwkvLocalModelPath = v;
+    });
+    str('rwkvLocalVocabPath', (String v) {
+      if (v.isNotEmpty) c.rwkvLocalVocabPath = v;
+    });
+    str('rwkvLocalServerVariant', (String v) {
+      for (final OfficialServerVariant sv in OfficialServerVariant.values) {
+        if (sv.name == v) {
+          c.rwkvLocalServerVariant = sv;
+          return;
+        }
+      }
+    });
+    // 云端 CF Access Service Token（RWKV 云端 + 其它 CF 保护端点）
+    str('cfAccessClientId', (String v) => c.cfAccessClientId = v);
+    str('cfAccessClientSecret', (String v) => c.cfAccessClientSecret = v);
+  }
+
   /// 内置引擎装齐后的回调：把 exe / 词表 / 模型 / 变体写进配置并落盘。
   void _onBuiltInProvisioned(BuiltInEngineProvision p) {
     final cfg = _configs[_ProviderKind.rwkv]!;
@@ -372,6 +482,13 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           cfAccessClientSecret: cloudCfg.cfAccessClientSecret,
         ).toCloudMap()),
       );
+      // ⚠ 双写通用 provider 注册表（provider_cfg.rwkvCloud）：
+      // 启动恢复（ProviderAutoRestore）与页面字段回填都读**这个**键；
+      // 上面那个 legacy 键仅为兼容旧版本数据而保留。
+      await ref.read(modelConfigStoreProvider).save(
+            _ProviderKind.rwkvCloud.name,
+            _snapshotToJson(cloudCfg),
+          );
     } catch (_) {}
   }
 
@@ -774,6 +891,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         case _ProviderKind.zhipu:
           prov = ref.read(zhipuProviderInstanceProvider);
           break;
+        case _ProviderKind.openrouter:
+          prov = ref.read(openRouterProviderInstanceProvider);
+          break;
         case _ProviderKind.ollama:
           prov = ref.read(ollamaProviderInstanceProvider);
           break;
@@ -835,6 +955,18 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           defaultModel: _cfg.defaultModel,
           baseUrl: _cfg.baseUrl,
           defaultMaxTokens: _cfg.defaultMaxTokens,
+        );
+      case _ProviderKind.openrouter:
+        // OpenRouter：OpenAI 兼容；baseUrl 必须带 `/api/v1`。
+        // 模型 id 含 `/` 与 `:`（如 `apodex/apodex-1.1-mini:free`），按整串处理。
+        return OpenRouterConfiguration(
+          apiKey: _cfg.apiKey,
+          defaultModel: _cfg.defaultModel,
+          baseUrl: _cfg.baseUrl,
+          timeoutSeconds: _cfg.timeoutSeconds,
+          defaultTemperature: _cfg.defaultTemperature,
+          defaultMaxTokens: _cfg.defaultMaxTokens,
+          enableStreaming: _cfg.enableStreaming,
         );
       case _ProviderKind.ollama:
         return OllamaConfiguration(
@@ -903,6 +1035,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       case _ProviderKind.zhipu:
         prov = ref.read(zhipuProviderInstanceProvider);
         break;
+      case _ProviderKind.openrouter:
+        prov = ref.read(openRouterProviderInstanceProvider);
+        break;
       case _ProviderKind.ollama:
         prov = ref.read(ollamaProviderInstanceProvider);
         break;
@@ -917,28 +1052,42 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         break;
     }
     if (prov == null) return;
-    final ok = await prov.initialize(_buildConfig());
+
+    // ⚠ 持久化必须**先做、且无条件做**：
+    // 旧实现把 _persistProviderConfig/_persistRwkvPrefs 放在 `if (ok)` 里，
+    // 而 initialize() 内部要做一次网络连通性探测（RWKV 云端尤其明显：没网 /
+    // CF Token 没配通 / 端点 404 → 返回 false），于是**配置一个字都没落盘**，
+    // 用户看到的是「初始化失败」，重启后自然什么也恢复不了。
+    await _persistRwkvPrefs();
+    await _persistProviderConfig();
+
+    final bool ok = await prov.initialize(_buildConfig());
+    if (mm.getProvider(prov.providerName) == null) {
+      // 注册与「当前是否连通」解耦：配置正确但暂时离线时也应注册，
+      // 这样启动恢复（ProviderAutoRestore）与写作流程都能拿到该 provider。
+      mm.registerProvider(prov);
+    }
+    if (!mounted) return;
+    final String label = _pvdLabel(_cfg.kind, isEnglish);
     if (ok) {
-      if (mm.getProvider(prov.providerName) == null) {
-        mm.registerProvider(prov);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.tf('AIC.ConfigSavedRegistered',
-              '{label} 配置已保存并注册', {
-            'label': _pvdLabel(_cfg.kind, isEnglish),
-          }))),
-        );
-        _refreshFromManager();
-        _persistRwkvPrefs();
-      }
-    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.tf('AIC.ConfigSavedRegistered',
+            '{label} 配置已保存并注册', {
+          'label': label,
+        }))),
+      );
+      _refreshFromManager();
+    } else {
+      // 已落盘，仅连通性检查失败：如实告知「已保存、但当前连不上」
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(l10n.t('AIC.InitFailedCheckParams',
-                '初始化失败，请检查地址与参数后重试')),
-            backgroundColor: Colors.red),
+            content: Text(l10n.tf('AIC.ConfigSavedButOffline',
+                '{label} 配置已保存到本地（重启后自动恢复），但当前连通性检查未通过：'
+                '请检查地址、API Key / CF Token 与网络后重试',
+                {'label': label})),
+            backgroundColor: Colors.orange),
       );
+      _refreshFromManager();
     }
   }
 
@@ -946,7 +1095,63 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     final mm = ref.read(modelManagerProvider);
     mm.setDefaultProvider(name);
     setState(() => _defaultProvider = name);
+    // 持久化默认 provider（下次启动自动恢复）
+    try {
+      ref.read(modelConfigStoreProvider).saveDefault(name);
+    } on Object {
+      // 持久化失败不影响当前会话
+    }
   }
+
+  /// 把当前 provider 配置写入本地（下次启动自动恢复），并在保存默认后同步。
+  Future<void> _persistProviderConfig() async {
+    try {
+      await ref.read(modelConfigStoreProvider).save(
+            _selectedKind.name,
+            _snapshotToJson(_cfg),
+          );
+      await ref
+          .read(modelConfigStoreProvider)
+          .saveDefault(_defaultProvider);
+      // 模型最大参考长度 = 最大令牌数：保存 provider 时一并同步并持久化，
+      // 保障重启后生成链路的参考窗口与「最大令牌数」依然一致。
+      // 同时从模型名解析上下文窗口（`ctx16384` → 16384），供生成链路
+      // 把「参考 + 输出」在窗口内切分，避免「最大令牌数填得比窗口还大」。
+      final AiRuntimeSettings synced = aiRuntimeSettings.copyWith(
+        maxReferenceLength: _cfg.defaultMaxTokens,
+        contextWindowTokens:
+            AiRuntimeSettings.parseContextWindow(_cfg.defaultModel),
+      );
+      aiRuntimeSettings = synced;
+      final KeyValueStore kv =
+          await ref.read(keyValueStoreProvider.future);
+      await kv.writeJson(
+          'ai_config', 'runtime_settings', jsonEncode(synced.toJson()));
+    } on Object {
+      // 持久化失败不影响保存结果
+    }
+  }
+
+  /// _ProviderConfig → JSON（与 provider_auto_restore 的反序列化字段对齐）。
+  static Map<String, Object?> _snapshotToJson(_ProviderConfig c) =>
+      <String, Object?>{
+        'baseUrl': c.baseUrl,
+        'apiKey': c.apiKey,
+        'defaultModel': c.defaultModel,
+        'timeoutSeconds': c.timeoutSeconds,
+        'defaultTemperature': c.defaultTemperature,
+        'defaultMaxTokens': c.defaultMaxTokens,
+        'enableStreaming': c.enableStreaming,
+        'rwkvLocalExecutable': c.rwkvLocalExecutable,
+        'rwkvLocalModelPath': c.rwkvLocalModelPath,
+        'rwkvLocalVocabPath': c.rwkvLocalVocabPath,
+        'rwkvLocalServerVariant': c.rwkvLocalServerVariant?.name,
+        'rwkvMaxConcurrentSessions': c.rwkvMaxConcurrentSessions,
+        'rwkvThinkType': c.rwkvThinkType,
+        'rwkvUseStatefulRoute': c.rwkvUseStatefulRoute,
+        'cfAccessClientId': c.cfAccessClientId,
+        'cfAccessClientSecret': c.cfAccessClientSecret,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -955,22 +1160,32 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     final mm = ref.watch(modelManagerProvider);
     final registered = mm.getAllProviders();
 
+    // 荣耀 Magic 7 Pro 等横屏手机：AppBar 已有「AI 配置」标题，页内大标题
+    // 重复占一行；触屏窄屏隐藏并收紧内边距，把空间还给配置卡。
+    final bool touch =
+        Theme.of(context).platform == TargetPlatform.android ||
+            Theme.of(context).platform == TargetPlatform.iOS;
+    final bool phoneLayout = touch && MediaQuery.sizeOf(context).width < 1000;
+
     return Scaffold(
       body: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(phoneLayout ? 12 : 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              l10n.t('AIC.Title', 'AI 配置'),
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 16),
+            if (!phoneLayout) ...[
+              Text(
+                l10n.t('AIC.Title', 'AI 配置'),
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 16),
+            ],
             Expanded(
               // 手机横屏逻辑宽 ~780：内容区只剩 ~500px，左右分栏（220 列表 + 卡片）
               // 会把配置卡挤爆 —— 窄屏改为「提供商列表在上、配置卡在下」整体滚动。
               child: LayoutBuilder(builder: (context, box) {
-                final narrow = box.maxWidth < 560;
+                final narrow =
+                    box.maxWidth < 560 || (touch && box.maxWidth < 860);
                 final Widget cards = Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1092,6 +1307,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                           // ---- 功能 C：章节落库后自动同步世界观 ----
                           const SizedBox(height: 16),
                           const _ChapterSyncCard(),
+                          // ---- 生成采样参数（官方推荐预设 + 手动微调）与思维链 ----
+                          const SizedBox(height: 16),
+                          const _SamplingThinkingCard(),
                         ],
                 );
 
@@ -2137,8 +2355,8 @@ class _ConfigCard extends ConsumerWidget {
               children: [
                 _Field(
                   label: l10n.t('AIC.FieldBaseUrl', 'API 基础地址'),
-                  child: SizedBox(
-                    width: 360,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 360),
                     child: TextField(
                       controller: TextEditingController(text: cfg.baseUrl)
                         ..selection = TextSelection.fromPosition(
@@ -2159,8 +2377,8 @@ class _ConfigCard extends ConsumerWidget {
                 if (!cfg.kind.isLocal)
                   _Field(
                     label: l10n.t('AIC.FieldApiKey', 'API Key'),
-                    child: SizedBox(
-                      width: 360,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
                       child: TextField(
                         obscureText: true,
                         controller: TextEditingController(text: cfg.apiKey)
@@ -2180,8 +2398,8 @@ class _ConfigCard extends ConsumerWidget {
                   ),
                 _Field(
                   label: l10n.t('AIC.FieldDefaultModel', '默认模型'),
-                  child: SizedBox(
-                    width: 240,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
                     child: TextField(
                       controller: TextEditingController(text: cfg.defaultModel)
                         ..selection = TextSelection.fromPosition(
@@ -2199,8 +2417,8 @@ class _ConfigCard extends ConsumerWidget {
                 ),
                 _Field(
                   label: l10n.t('AIC.FieldTimeout', '超时 (秒)'),
-                  child: SizedBox(
-                    width: 120,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 120),
                     child: TextField(
                       keyboardType: TextInputType.number,
                       controller: TextEditingController(
@@ -2221,8 +2439,8 @@ class _ConfigCard extends ConsumerWidget {
                 ),
                 _Field(
                   label: 'Temperature',
-                  child: SizedBox(
-                    width: 120,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 120),
                     child: TextField(
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
@@ -2275,8 +2493,12 @@ class _ConfigCard extends ConsumerWidget {
                         divisions: kMaxTokensSteps.length - 1,
                         label: maxTokensLabel(cfg.defaultMaxTokens),
                         onChanged: (v) {
-                          cfg.defaultMaxTokens =
-                              kMaxTokensSteps[v.round()];
+                          final int next = kMaxTokensSteps[v.round()];
+                          cfg.defaultMaxTokens = next;
+                          // 最大参考长度恒等于最大令牌数 → 同步运行时设置，
+                          // 生成链路据此决定参考上下文的字符预算。
+                          aiRuntimeSettings = aiRuntimeSettings
+                              .copyWith(maxReferenceLength: next);
                           onChanged();
                         },
                       ),
@@ -2293,6 +2515,44 @@ class _ConfigCard extends ConsumerWidget {
                                 color: scheme.onSurfaceVariant,
                               ),
                             ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      // 最大参考长度：只读展示 —— 用户约定「模型最大参考长度
+                      // = 模型最大 Tokens」，恒等于上方滑块值，不可单独编辑。
+                      Row(
+                        children: [
+                          Text(
+                            l10n.t('AIC.FieldMaxRefLength', '最大参考长度'),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            maxTokensLabel(cfg.maxReferenceLength),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: scheme.primary,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              l10n.tf(
+                                'AIC.MaxRefLengthHint',
+                                '自动等于「最大令牌数」；实际在 {0} 窗口内切分为 参考 {1} / 输出 {2}',
+                                <Object>[
+                                  '${aiRuntimeSettings.contextWindowTokens}',
+                                  '${aiRuntimeSettings.referenceBudgetTokens}',
+                                  '${aiRuntimeSettings.outputBudgetTokens}',
+                                ],
+                              ),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -2561,8 +2821,9 @@ class _ConfigCard extends ConsumerWidget {
                         _Field(
                           label: l10n.t('AIC.FieldRwkvExecutable',
                               'RWKV Server 可执行文件'),
-                          child: SizedBox(
-                            width: 440,
+                          child: ConstrainedBox(
+                            constraints:
+                                const BoxConstraints(maxWidth: 440),
                             child: TextField(
                               controller: TextEditingController(
                                   text: cfg.rwkvLocalExecutable ?? '')
@@ -2587,8 +2848,9 @@ class _ConfigCard extends ConsumerWidget {
                         _Field(
                           label: l10n.t('AIC.FieldLocalGgufModel',
                               '本地 GGUF 模型（下拉选择）'),
-                          child: SizedBox(
-                            width: 320,
+                          child: ConstrainedBox(
+                            constraints:
+                                const BoxConstraints(maxWidth: 320),
                             child: Builder(
                               builder: (context) {
                                 final list = rwkvModels ?? const [];
@@ -2900,6 +3162,112 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
   late final TextEditingController _subModelCtrl;
   late final TextEditingController _subRoleCtrl;
 
+  /// provider 名 → 该平台可用模型 id 列表（Agent 模型选择的候选来源）。
+  final Map<String, List<String>> _models = <String, List<String>>{};
+
+  /// 正在拉取模型列表的 provider（防并发重复请求）。
+  String? _loadingModelsFor;
+
+  /// 拉取指定 provider 的可用模型（`GET {baseUrl}/models`）。
+  ///
+  /// 只取**已配置/已注册**的平台：未注册的 provider 不在
+  /// `ModelManager` 里，`getProvider` 返回 null，这里自然跳过。
+  Future<void> _ensureModels(String providerName) async {
+    final String name = providerName.trim();
+    if (name.isEmpty) return;
+    if (_models.containsKey(name) || _loadingModelsFor == name) return;
+    _loadingModelsFor = name;
+    List<String> ids = <String>[];
+    try {
+      final IModelProvider? p = ref.read(modelManagerProvider).getProvider(name);
+      if (p != null) {
+        final List<ModelInfo> list = await p.getAvailableModels();
+        ids = <String>{
+          for (final ModelInfo e in list)
+            if (e.id.trim().isNotEmpty) e.id.trim(),
+        }.toList()
+          ..sort();
+      }
+    } catch (_) {
+      // 拉取失败保持空列表：用户仍可自由输入模型 id
+      ids = <String>[];
+    }
+    if (!mounted) return;
+    setState(() {
+      _models[name] = ids;
+      _loadingModelsFor = null;
+    });
+  }
+
+  /// 「模型列表」按钮：底部弹层列出该平台已注册的模型，点选即填入。
+  Future<void> _pickModel(
+    BuildContext context,
+    String providerName,
+    TextEditingController ctrl,
+  ) async {
+    final l10n = ref.read(l10nProvider);
+    final String name = providerName.trim();
+    await _ensureModels(name);
+    final List<String> ids = _models[name] ?? const <String>[];
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext ctx) {
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                  child: Text(
+                    '$name · ${l10n.tf('AICfg.AgentModelListTitle', '可用模型（{0}）', <Object>[ids.length])}',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                if (ids.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      l10n.t('AICfg.AgentModelEmpty',
+                          '未取到模型列表（该平台可能未配置或不支持 /models）。'
+                          '可直接在上方输入框手填模型 id。'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: ids.length,
+                      itemBuilder: (BuildContext _, int i) {
+                        final String id = ids[i];
+                        return ListTile(
+                          dense: true,
+                          title: Text(id,
+                              style: const TextStyle(fontSize: 12)),
+                          onTap: () {
+                            ctrl.text = id;
+                            Navigator.pop(ctx);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2908,6 +3276,12 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     _mainRoleCtrl = TextEditingController(text: s.mainAgentRoleDescription);
     _subModelCtrl = TextEditingController(text: s.subAgentModel);
     _subRoleCtrl = TextEditingController(text: s.subAgentRoleDescription);
+    // 首次进入就把两个 Agent 所选平台的模型列表拉下来（可搜索下拉的候选源）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ensureModels(s.mainAgentProvider);
+      _ensureModels(s.subAgentProvider);
+    });
   }
 
   @override
@@ -2935,7 +3309,13 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
         );
   }
 
-  /// 可选项：ModelManager 已注册的 provider + 两个始终存在的 RWKV 单例。
+  /// 可选项：**ModelManager 已注册（即已在对应平台页配置/测试过）的 provider**
+  /// + 两个始终存在的 RWKV 单例。
+  ///
+  /// 只列「已配置好」的：未配置的 provider 单例 `isAvailable == false`，
+  /// `resolveExactProvider` 会返回 null，选了也用不了，列出来只是误导。
+  /// 新增平台（如 OpenRouter）后：先到该平台页填 Key 并「保存/测试连接」，
+  /// 启动时 `providerAutoRestore` 也会自动注册 → 这里就能选到。
   List<String> _providerOptions(List<IModelProvider> registered) {
     final Set<String> names = <String>{
       for (final IModelProvider p in registered) p.providerName,
@@ -3032,20 +3412,52 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               initialValue: options.contains(s.mainAgentProvider)
                   ? s.mainAgentProvider
                   : options.first,
+              isExpanded: true,
               items: <DropdownMenuItem<String>>[
                 for (final String n in options)
-                  DropdownMenuItem<String>(value: n, child: Text(n)),
+                  DropdownMenuItem<String>(
+                    value: n,
+                    child: Text(n, overflow: TextOverflow.ellipsis),
+                  ),
               ],
               onChanged: (String? v) {
-                if (v != null) patch(mainProvider: v);
+                if (v == null) return;
+                patch(mainProvider: v);
+                _ensureModels(v);
               },
             ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            l10n.t('AICfg.HintAgentProviderHelper',
+                '仅列出已配置并注册的平台；新增平台请先到其页签填好 Key 并点「保存 / 测试连接」'),
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
           _Field(
             label: l10n.t('AICfg.HintMainAgentModel',
                 'MainAgent 模型（可选，留空使用提供者默认模型）'),
-            child: TextField(controller: _mainModelCtrl),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: TextField(
+                    controller: _mainModelCtrl,
+                    decoration: InputDecoration(
+                      hintText: l10n.t('AICfg.HintAgentModelHint',
+                          '留空 = 用该平台默认模型'),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: l10n.t('AICfg.AgentModelList', '模型列表'),
+                  icon: const Icon(Icons.list_alt_outlined),
+                  onPressed: () => _pickModel(
+                      context, s.mainAgentProvider, _mainModelCtrl),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           _Field(
@@ -3061,12 +3473,18 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               initialValue: options.contains(s.subAgentProvider)
                   ? s.subAgentProvider
                   : options.first,
+              isExpanded: true,
               items: <DropdownMenuItem<String>>[
                 for (final String n in options)
-                  DropdownMenuItem<String>(value: n, child: Text(n)),
+                  DropdownMenuItem<String>(
+                    value: n,
+                    child: Text(n, overflow: TextOverflow.ellipsis),
+                  ),
               ],
               onChanged: (String? v) {
-                if (v != null) patch(subProvider: v);
+                if (v == null) return;
+                patch(subProvider: v);
+                _ensureModels(v);
               },
             ),
           ),
@@ -3074,7 +3492,27 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
           _Field(
             label: l10n.t('AICfg.HintSubAgentModel',
                 'SubAgent 模型（可选，留空使用提供者默认模型）'),
-            child: TextField(controller: _subModelCtrl),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: TextField(
+                    controller: _subModelCtrl,
+                    decoration: InputDecoration(
+                      hintText: l10n.t('AICfg.HintAgentModelHint',
+                          '留空 = 用该平台默认模型'),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: l10n.t('AICfg.AgentModelList', '模型列表'),
+                  icon: const Icon(Icons.list_alt_outlined),
+                  onPressed: () => _pickModel(
+                      context, s.subAgentProvider, _subModelCtrl),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           _Field(
@@ -3323,6 +3761,297 @@ Widget _buildProgressBlock(
 }
 
 /// 功能 C：章节落库后自动同步世界观 —— 两级开关（规则同步默认开 / AI 抽取默认关）。
+/// 生成采样参数（官方推荐预设 + 手动微调）与思维链卡片（全局设置）。
+///
+/// 采样参数仅对 RWKV 家族 provider 下发（DeepSeek/Zhipu 等严格 API 会 400，
+/// 下发前由 `isRwkvFamilyProvider` 门控 —— 见 `rwkv_sampling.dart`）。
+/// 所有改动写入 KVStore `(ai_config, runtime_settings)` 并同步全局
+/// `aiRuntimeSettings`，**下一次模型调用即生效**（无需重启/重注册）。
+class _SamplingThinkingCard extends ConsumerStatefulWidget {
+  const _SamplingThinkingCard();
+
+  @override
+  ConsumerState<_SamplingThinkingCard> createState() =>
+      _SamplingThinkingCardState();
+}
+
+class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
+  /// 可微调的采样参数（键 = 端点字段名，与 `kRwkvAntiRepeatSampling` 对齐）。
+  static const List<String> _paramKeys = <String>[
+    'top_k',
+    'top_p',
+    'alpha_presence',
+    'alpha_frequency',
+    'alpha_decay',
+    'dry_multiplier',
+    'dry_base',
+    'dry_allowed_length',
+    'dry_penalty_last_n',
+  ];
+
+  late final Map<String, TextEditingController> _ctrl =
+      <String, TextEditingController>{
+    for (final String k in _paramKeys) k: TextEditingController(),
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    // 显示当前**生效值**（预设默认 + 已存微调的合并结果）
+    _fillControllers(aiRuntimeSettings.samplingParams());
+  }
+
+  @override
+  void dispose() {
+    for (final TextEditingController c in _ctrl.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _fillControllers(Map<String, Object?> params) {
+    for (final String k in _paramKeys) {
+      _ctrl[k]!.text = params[k]?.toString() ?? '';
+    }
+  }
+
+  int? _intOrNull(String key) {
+    final String v = _ctrl[key]!.text.trim();
+    if (v.isEmpty) return null;
+    return int.tryParse(v) ?? double.tryParse(v)?.round();
+  }
+
+  double? _doubleOrNull(String key) {
+    final String v = _ctrl[key]!.text.trim();
+    if (v.isEmpty) return null;
+    return double.tryParse(v);
+  }
+
+  /// 从文本框收集微调值（空 = 回落当前预设默认）写回全局设置并落盘。
+  Future<void> _collectAndPersist() async {
+    final AiRuntimeSettings s = AiRuntimeSettings(
+      samplingPreset: aiRuntimeSettings.samplingPreset,
+      topK: _intOrNull('top_k'),
+      topP: _doubleOrNull('top_p'),
+      alphaPresence: _doubleOrNull('alpha_presence'),
+      alphaFrequency: _doubleOrNull('alpha_frequency'),
+      alphaDecay: _doubleOrNull('alpha_decay'),
+      dryMultiplier: _doubleOrNull('dry_multiplier'),
+      dryBase: _doubleOrNull('dry_base'),
+      dryAllowedLength: _intOrNull('dry_allowed_length'),
+      dryPenaltyLastN: _intOrNull('dry_penalty_last_n'),
+      thinkingEnabled: aiRuntimeSettings.thinkingEnabled,
+      thinkingIntensity: aiRuntimeSettings.thinkingIntensity,
+    );
+    setState(() => aiRuntimeSettings = s);
+    await _persist(s);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            ref.read(l10nProvider).t('AIC.Sampling.Saved', '已保存，下一次生成生效')),
+      ));
+    }
+  }
+
+  Future<void> _persist(AiRuntimeSettings s) async {
+    try {
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
+      await kv.writeJson(
+          'ai_config', 'runtime_settings', jsonEncode(s.toJson()));
+    } catch (_) {
+      // KVStore 写失败不阻塞创作（与 chapter_referral 同策略），下次保存会重试
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = ref.watch(l10nProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final AiRuntimeSettings s = aiRuntimeSettings;
+
+    final Widget presetDropdown = DropdownButtonFormField<RwkvSamplingPresetId>(
+      key: ValueKey<String>('samplingPreset|${s.samplingPreset.name}'),
+      initialValue: s.samplingPreset,
+      decoration: InputDecoration(
+        labelText: l10n.t('AIC.Sampling.Preset', '参数预设'),
+        border: const OutlineInputBorder(),
+      ),
+      items: <DropdownMenuItem<RwkvSamplingPresetId>>[
+        DropdownMenuItem(
+          value: RwkvSamplingPresetId.official,
+          child: Text(l10n.t('AIC.Sampling.PresetOfficial', '官方推荐（抗复读）')),
+        ),
+        DropdownMenuItem(
+          value: RwkvSamplingPresetId.strong,
+          child: Text(l10n.t('AIC.Sampling.PresetStrong', '强抗复读')),
+        ),
+        DropdownMenuItem(
+          value: RwkvSamplingPresetId.relaxed,
+          child: Text(l10n.t('AIC.Sampling.PresetRelaxed', '宽松（保文笔）')),
+        ),
+        DropdownMenuItem(
+          value: RwkvSamplingPresetId.custom,
+          child: Text(l10n.t('AIC.Sampling.PresetCustom', '自定义')),
+        ),
+      ],
+      onChanged: (RwkvSamplingPresetId? id) async {
+        if (id == null) return;
+        // 选预设 = 以该预设基线重置微调值（干净起点）
+        final AiRuntimeSettings next = AiRuntimeSettings(
+          samplingPreset: id,
+          thinkingEnabled: s.thinkingEnabled,
+          thinkingIntensity: s.thinkingIntensity,
+        );
+        setState(() {
+          aiRuntimeSettings = next;
+          _fillControllers(next.samplingParams());
+        });
+        await _persist(next);
+      },
+    );
+
+    final Widget fields = Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: <Widget>[
+        for (final String k in _paramKeys)
+          SizedBox(
+            width: 250,
+            child: TextField(
+              controller: _ctrl[k],
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                isDense: true,
+                labelText: l10n.t(_labelKey(k), _labelFallback(k)),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+      ],
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.t('AIC.Sampling.Title', '生成采样参数与思维链'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: scheme.primary,
+                    )),
+            const SizedBox(height: 4),
+            Text(
+              l10n.t(
+                  'AIC.Sampling.Sub',
+                  '仅对 RWKV 家族生效：官方推荐值（alpha_* 重复惩罚 + DRY 抗整段复读）'
+                  '可一键套用，再按需微调；修改下一次生成即生效'),
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            presetDropdown,
+            const SizedBox(height: 12),
+            fields,
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: Text(l10n.t('AIC.Sampling.Save', '保存微调')),
+                onPressed: _collectAndPersist,
+              ),
+            ),
+            const Divider(height: 24),
+            Text(l10n.t('AIC.Thinking.Title', '思维链'),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: scheme.primary,
+                    )),
+            Material(
+              type: MaterialType.transparency,
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: s.thinkingEnabled,
+                onChanged: (bool v) async {
+                  final AiRuntimeSettings next =
+                      s.copyWith(thinkingEnabled: v);
+                  setState(() => aiRuntimeSettings = next);
+                  await _persist(next);
+                },
+                title: Text(l10n.t('AIC.Thinking.Enable', '启用思维链')),
+                subtitle: Text(
+                  l10n.t('AIC.Thinking.EnableSub',
+                      '关闭后 Agent 直接产出结果，不再构造/解析思维步骤'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+            if (s.thinkingEnabled) ...[
+              Text(l10n.t('AIC.Thinking.Intensity', '思考强度'),
+                  style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 8),
+              SegmentedButton<ThinkingIntensity>(
+                segments: <ButtonSegment<ThinkingIntensity>>[
+                  ButtonSegment<ThinkingIntensity>(
+                    value: ThinkingIntensity.low,
+                    label: Text(l10n.t('AIC.Thinking.Low', '低')),
+                  ),
+                  ButtonSegment<ThinkingIntensity>(
+                    value: ThinkingIntensity.medium,
+                    label: Text(l10n.t('AIC.Thinking.Medium', '中')),
+                  ),
+                  ButtonSegment<ThinkingIntensity>(
+                    value: ThinkingIntensity.high,
+                    label: Text(l10n.t('AIC.Thinking.High', '高')),
+                  ),
+                ],
+                selected: <ThinkingIntensity>{s.thinkingIntensity},
+                onSelectionChanged: (Set<ThinkingIntensity> sel) async {
+                  final AiRuntimeSettings next =
+                      s.copyWith(thinkingIntensity: sel.first);
+                  setState(() => aiRuntimeSettings = next);
+                  await _persist(next);
+                },
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l10n.t('AIC.Thinking.IntensitySub',
+                    '低 = 仅正文/大纲/续写/角色等核心长文任务；中 = 复杂任务（默认）；高 = 全部任务'),
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _labelKey(String key) => switch (key) {
+        'top_k' => 'AIC.Sampling.TopK',
+        'top_p' => 'AIC.Sampling.TopP',
+        'alpha_presence' => 'AIC.Sampling.AlphaPresence',
+        'alpha_frequency' => 'AIC.Sampling.AlphaFrequency',
+        'alpha_decay' => 'AIC.Sampling.AlphaDecay',
+        'dry_multiplier' => 'AIC.Sampling.DryMultiplier',
+        'dry_base' => 'AIC.Sampling.DryBase',
+        'dry_allowed_length' => 'AIC.Sampling.DryAllowed',
+        'dry_penalty_last_n' => 'AIC.Sampling.DryLastN',
+        _ => key,
+      };
+
+  String _labelFallback(String key) => switch (key) {
+        'top_k' => 'top_k（候选数）',
+        'top_p' => 'top_p（核采样）',
+        'alpha_presence' => 'alpha_presence（重复惩罚）',
+        'alpha_frequency' => 'alpha_frequency（频率惩罚）',
+        'alpha_decay' => 'alpha_decay（惩罚衰减）',
+        'dry_multiplier' => 'dry_multiplier（DRY 强度）',
+        'dry_base' => 'dry_base（DRY 衰减底数）',
+        'dry_allowed_length' => 'dry_allowed_length（DRY 容忍长度）',
+        'dry_penalty_last_n' => 'dry_penalty_last_n（DRY 窗口）',
+        _ => key,
+      };
+}
+
 class _ChapterSyncCard extends ConsumerStatefulWidget {
   const _ChapterSyncCard();
 

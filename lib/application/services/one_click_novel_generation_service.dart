@@ -20,6 +20,7 @@ import '../../ai/models/chat.dart';
 import '../../ai/models/provider.dart';
 import '../../ai/providers/rwkv_provider.dart';
 import '../../ai/rwkv/rwkv_sampling.dart';
+import '../../ai/runtime_settings.dart';
 import '../../ai/utils/concept_parser.dart';
 import '../../ai/utils/localized_text.dart';
 import '../../ai/workflow/dual_agent_workflow.dart';
@@ -28,9 +29,11 @@ import '../../data/repositories/chapter_repository.dart';
 import '../../data/repositories/plot_repository.dart';
 import '../../data/repositories/project_repository.dart';
 import '../../data/repositories/volume_repository.dart';
+import 'chapter_dedup_guard.dart';
 import 'chapter_post_process_service.dart';
 import 'chapter_sync_service.dart';
 import 'prerequisite_generation_service.dart';
+import 'writing_archive_service.dart';
 
 const Uuid _uuid = Uuid();
 
@@ -103,6 +106,7 @@ class OneClickNovelGenerationService {
     required IModelProvider? Function() writingProvider,
     required AiTextSource texts,
     ChapterPostProcessService? postProcess,
+    WritingArchiveService? writingArchive,
   })  : _dualAgent = dualAgent,
         _prerequisites = prerequisites,
         _projects = projects,
@@ -112,7 +116,8 @@ class OneClickNovelGenerationService {
         _rwkv = rwkv,
         _writingProvider = writingProvider,
         _texts = texts,
-        _postProcess = postProcess;
+        _postProcess = postProcess,
+        _writingArchive = writingArchive;
 
   final DualAgentWorkflowService _dualAgent;
   final PrerequisiteGenerationService _prerequisites;
@@ -124,6 +129,9 @@ class OneClickNovelGenerationService {
 
   /// 功能 C：首章落库后的世界观自动同步编排（可空 —— 离线测试不装配）。
   final ChapterPostProcessService? _postProcess;
+
+  /// 写作档案（首章落库即生成章节档案，确定性四段描述；可空不装配）。
+  final WritingArchiveService? _writingArchive;
 
   /// 当前配置的写作 provider（双代理的 SubAgent provider）。
   ///
@@ -370,32 +378,24 @@ class OneClickNovelGenerationService {
   Future<String> _createProject(
     ({String title, String genre, String premise}) concept,
   ) async {
-    final String name = await _ensureUniqueProjectName(concept.title);
-    final String id = _uuid.v4();
-    await _projects.create(ProjectsCompanion.insert(
-      id: id,
-      name: name,
-      type: concept.genre,
-      description: Value(concept.premise),
-      settings: Value(jsonEncode(<String, Object?>{
-        'targetWordCount': defaultTargetWordCount,
-        'enableAI': true,
-        'autoSave': true,
-        'versionControl': false,
-        'template': 'AI一键生成',
-      })),
-    ));
-    return id;
-  }
-
-  /// 对应 C# `EnsureUniqueProjectNameAsync`（重名追加 ` MMdd-HHmm`）。
-  Future<String> _ensureUniqueProjectName(String preferred) async {
-    final ProjectRow? existing = await _projects.getByName(preferred);
-    if (existing == null) return preferred;
-    final DateTime now = DateTime.now();
-    final String stamp =
-        '${_pad(now.month)}${_pad(now.day)}-${_pad(now.hour)}${_pad(now.minute)}';
-    return '$preferred $stamp';
+    // 重名解决统一走仓储层（含「软删除同名项目复活」+ 活跃重名加序号），
+    // 旧实现只查未删除同名 → 命中软删行时直接炸 UNIQUE constraint failed。
+    final ProjectNameResolution res = await _projects.createResolvingName(
+      ProjectsCompanion.insert(
+        id: _uuid.v4(),
+        name: concept.title,
+        type: concept.genre,
+        description: Value(concept.premise),
+        settings: Value(jsonEncode(<String, Object?>{
+          'targetWordCount': defaultTargetWordCount,
+          'enableAI': true,
+          'autoSave': true,
+          'versionControl': false,
+          'template': 'AI一键生成',
+        })),
+      ),
+    );
+    return res.row.id;
   }
 
   /// 第一章落库（取 Order 最小的卷；无卷则建「第一卷」）。
@@ -423,11 +423,28 @@ class OneClickNovelGenerationService {
       volumeId = volumes.first.id;
     }
 
-    final int existingChapters =
-        (await _chapters.getByVolumeId(volumeId)).length;
+    final List<ChapterRow> existingRows = await _chapters.getByVolumeId(volumeId);
+    final int existingChapters = existingRows.length;
 
+    // 查重：同卷同序号/同标题复用既有行，杜绝同一章节标题被重复创建
+    final ChapterRow? dup = ChapterDedupGuard.findExisting(
+      existing: existingRows,
+      orderIndex: existingChapters + 1,
+      title: title,
+    );
+    if (dup != null) {
+      await _chapters.updateById(dup.id, ChaptersCompanion(
+        content: Value(content),
+        summary: Value(summary),
+        wordCount: Value(content.length),
+        lastEditedAt: Value(DateTime.now()),
+      ));
+      return;
+    }
+
+    final String cid = _uuid.v4();
     await _chapters.create(ChaptersCompanion.insert(
-      id: _uuid.v4(),
+      id: cid,
       title: title,
       volumeId: volumeId,
       projectId: Value(projectId),
@@ -438,6 +455,28 @@ class OneClickNovelGenerationService {
       type: const Value('正文'),
       wordCount: Value(content.length),
     ));
+
+    // 写作档案：章节落库即生成章节档案（确定性四段描述，不额外调模型）
+    final WritingArchiveService? archive = _writingArchive;
+    if (archive != null) {
+      try {
+        await archive.write(
+          level: ArchiveLevel.chapter,
+          projectId: projectId,
+          title: title,
+          content: content,
+          volumeId: volumeId,
+          chapterId: cid,
+          desc: WritingArchiveService.deterministicChapterDesc(
+            chapterTitle: title,
+            wordCount: content.length,
+            outlineOrSummary: summary,
+          ),
+        );
+      } on Object {
+        // 档案失败不阻塞章节落库
+      }
+    }
   }
 
   // ------------------------------------------------------------ 自命名与解析
@@ -470,7 +509,7 @@ class OneClickNovelGenerationService {
         temperature: 0.85,
         maxTokens: 1200,
         parameters: isRwkvFamilyProvider(writer.providerName)
-            ? Map<String, dynamic>.of(kRwkvAntiRepeatSampling)
+            ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
             : <String, dynamic>{},
       ));
       raw = resp.isSuccess ? (resp.content) : '';
@@ -499,6 +538,4 @@ class OneClickNovelGenerationService {
       ),
     );
   }
-
-  static String _pad(int v) => v.toString().padLeft(2, '0');
 }

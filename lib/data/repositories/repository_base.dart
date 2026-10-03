@@ -17,21 +17,37 @@ abstract class RepositoryBase {
   DateTime get now => DateTime.now();
 
   /// 把一行标记为软删除，并回填 deletedAt / updatedAt
-  Future<void> softDeleteRow(String tableName, String id) {
-    return db.customStatement(
+  ///
+  /// ⚠ 必须在执行后调用 [notifyTable]：raw SQL 不会触发 drift 的查询流
+  /// 通知（`watch()` 只响应经查询 API 的变更），否则项目列表等依赖
+  /// `watchAll()` 的页面在删除后**永不刷新**，表现为「删除无效」。
+  Future<void> softDeleteRow(String tableName, String id) async {
+    await db.customStatement(
       'UPDATE $tableName SET is_deleted = 1, deleted_at = ?, updated_at = ? '
       'WHERE id = ?',
       [now.millisecondsSinceEpoch, now.millisecondsSinceEpoch, id],
     );
+    notifyTable(tableName);
   }
 
-  /// 按 projectId 批量软删除
-  Future<void> softDeleteByProject(String tableName, String projectId) {
-    return db.customStatement(
+  /// 按 projectId 批量软删除（同样需要通知查询流）
+  Future<void> softDeleteByProject(String tableName, String projectId) async {
+    await db.customStatement(
       'UPDATE $tableName SET is_deleted = 1, deleted_at = ?, updated_at = ? '
       'WHERE project_id = ? AND is_deleted = 0',
       [now.millisecondsSinceEpoch, now.millisecondsSinceEpoch, projectId],
     );
+    notifyTable(tableName);
+  }
+
+  /// 按 drift 表名手动触发查询流刷新（raw SQL 变更后的必要补偿）。
+  void notifyTable(String tableName) {
+    for (final TableInfo table in db.allTables) {
+      if (table.actualTableName == tableName) {
+        db.notifyUpdates(<TableUpdate>{TableUpdate.onTable(table)});
+        return;
+      }
+    }
   }
 
   /// 物理删除（仅供清理软删数据或 CharacterEvent 等特殊场景使用）

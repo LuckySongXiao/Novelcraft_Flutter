@@ -129,12 +129,9 @@ class TaskQueue {
   /// 取消任务（运行中 / 待处理 / 门控等待中均可）。
   bool cancel(String taskId) {
     if (_running.containsKey(taskId)) {
-      final task = _running.remove(taskId)!;
+      final task = _running[taskId]!;
       task.status = WorkflowStatus.cancelled;
-      task.completedAt = DateTime.now();
       task.errorMessage = '任务被用户取消';
-      _completed[taskId] = task;
-      _complete(taskId);
       _notify(task);
       _logger.info('任务已取消: ${task.name} (ID: $taskId)');
       return true;

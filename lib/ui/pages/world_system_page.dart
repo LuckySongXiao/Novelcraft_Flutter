@@ -347,14 +347,34 @@ class _WorldSystemPageState extends ConsumerState<WorldSystemPage> {
             children: [
               Padding(
                 padding: const EdgeInsets.all(12),
-                child: TextField(
-                  controller: _searchCtrl,
-                  decoration: InputDecoration(
-                    hintText: l10n.tf('Common.SearchItem', '搜索{0}', [itemName]),
-                    prefixIcon: const Icon(Icons.search),
-                    isDense: true,
-                  ),
-                  onChanged: (v) => setState(() => _keyword = v),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        decoration: InputDecoration(
+                          hintText:
+                              l10n.tf('Common.SearchItem', '搜索{0}', [itemName]),
+                          prefixIcon: const Icon(Icons.search),
+                          isDense: true,
+                        ),
+                        onChanged: (v) => setState(() => _keyword = v),
+                      ),
+                    ),
+                    // 手动刷新：清空搜索并重新从存储读取本项目全部条目
+                    //（此前本页只有 initState 一次性加载，没有任何刷新入口）。
+                    IconButton(
+                      tooltip: l10n.t('Common.Refresh', '刷新'),
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _loading
+                          ? null
+                          : () {
+                              _searchCtrl.clear();
+                              _keyword = '';
+                              _load();
+                            },
+                    ),
+                  ],
                 ),
               ),
               Expanded(

@@ -22,6 +22,15 @@ class ProjectStats {
     this.lastEditedAt,
     this.factionCount = 0,
     this.plotCount = 0,
+    this.worldSettingCount = 0,
+    this.raceCount = 0,
+    this.resourceCount = 0,
+    this.secretRealmCount = 0,
+    this.cultivationSystemCount = 0,
+    this.politicalSystemCount = 0,
+    this.currencySystemCount = 0,
+    this.relationshipNetworkCount = 0,
+    this.timelineEventCount = 0,
   });
 
   final int volumeCount;
@@ -35,6 +44,17 @@ class ProjectStats {
 
   final int factionCount;
   final int plotCount;
+
+  // ---- 分类补全（项目概览全部实体入口）----
+  final int worldSettingCount;
+  final int raceCount;
+  final int resourceCount;
+  final int secretRealmCount;
+  final int cultivationSystemCount;
+  final int politicalSystemCount;
+  final int currencySystemCount;
+  final int relationshipNetworkCount;
+  final int timelineEventCount;
 }
 
 /// 卷宗统计（对应 VolumeService.GetVolumeStatisticsAsync）

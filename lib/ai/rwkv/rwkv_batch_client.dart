@@ -458,115 +458,120 @@ class RwkvBatchClient {
     http.StreamedResponse resp;
     try {
       resp = await client.send(req);
-    } finally {
+    } catch (_) {
       concurrency?.leaveInFlight();
+      rethrow;
     }
 
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      final String body = await resp.stream.bytesToString();
-      throw RwkvBatchException(
-        kind: resp.statusCode >= 500
-            ? RwkvBatchFailureKind.serverError
-            : RwkvBatchFailureKind.fatal,
-        statusCode: resp.statusCode,
-        message: '流式请求失败：$body',
-      );
-    }
-
-    final StringBuffer raw = StringBuffer();
-    await for (final String line
-        in resp.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())) {
-      if (line.isEmpty) continue;
-      if (!line.startsWith('data:')) continue;
-      final String payload = line.substring(5).trim();
-      if (payload.isEmpty) continue;
-      if (payload == '[DONE]') break;
-      raw.write(payload);
-
-      Map<String, dynamic>? ev;
-      try {
-        final Object? d = jsonDecode(payload);
-        if (d is Map<String, dynamic>) ev = d;
-      } on FormatException {
-        continue; // 半行/截断的 chunk，跳过（最后会由 done 事件兜）
-      }
-      if (ev == null) continue;
-
-      // multi_state 的 dialogue_idx 元数据事件
-      if (ev['object'] == 'multi_state.dialogue_idx') {
-        dialogueIdx = (ev['dialogue_idx'] as num?)?.toInt();
-        continue;
-      }
-
-      // ⚠ HTTP 200 也可能塞 error 事件
-      final Object? err = ev['error'];
-      if (err != null) {
+    try {
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        final String body = await resp.stream.bytesToString();
         throw RwkvBatchException(
-          kind: RwkvBatchFailureKind.runtimeErrorEvent,
-          statusCode: 200,
-          message: '流式运行时错误事件：$err',
+          kind: resp.statusCode >= 500
+              ? RwkvBatchFailureKind.serverError
+              : RwkvBatchFailureKind.fatal,
+          statusCode: resp.statusCode,
+          message: '流式请求失败：$body',
         );
       }
 
-      final Object? choices = ev['choices'];
-      if (choices is! List) continue;
-      for (final Object? c in choices) {
-        if (c is! Map<String, dynamic>) continue;
-        final RwkvBatchChoice ch = RwkvBatchChoice.fromJson(c);
-        if (ch.index < 0 || ch.index >= n) continue;
-        final String? text = ch.content;
-        if (text != null && text.isNotEmpty) {
-          buffers[ch.index]!.write(text);
+      final StringBuffer raw = StringBuffer();
+      await for (final String line
+          in resp.stream
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())) {
+        if (line.isEmpty) continue;
+        if (!line.startsWith('data:')) continue;
+        final String payload = line.substring(5).trim();
+        if (payload.isEmpty) continue;
+        if (payload == '[DONE]') break;
+        raw.write(payload);
+
+        Map<String, dynamic>? ev;
+        try {
+          final Object? d = jsonDecode(payload);
+          if (d is Map<String, dynamic>) ev = d;
+        } on FormatException {
+          continue; // 半行/截断的 chunk，跳过（最后会由 done 事件兜）
         }
-        if (ch.finishReason != null) finished.add(ch.index);
+        if (ev == null) continue;
+
+        // multi_state 的 dialogue_idx 元数据事件
+        if (ev['object'] == 'multi_state.dialogue_idx') {
+          dialogueIdx = (ev['dialogue_idx'] as num?)?.toInt();
+          continue;
+        }
+
+        // ⚠ HTTP 200 也可能塞 error 事件
+        final Object? err = ev['error'];
+        if (err != null) {
+          throw RwkvBatchException(
+            kind: RwkvBatchFailureKind.runtimeErrorEvent,
+            statusCode: 200,
+            message: '流式运行时错误事件：$err',
+          );
+        }
+
+        final Object? choices = ev['choices'];
+        if (choices is! List) continue;
+        for (final Object? c in choices) {
+          if (c is! Map<String, dynamic>) continue;
+          final RwkvBatchChoice ch = RwkvBatchChoice.fromJson(c);
+          if (ch.index < 0 || ch.index >= n) continue;
+          final String? text = ch.content;
+          if (text != null && text.isNotEmpty) {
+            buffers[ch.index]!.write(text);
+          }
+          if (ch.finishReason != null) finished.add(ch.index);
+        }
+        yield RwkvBatchProgress(
+          // 每次吐的是**累积快照**，不是增量
+          partial: <int, String>{
+            for (final MapEntry<int, StringBuffer> e in buffers.entries)
+              e.key: e.value.toString(),
+          },
+          finished: Set<int>.unmodifiable(finished),
+          dialogueIdx: dialogueIdx,
+        );
       }
+
+      // 完整性校验：断流/槽位未收齐时绝不能静默当成功（PITFALLS §31.4 实测会截断）。
+      // 缺槽只告警与统计 —— 不在此重试：调用方已收到部分快照，补拉语义由上层决定。
+      final List<int> unfinished = <int>[
+        for (int i = 0; i < n; i++)
+          if (!finished.contains(i)) i,
+      ];
+      if (unfinished.isNotEmpty) {
+        _logger.warning(
+          '流式批量结束但有 ${unfinished.length}/$n 个槽位未收到 finish：$unfinished'
+          '（连接可能中断；上层应把对应槽位视为缺失，勿静默成文）',
+        );
+      } else {
+        concurrency?.noteSuccess();
+      }
+      stats?.record(
+        AiRequestSample(
+          provider: statsProvider,
+          operation: 'batchStream',
+          success: unfinished.isEmpty,
+          latency: sw.elapsed,
+          itemCount: n,
+          failureKind: unfinished.isEmpty ? null : 'truncated',
+          httpPosts: 1,
+        ),
+      );
       yield RwkvBatchProgress(
-        // 每次吐的是**累积快照**，不是增量
         partial: <int, String>{
           for (final MapEntry<int, StringBuffer> e in buffers.entries)
             e.key: e.value.toString(),
         },
         finished: Set<int>.unmodifiable(finished),
+        done: true,
         dialogueIdx: dialogueIdx,
       );
+    } finally {
+      concurrency?.leaveInFlight();
     }
-
-    // 完整性校验：断流/槽位未收齐时绝不能静默当成功（PITFALLS §31.4 实测会截断）。
-    // 缺槽只告警与统计 —— 不在此重试：调用方已收到部分快照，补拉语义由上层决定。
-    final List<int> unfinished = <int>[
-      for (int i = 0; i < n; i++)
-        if (!finished.contains(i)) i,
-    ];
-    if (unfinished.isNotEmpty) {
-      _logger.warning(
-        '流式批量结束但有 ${unfinished.length}/$n 个槽位未收到 finish：$unfinished'
-        '（连接可能中断；上层应把对应槽位视为缺失，勿静默成文）',
-      );
-    } else {
-      concurrency?.noteSuccess();
-    }
-    stats?.record(
-      AiRequestSample(
-        provider: statsProvider,
-        operation: 'batchStream',
-        success: unfinished.isEmpty,
-        latency: sw.elapsed,
-        itemCount: n,
-        failureKind: unfinished.isEmpty ? null : 'truncated',
-        httpPosts: 1,
-      ),
-    );
-    yield RwkvBatchProgress(
-      partial: <int, String>{
-        for (final MapEntry<int, StringBuffer> e in buffers.entries)
-          e.key: e.value.toString(),
-      },
-      finished: Set<int>.unmodifiable(finished),
-      done: true,
-      dialogueIdx: dialogueIdx,
-    );
   }
 
   // -------------------------------------------------------------------------

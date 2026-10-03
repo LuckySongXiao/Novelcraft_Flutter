@@ -122,6 +122,13 @@ class _AiHealthPageState extends ConsumerState<AiHealthPage> {
           const SizedBox(height: 14),
           _section(context, l10n.t('AIH.Sec.State', 'State 诊断'),
               Icons.memory_outlined, scheme.error, _stateBlock(l10n, scheme, snap)),
+          const SizedBox(height: 14),
+          _section(
+              context,
+              l10n.t('AIH.Sec.AgentState', '智能体 State 分组（团队 state）'),
+              Icons.groups_outlined,
+              scheme.primary,
+              _agentStateBlock(l10n, scheme)),
         ],
       ),
     );
@@ -360,6 +367,68 @@ class _AiHealthPageState extends ConsumerState<AiHealthPage> {
         ),
       ],
     );
+  }
+
+  /// 智能体 State 分组快照：按「1 组长 + 9 写手」团队分组展示，
+  /// 供开发人员判断团队 state 是否正常（组数 / 状态计数 / 每组轮次）。
+  Widget _agentStateBlock(L10n l10n, ColorScheme scheme) {
+    final Map<String, Object?> snap =
+        ref.watch(agentStateManagerProvider).snapshot();
+    final int activeGroups = (snap['activeGroups'] as num?)?.toInt() ?? 0;
+    final int totalGroups = (snap['totalGroups'] as num?)?.toInt() ?? 0;
+    final int activeStates = (snap['activeStates'] as num?)?.toInt() ?? 0;
+    final int totalTurns = (snap['totalTurns'] as num?)?.toInt() ?? 0;
+    final Map<Object?, Object?> statusCounts =
+        (snap['statusCounts'] as Map?)?.cast<Object?, Object?>() ??
+            const <Object?, Object?>{};
+    final String statusText = statusCounts.entries
+        .map((MapEntry<Object?, Object?> e) =>
+            '${e.key}=${e.value}')
+        .join(' · ');
+
+    final List<Widget> rows = <Widget>[
+      _kv(l10n.t('AIH.AgentState.Groups', '活跃分组 / 累计分组'),
+          '$activeGroups / $totalGroups', scheme),
+      _kv(l10n.t('AIH.AgentState.States', '活跃 state / 每组编制'),
+          '$activeStates / 10（1 组长 + 9 写手）', scheme),
+      _kv(l10n.t('AIH.AgentState.StatusCounts', '状态分布'), statusText, scheme),
+      _kv(l10n.t('AIH.AgentState.Turns', '累计对话轮次'), '$totalTurns', scheme),
+    ];
+
+    final Object? groupsRaw = snap['groups'];
+    if (groupsRaw is List && groupsRaw.isNotEmpty) {
+      rows.add(const SizedBox(height: 6));
+      rows.add(Text(
+          l10n.t('AIH.AgentState.GroupList', '分组明细（并发 10 = 1 团队并行写 1 章）'),
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)));
+      for (final Object? gRaw in groupsRaw) {
+        if (gRaw is! Map) continue;
+        final String gid = '${gRaw['groupId'] ?? '-'}';
+        final String label = '${gRaw['label'] ?? ''}';
+        final bool active = gRaw['active'] == true;
+        final int activeMembers = (gRaw['activeMembers'] as num?)?.toInt() ?? 0;
+        final int turns = (gRaw['totalTurns'] as num?)?.toInt() ?? 0;
+        rows.add(Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            '· ${label.isEmpty ? gid : label}  ${active ? "🟢" : "⚪"} '
+            '${l10n.tf('AIH.AgentState.GroupRowFmt', '活跃成员 {0}/10 · 轮次 {1}',
+                <Object>[activeMembers, turns])}',
+            style: const TextStyle(fontSize: 12),
+          ),
+        ));
+      }
+    } else {
+      rows.add(Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          l10n.t('AIH.AgentState.Empty',
+              '当前没有已激活的团队分组（启动「多智能体协同写书」后此处会出现分组）'),
+          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+        ),
+      ));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows);
   }
 
   String _kindLabel(L10n l10n, String kind) => switch (kind) {

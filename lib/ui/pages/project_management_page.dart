@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/di.dart';
 import '../../data/database.dart';
+import '../../data/repositories/project_repository.dart';
 import '../../l10n/l10n.dart';
 import '../layout/navigation.dart';
 
@@ -139,16 +140,30 @@ class ProjectManagementPage extends ConsumerWidget {
     if (name.isEmpty) return;
 
     try {
-      await ref.read(projectRepositoryProvider).create(
-            ProjectsCompanion.insert(
-              id: const Uuid().v4(),
-              name: name,
-              type: type,
-              description: d.Value(
-                descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
-              ),
-            ),
-          );
+      // createResolvingName：活跃重名自动加序号；软删除同名则复活复用
+      // （唯一索引是全表的，软删除行仍占名 —— 裸 create 会炸 UNIQUE 2067）。
+      final ProjectNameResolution res =
+          await ref.read(projectRepositoryProvider).createResolvingName(
+                ProjectsCompanion.insert(
+                  id: const Uuid().v4(),
+                  name: name,
+                  type: type,
+                  description: d.Value(
+                    descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
+                  ),
+                ),
+              );
+      if (context.mounted && res.adjusted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res.revived
+                ? l10n.tf('PM.RevivedSameName',
+                    '已存在同名项目「{0}」，已复活复用（原数据在删除时已清理）', [name])
+                : l10n.tf('PM.RenamedDuplicate',
+                    '已存在同名项目，本次创建为「{0}」', [res.actualName])),
+          ),
+        );
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -230,11 +245,11 @@ class _ProjectCard extends ConsumerWidget {
                 builder: (ctx) => AlertDialog(
                   title: Text(l10n.t('Common.Delete', '删除')),
                   content: Text(
-                    l10n.tf(
+                    '${l10n.tf(
                       'Common.DeleteConfirm',
                       '确定删除「{0}」吗？此操作不可恢复。',
                       [project.name],
-                    ),
+                    )}\n\n${l10n.t('PM.DeleteCascadeHint', '该项目关联的分卷/章节/世界观数据将一并删除（角色库保留）。')}',
                   ),
                   actions: [
                     TextButton(
@@ -248,7 +263,31 @@ class _ProjectCard extends ConsumerWidget {
                   ],
                 ),
               );
-              if (ok == true) await repo.delete(project.id);
+              if (ok == true) {
+                try {
+                  // 级联删除项目全部关联数据（角色库除外）
+                  await repo.deleteCascade(project.id);
+                  // 被删项目正是当前选中项目 → 自动退出为未选择状态
+                  if (ref.read(currentProjectIdProvider) == project.id) {
+                    ref.read(currentProjectIdProvider.notifier).clear();
+                  }
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(l10n.tf(
+                          'PM.DeleteDone', '已删除「{0}」及其关联数据', [project.name])),
+                    ));
+                  }
+                } on Object catch (e) {
+                  // 删除失败必须显式告知（此前的静默失败表现为「点了没反应」）
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      backgroundColor: Theme.of(context).colorScheme.error,
+                      content: Text(l10n.tf(
+                          'PM.DeleteFailed', '删除失败：{0}', <Object>['$e'])),
+                    ));
+                  }
+                }
+              }
             }
           },
           itemBuilder: (context) => [

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/services/project_content_archive_service.dart';
+import '../../application/services/writing_archive_service.dart';
 import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 import '../layout/navigation.dart';
@@ -72,6 +73,9 @@ class _ArchiveTabState extends ConsumerState<_ArchiveTab> {
   List<ProjectArchiveEntry>? _entries;
   String? _error;
 
+  /// 档案级别筛选：all / project / volume / chapter。
+  String _levelFilter = 'all';
+
   @override
   void initState() {
     super.initState();
@@ -140,6 +144,12 @@ class _ArchiveTabState extends ConsumerState<_ArchiveTab> {
         ),
       );
     }
+    final List<ProjectArchiveEntry> visible = _levelFilter == 'all'
+        ? entries
+        : entries
+            .where((ProjectArchiveEntry e) =>
+                (e.metadata[ArchiveDescription.kLevel] ?? '') == _levelFilter)
+            .toList(growable: false);
     return Column(
       children: [
         Padding(
@@ -158,43 +168,238 @@ class _ArchiveTabState extends ConsumerState<_ArchiveTab> {
             ],
           ),
         ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: entries.length,
-            itemBuilder: (context, i) {
-              final e = entries[i];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: Icon(_iconFor(e.taskType), color: scheme.primary),
-                  title: Text(
-                    e.title.trim().isNotEmpty
-                        ? e.title
-                        : _taskTypeLabel(e.taskType, l10n),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    '${_taskTypeLabel(e.taskType, l10n)} · ${e.characterCount} 字 · '
-                    '${DateTime.fromMillisecondsSinceEpoch(e.createdAtMs).toString().substring(0, 19)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: e.metadata.isEmpty
-                      ? null
-                      : Badge(
-                          label: Text('${e.metadata.length}'),
-                          backgroundColor: scheme.secondaryContainer,
-                        ),
-                  onTap: () => _openDetail(e),
+        // 档案级别筛选：项目 / 分卷 / 章节
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+          child: Wrap(
+            spacing: 6,
+            children: <Widget>[
+              for (final (String key, String label) in <(String, String)>[
+                ('all', l10n.t('GAP.Level.All', '全部')),
+                ('project', l10n.t('GAP.Level.Project', '项目档案')),
+                ('volume', l10n.t('GAP.Level.Volume', '分卷档案')),
+                ('chapter', l10n.t('GAP.Level.Chapter', '章节档案')),
+              ])
+                ChoiceChip(
+                  label: Text(label, style: const TextStyle(fontSize: 12)),
+                  selected: _levelFilter == key,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (_) => setState(() => _levelFilter = key),
                 ),
-              );
-            },
+            ],
           ),
+        ),
+        Expanded(
+          child: visible.isEmpty
+              ? Center(
+                  child: Text(
+                    l10n.t('GAP.Level.Empty', '该级别暂无档案'),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: visible.length,
+                  itemBuilder: (context, i) {
+                    final e = visible[i];
+                    final String level =
+                        e.metadata[ArchiveDescription.kLevel] ?? '';
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        leading: Icon(
+                          level.isNotEmpty
+                              ? _levelIcon(level)
+                              : _iconFor(e.taskType),
+                          color: scheme.primary,
+                        ),
+                        title: Text(
+                          e.title.trim().isNotEmpty
+                              ? e.title
+                              : _taskTypeLabel(e.taskType, l10n),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          '${level.isNotEmpty ? _levelLabel(level, l10n) : _taskTypeLabel(e.taskType, l10n)}'
+                          ' · ${e.characterCount} 字 · '
+                          '${DateTime.fromMillisecondsSinceEpoch(e.createdAtMs).toString().substring(0, 19)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            if (e.metadata.isNotEmpty)
+                              Badge(
+                                label: Text('${e.metadata.length}'),
+                                backgroundColor: scheme.secondaryContainer,
+                              ),
+                            // 手动删减 / 修改：下标以完整 entries 为准
+                            //（visible 只是筛选后的子集）。
+                            PopupMenuButton<String>(
+                              tooltip: l10n.t('Common.More', '更多'),
+                              onSelected: (String v) {
+                                final int idx = entries.indexOf(e);
+                                if (idx < 0) return;
+                                if (v == 'edit') {
+                                  _editEntry(e, idx);
+                                } else if (v == 'delete') {
+                                  _deleteEntry(e, idx);
+                                }
+                              },
+                              itemBuilder: (BuildContext ctx) =>
+                                  <PopupMenuEntry<String>>[
+                                PopupMenuItem<String>(
+                                  value: 'edit',
+                                  child: Text(l10n.t('Common.Edit', '修改')),
+                                ),
+                                PopupMenuItem<String>(
+                                  value: 'delete',
+                                  child: Text(l10n.t('Common.Delete', '删除')),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        onTap: () => _openDetail(e),
+                      ),
+                    );
+                  },
+                ),
         ),
       ],
     );
+  }
+
+  String _levelLabel(String level, L10n l10n) => switch (level) {
+        ArchiveLevel.project => l10n.t('GAP.Level.Project', '项目档案'),
+        ArchiveLevel.volume => l10n.t('GAP.Level.Volume', '分卷档案'),
+        ArchiveLevel.chapter => l10n.t('GAP.Level.Chapter', '章节档案'),
+        _ => level,
+      };
+
+  IconData _levelIcon(String level) => switch (level) {
+        ArchiveLevel.project => Icons.folder_special_outlined,
+        ArchiveLevel.volume => Icons.menu_book_outlined,
+        ArchiveLevel.chapter => Icons.article_outlined,
+        _ => Icons.description_outlined,
+      };
+
+  /// 手动修改一条档案的标题 / 正文。
+  Future<void> _editEntry(ProjectArchiveEntry e, int index) async {
+    final l10n = ref.read(l10nProvider);
+    final TextEditingController titleCtl =
+        TextEditingController(text: e.title);
+    final TextEditingController contentCtl =
+        TextEditingController(text: e.content);
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(l10n.t('GAP.Edit.Title', '修改档案')),
+        content: SizedBox(
+          width: 680,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              TextField(
+                controller: titleCtl,
+                decoration: InputDecoration(
+                  labelText: l10n.t('GAP.Edit.EntryTitle', '标题'),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Flexible(
+                child: TextField(
+                  controller: contentCtl,
+                  maxLines: null,
+                  minLines: 10,
+                  decoration: InputDecoration(
+                    labelText: l10n.t('GAP.Edit.Content', '正文'),
+                    border: const OutlineInputBorder(),
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.t('Common.Save', '保存')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final String pid = ref.read(currentProjectIdProvider) ?? '';
+    final bool done = await ref
+        .read(projectContentArchiveProvider)
+        .updateEntry(pid, index, title: titleCtl.text, content: contentCtl.text);
+    if (!mounted) return;
+    if (done) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(l10n.t('GAP.Edit.Saved', '已保存修改')),
+      ));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Theme.of(context).colorScheme.error,
+        content: Text(l10n.t('GAP.Edit.Failed', '修改失败：未找到该档案或写入失败')),
+      ));
+    }
+  }
+
+  /// 手动删除一条档案（不可恢复，需二次确认）。
+  Future<void> _deleteEntry(ProjectArchiveEntry e, int index) async {
+    final l10n = ref.read(l10nProvider);
+    final String name = e.title.trim().isNotEmpty ? e.title : e.taskType;
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(l10n.t('Common.Delete', '删除')),
+        content: Text(l10n.tf(
+          'GAP.Delete.Confirm',
+          '确定删除这条档案吗？此操作不可恢复。\n\n{0}',
+          <Object>[name.length > 40 ? '${name.substring(0, 40)}…' : name],
+        )),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.t('Common.Delete', '删除')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final String pid = ref.read(currentProjectIdProvider) ?? '';
+    final bool done =
+        await ref.read(projectContentArchiveProvider).deleteEntry(pid, index);
+    if (!mounted) return;
+    if (done) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(l10n.t('GAP.Delete.Done', '已删除该档案')),
+      ));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: Theme.of(context).colorScheme.error,
+        content: Text(l10n.t('GAP.Delete.Failed', '删除失败：未找到该档案或写入失败')),
+      ));
+    }
   }
 
   void _openDetail(ProjectArchiveEntry e) {
@@ -216,6 +421,9 @@ class _ArchiveTabState extends ConsumerState<_ArchiveTab> {
         'GenerateChapterContent' =>
           l10n.t('GAP.TaskType.GenerateChapterContent', '章节生成'),
         'ReviseChapter' => l10n.t('GAP.TaskType.ReviseChapter', '章节改写'),
+        'ArchiveProject' => l10n.t('GAP.Level.Project', '项目档案'),
+        'ArchiveVolume' => l10n.t('GAP.Level.Volume', '分卷档案'),
+        'ArchiveChapter' => l10n.t('GAP.Level.Chapter', '章节档案'),
         _ => taskType.isEmpty
             ? l10n.t('GAP.TaskType.Unknown', '未命名任务')
             : taskType,
@@ -227,6 +435,35 @@ class _ArchiveDetailPage extends ConsumerWidget {
   const _ArchiveDetailPage({required this.entry});
 
   final ProjectArchiveEntry entry;
+
+  /// 结构化四段描述（level 档案才有；缺省为 null）。
+  ArchiveDescription? get _desc {
+    final String level = entry.metadata[ArchiveDescription.kLevel] ?? '';
+    if (level.isEmpty) return null;
+    return ArchiveDescription.fromMetadata(entry.metadata);
+  }
+
+  Widget _descRow(String label, String value, ColorScheme scheme) {
+    final String v = value.trim().isEmpty ? '—' : value.trim();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 64,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 12, color: scheme.onSurfaceVariant)),
+          ),
+          Expanded(
+            child: SelectableText(v,
+                style: const TextStyle(fontSize: 12, height: 1.5)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -250,6 +487,40 @@ class _ArchiveDetailPage extends ConsumerWidget {
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
+          // 档案描述（四段固定格式：时间范围+主题任务+得失总结+规避措施）
+          if (_desc != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.30),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: scheme.primary.withValues(alpha: 0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    l10n.t('GAP.Desc.Title', '档案描述'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _descRow(l10n.t('GAP.Desc.TimeRange', '时间范围'),
+                      _desc!.timeRange, scheme),
+                  _descRow(l10n.t('GAP.Desc.ThemeTask', '主题任务'),
+                      _desc!.themeTask, scheme),
+                  _descRow(l10n.t('GAP.Desc.GainsLosses', '得失总结'),
+                      _desc!.gainsLosses, scheme),
+                  _descRow(l10n.t('GAP.Desc.Safeguards', '规避措施'),
+                      _desc!.safeguards, scheme),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           ReadonlyProseView(content: entry.content),
           if (entry.metadata.isNotEmpty) ...[
             const SizedBox(height: 20),
@@ -309,6 +580,9 @@ class _ArchiveDetailPage extends ConsumerWidget {
         'GenerateChapterContent' =>
           l10n.t('GAP.TaskType.GenerateChapterContent', '章节生成'),
         'ReviseChapter' => l10n.t('GAP.TaskType.ReviseChapter', '章节改写'),
+        'ArchiveProject' => l10n.t('GAP.Level.Project', '项目档案'),
+        'ArchiveVolume' => l10n.t('GAP.Level.Volume', '分卷档案'),
+        'ArchiveChapter' => l10n.t('GAP.Level.Chapter', '章节档案'),
         _ => taskType.isEmpty
             ? l10n.t('GAP.TaskType.Unknown', '未命名任务')
             : taskType,
@@ -318,6 +592,13 @@ class _ArchiveDetailPage extends ConsumerWidget {
         'RequirementBrief' => l10n.t('GAP.Meta.RequirementBrief', '需求简报（SubAgent）'),
         'MainDraft' => l10n.t('GAP.Meta.MainDraft', '初稿（MainAgent）'),
         'WorkflowMode' => l10n.t('GAP.Meta.WorkflowMode', '工作流模式'),
+        'timeRange' => l10n.t('GAP.Desc.TimeRange', '时间范围'),
+        'themeTask' => l10n.t('GAP.Desc.ThemeTask', '主题任务'),
+        'gainsLosses' => l10n.t('GAP.Desc.GainsLosses', '得失总结'),
+        'safeguards' => l10n.t('GAP.Desc.Safeguards', '规避措施'),
+        'level' => l10n.t('GAP.Meta.Level', '档案级别'),
+        'volumeId' => l10n.t('GAP.Meta.VolumeId', '分卷 ID'),
+        'chapterId' => l10n.t('GAP.Meta.ChapterId', '章节 ID'),
         _ => key,
       };
 }

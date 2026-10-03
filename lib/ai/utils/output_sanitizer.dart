@@ -88,15 +88,59 @@ class AIOutputSanitizer {
     final trimmed = content.trim();
     final isJsonObject = trimmed.startsWith('{') && trimmed.endsWith('}');
     final isJsonArray = trimmed.startsWith('[') && trimmed.endsWith(']');
-    if (!isJsonObject && !isJsonArray) return content;
+    final candidate = isJsonObject || isJsonArray
+        ? trimmed
+        : _findEmbeddedJson(trimmed);
+    if (candidate == null) return content;
 
     try {
-      final decoded = jsonDecode(trimmed);
+      final decoded = jsonDecode(candidate);
       final extracted = _extractFromNode(decoded, preferredJsonKeys);
       return extracted == null || extracted.isEmpty ? content : extracted;
     } on FormatException {
       return content;
     }
+  }
+
+  static String? _findEmbeddedJson(String content) {
+    for (var start = 0; start < content.length; start++) {
+      final opening = content[start];
+      if (opening != '{' && opening != '[') continue;
+      final closing = opening == '{' ? '}' : ']';
+      var depth = 0;
+      var inString = false;
+      var escaped = false;
+      for (var i = start; i < content.length; i++) {
+        final ch = content[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch == '\\' && inString) {
+          escaped = true;
+          continue;
+        }
+        if (ch == '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch == opening) depth++;
+        if (ch == closing) {
+          depth--;
+          if (depth == 0) {
+            final candidate = content.substring(start, i + 1);
+            try {
+              jsonDecode(candidate);
+              return candidate;
+            } on FormatException {
+              break;
+            }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   static String? _extractFromNode(dynamic node, List<String> preferredJsonKeys) {

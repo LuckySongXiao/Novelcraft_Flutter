@@ -27,6 +27,7 @@ import '../models/chat.dart';
 import '../models/provider.dart';
 import '../prompts/prompt_template.dart';
 import '../rwkv/rwkv_sampling.dart';
+import '../runtime_settings.dart';
 import '../utils/localized_text.dart';
 import '../utils/output_sanitizer.dart';
 
@@ -382,7 +383,7 @@ class DualAgentWorkflowService {
     required int maxTokens,
   }) async {
     final Map<String, dynamic> parameters = isRwkvFamilyProvider(provider.providerName)
-        ? Map<String, dynamic>.of(kRwkvAntiRepeatSampling)
+        ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
         : <String, dynamic>{};
     final ChatRequest request = ChatRequest(
       model: model,

@@ -16,7 +16,7 @@ class Semaphore {
   /// 构造信号量。
   ///
   /// [max] 为最大并发许可数。
-  Semaphore(this._max) : _available = _max;
+  Semaphore(int max) : _max = max < 1 ? 1 : max, _available = max < 1 ? 1 : max;
 
   /// 当前可用许可数（仅用于观测，不应据此做并发判断）。
   int get available => _available;

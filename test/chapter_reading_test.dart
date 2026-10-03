@@ -119,9 +119,9 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       await tester.pump();
       expect(
-        find.text('夜色渐深。'),
+        find.textContaining('夜色渐深。'),
         findsOneWidget,
-        reason: '窄屏下正文正常渲染',
+        reason: '窄屏下正文正常渲染（正文合并为单一 Text 渲染）',
       );
       expect(
         tester.widgetList<ConstrainedBox>(
@@ -151,8 +151,9 @@ void main() {
         await tester.pump();
       }
       // 连续点 8 次（17-8=9 → 钳到 13）
-      final prose = tester.widgetList<SelectableText>(
-        find.byType(SelectableText),
+      // 正文已合并为单一 Text（SelectionListener 精确选区捕获），按 Text 样式断言
+      final prose = tester.widgetList<Text>(
+        find.byWidgetPredicate((w) => w is Text && w.data != null && w.data!.contains('夜色渐深')),
       );
       expect(
         prose.any((t) => (t.style?.fontSize ?? 0) == 13),

@@ -9,6 +9,7 @@ enum NavigationTarget {
   projectManagement,
   projectOverview,
   volumeManagement,
+  chapterManagement,
   characterManagement,
   timeline,
   relationshipNetwork,

@@ -26,6 +26,7 @@ import '../../ai/models/chat.dart';
 import '../../ai/models/provider.dart';
 import '../../ai/providers/rwkv_provider.dart';
 import '../../ai/rwkv/rwkv_sampling.dart';
+import '../../ai/runtime_settings.dart';
 import '../../ai/utils/localized_text.dart';
 import '../../ai/utils/output_sanitizer.dart';
 import '../../ai/utils/segment_rewrite.dart';
@@ -526,7 +527,7 @@ class ChapterRevisionService {
           maxTokens: maxTokens,
           // RWKV 家族才认这套防复读采样参数（其它厂商会 400）
           parameters: isRwkvFamilyProvider(provider.providerName)
-              ? Map<String, dynamic>.of(kRwkvAntiRepeatSampling)
+              ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
               : <String, dynamic>{},
         ));
         final String cleaned = clean(resp.isSuccess ? resp.content : '');

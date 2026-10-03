@@ -39,7 +39,7 @@ import 'rwkv_lightning_launch_args.dart';
 import 'rwkv_models.dart';
 import 'rwkv_official_resources.dart' show OfficialServerVariant;
 import 'rwkv_session.dart';
-import 'rwkv_sampling.dart';
+import '../runtime_settings.dart';
 import 'rwkv_state.dart';
 
 /// 单次推理的引擎级结果（比 [ChatResponse] 多了 state 指针信息）。
@@ -693,7 +693,8 @@ class RwkvEngine {
     if (topK > 0) body['top_k'] = topK;
     // 防复读采样参数（RWKV alpha_* + llama.cpp DRY）打底，调用方显式给的值优先。
     // 与 chat 通道保持一致：长文生成最容易踩的坑就是复读。
-    kRwkvAntiRepeatSampling
+    aiRuntimeSettings
+        .samplingParams()
         .forEach((String k, Object? v) => body.putIfAbsent(k, () => v));
     // 原生生成参数（含 stop_tokens：批量/contents 路由不传它会返回空文本）展平到顶层。
     // 调用方显式给的值优先。

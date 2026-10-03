@@ -23,6 +23,7 @@ import '../providers/model_manager.dart';
 import '../providers/rwkv_provider.dart' show RwkvProvider;
 import '../thinking/thinking_chain.dart';
 import '../thinking/thinking_processor.dart';
+import '../runtime_settings.dart';
 
 /// Agent 状态枚举（对应 C# `AgentStatus`）。
 enum AgentStatus {
@@ -472,8 +473,29 @@ abstract class BaseAgent implements IAgent {
 
   // ----- 执行编排 -----
 
-  /// 是否对指定任务使用思维链（默认对复杂任务启用）。
+  /// 是否对指定任务使用思维链（受 AI 配置页「思维链开关 + 思考强度」控制）。
+  ///
+  /// - 开关关闭：一律不启用（此前 processor 注入即启用的行为由开关接管）；
+  /// - 低：仅核心长文任务（正文/大纲/续写/角色设计）；
+  /// - 中：默认复杂任务集合（与历史行为一致）；
+  /// - 高：所有任务。
   bool shouldUseThinkingChain(String taskType) {
+    final AiRuntimeSettings settings = aiRuntimeSettings;
+    if (!settings.thinkingEnabled) return false;
+    const coreTasks = {
+      'GenerateChapterContent',
+      'GenerateOutline',
+      'ContinueChapter',
+      'DesignCharacters',
+    };
+    switch (settings.thinkingIntensity) {
+      case ThinkingIntensity.low:
+        return coreTasks.contains(taskType);
+      case ThinkingIntensity.high:
+        return true;
+      case ThinkingIntensity.medium:
+        break;
+    }
     const complexTasks = {
       'GenerateOutline',
       'CreateWorldSetting',

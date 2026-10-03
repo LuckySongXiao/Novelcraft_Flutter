@@ -101,6 +101,8 @@ class RwkvConcurrencyController {
   /// 当前在途请求数（观测用）。
   int _inFlight = 0;
 
+  int _reservedPermits = 0;
+
   RwkvConcurrencyController({
     this.probe,
     this.clientHardCap = 64,
@@ -128,7 +130,10 @@ class RwkvConcurrencyController {
   Future<void> waitForPermit() async {
     while (true) {
       final int permits = await effectivePermits();
-      if (_inFlight < permits) return;
+      if (_inFlight + _reservedPermits < permits) {
+        _reservedPermits++;
+        return;
+      }
       final waiter = Completer<void>();
       _permitWaiters.add(waiter);
       // 1s 兜底复评：覆盖「许可升高但无本地事件」的场景；正常情况下
@@ -213,9 +218,17 @@ class RwkvConcurrencyController {
     }
   }
 
-  void enterInFlight() => _inFlight++;
+  void enterInFlight() {
+    if (_reservedPermits > 0) _reservedPermits--;
+    _inFlight++;
+  }
+
   void leaveInFlight() {
-    if (_inFlight > 0) _inFlight--;
+    if (_inFlight > 0) {
+      _inFlight--;
+    } else if (_reservedPermits > 0) {
+      _reservedPermits--;
+    }
     // 腾出一个许可：唤醒队首等待者复评
     _wakeOneWaiter();
   }

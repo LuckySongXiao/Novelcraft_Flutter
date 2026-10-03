@@ -360,8 +360,8 @@ class OpenAICompatibleProvider implements IModelProvider {
       await for (final line
           in response.stream.transform(utf8.decoder).transform(const LineSplitter())) {
         if (line.trim().isEmpty) continue;
-        if (!line.startsWith('data: ')) continue;
-        final data = line.substring(6).trim();
+        if (!line.startsWith('data:')) continue;
+        final data = line.substring(5).trim();
         if (data == '[DONE]') break;
         try {
           final chunk = OpenAIStreamChunk.fromJson(

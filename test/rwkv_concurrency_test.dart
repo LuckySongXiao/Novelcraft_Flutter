@@ -6,6 +6,8 @@
 // - 许可周期兜底（容量探测升档，无本地事件路径）。
 //
 // 运行：flutter test test/rwkv_concurrency_test.dart
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:logging/logging.dart';
 
@@ -60,12 +62,11 @@ void main() {
         clientHardCap: 8,
         logger: Logger('t'),
       );
-      // 触发惩罚：bsz 4 > max 2 → 建议 = min(2, 4~/2=2) = 2（非 1）
-      c.noteBszOverflow(4, 2);
-      expect(await c.effectivePermits(), 2);
+      // 触发惩罚：bsz 2 > max 1 → 暂时压到 1。
+      c.noteBszOverflow(2, 1);
+      expect(await c.effectivePermits(), 1);
 
-      // 占满 2 个许可，两个等待者
-      c.enterInFlight();
+      // 占用 1 个许可，两个等待者；惩罚档回升到 3 后应有两个空槽。
       c.enterInFlight();
       var a = false, b = false;
       final wa = c.waitForPermit().then((_) => a = true);
@@ -74,13 +75,16 @@ void main() {
       expect(a, isFalse);
       expect(b, isFalse);
 
-      // 连续 5 次成功 → 惩罚 2→3 → 唤醒全部 → 两个等待者都放行
-      for (var i = 0; i < 5; i++) {
+      // 连续 10 次成功 → 惩罚 1→3 → 唤醒全部 → 两个等待者都放行
+      for (var i = 0; i < 10; i++) {
         c.noteSuccess();
       }
       await Future.wait(<Future<void>>[wa, wb]);
       expect(a, isTrue);
       expect(b, isTrue, reason: '惩罚回升唤醒全部等待者后容量足够双双放行');
+      c.enterInFlight();
+      c.enterInFlight();
+      expect(c.inFlight, 3);
     });
 
     test('周期兜底：容量升档（TTL 过期重探）后放行', () async {
@@ -103,6 +107,37 @@ void main() {
       permits = 8;
       await waiter.timeout(const Duration(seconds: 3));
       expect(entered, isTrue, reason: '容量升档 + TTL 过期后兜底周期应放行');
+    });
+
+    test('并发 waitForPermit 调用不会同时越过单许可上限', () async {
+      final probes = <Completer<RwkvServerCapacity?>>[];
+      final c = RwkvConcurrencyController(
+        probe: () {
+          final probe = Completer<RwkvServerCapacity?>();
+          probes.add(probe);
+          return probe.future;
+        },
+        clientHardCap: 1,
+        logger: Logger('t'),
+      );
+      final first = c.waitForPermit();
+      final second = c.waitForPermit();
+      while (probes.length < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      for (final probe in probes) {
+        probe.complete(_cap(1));
+      }
+      var secondEntered = false;
+      final secondDone = second.then((_) => secondEntered = true);
+      await first;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(secondEntered, isFalse);
+      c.enterInFlight();
+      expect(c.inFlight, 1);
+      c.leaveInFlight();
+      await secondDone;
+      expect(secondEntered, isTrue);
     });
   });
 }

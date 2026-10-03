@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di.dart';
 import '../../l10n/l10n.dart';
+import '../pages/multi_agent_run_matrix_dialog.dart';
+import '../state/multi_agent_run.dart';
 import '../../theme/app_theme.dart';
 import 'navigation.dart';
 import '../pages/placeholder_page.dart';
@@ -23,7 +25,7 @@ import '../pages/dialog_generation_page.dart';
 import '../pages/project_health_check_page.dart';
 import '../pages/prerequisite_generation_page.dart';
 import '../pages/generation_archive_page.dart';
-import '../pages/one_click_generation_dialog.dart';
+import '../pages/multi_agent_generation_dialog.dart';
 
 /// 触控平台放宽二级导航列表项密度（安卓操控性：触控目标更大）；桌面保持紧凑。
 final VisualDensity kSubNavTileDensity =
@@ -32,6 +34,13 @@ final VisualDensity kSubNavTileDensity =
             defaultTargetPlatform == TargetPlatform.iOS)
     ? VisualDensity.standard
     : VisualDensity.compact;
+
+/// 触屏平台判定（安卓/iOS 手机横屏时二级导航收起为图标列）。
+/// 仅用于布局收窄，不影响 Web/桌面回归基线。
+bool get kSubNavTouchPlatform =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
 
 /// 应用外壳 —— 对应 C# 的 MainWindow.xaml
 ///
@@ -53,6 +62,54 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// 用户手动切换后以手动值为准。
   bool? _extendedOverride;
 
+  /// AppBar 右上角的「写作中」绿色动态长条（多智能体写书后台运行时出现，
+  /// 点击打开章节矩阵实时进度视图）。
+  List<Widget> _buildWritingPill(BuildContext context) {
+    final MultiAgentRunState? run = ref.watch(multiAgentRunProvider);
+    if (run == null || !run.running) return const <Widget>[];
+    final double? p = run.effectiveProgress;
+    final String pct = p == null ? '' : ' ${(p * 100).round()}%';
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: Tooltip(
+          message: run.step,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => showMultiAgentRunMatrixDialog(context),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.16),
+                border: Border.all(color: Colors.green, width: 1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const SizedBox(
+                    width: 9,
+                    height: 9,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.6, color: Colors.green),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '写作中$pct',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.green,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final nav = ref.watch(navigationProvider);
@@ -63,6 +120,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     // 二级导航再占 160px 后正文仅 ~260px。窄屏默认收起为图标栏（80px）。
     final width = MediaQuery.sizeOf(context).width;
     final extended = _extendedOverride ?? width >= 1000;
+    final writingPill = _buildWritingPill(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -90,6 +148,7 @@ class _AppShellState extends ConsumerState<AppShell> {
               onPressed: _oneClickGenerate,
             ),
           const SizedBox(width: 4),
+          ...writingPill,
           IconButton(
             icon: Text(l10n.isEnglish ? '中' : 'EN'),
             tooltip: l10n.isEnglish
@@ -171,7 +230,12 @@ class _AppShellState extends ConsumerState<AppShell> {
                             NavigationRailDestination(
                               icon: const Icon(Icons.menu_book_outlined),
                               selectedIcon: const Icon(Icons.menu_book),
-                              label: Text(l10n.t('Shell.VM.Title', '卷宗章节')),
+                              label: Text(l10n.t('Shell.VM.Title', '卷宗管理')),
+                            ),
+                            NavigationRailDestination(
+                              icon: const Icon(Icons.article_outlined),
+                              selectedIcon: const Icon(Icons.article),
+                              label: Text(l10n.t('Shell.ChM.Title', '章节管理')),
                             ),
                             NavigationRailDestination(
                               icon: const Icon(Icons.people_outline),
@@ -228,14 +292,14 @@ class _AppShellState extends ConsumerState<AppShell> {
     );
   }
 
-  /// 一键生成书籍：弹进度对话框 → 成功后选中新项目并跳到项目概览。
+  /// 多智能体协同写书：弹向导（书名/作者/分卷/每卷章数/子智能体数）→
+  /// 三级大纲 + 章节团队协作 → 成功后选中新项目并跳到项目概览。
   ///
-  /// 不做「RWKV 服务未注册」的前置拦截：本地 RWKV provider 由 DI 常量提供、始终存在，
-  /// 真正需要判断的是"推理服务是否可达"，而那由服务内部 `testConnection` 给出
-  /// （失败时报 `OCG.RwkvUnreachable`），比在此处猜更准确。
+  /// 不做「推理服务未注册」的前置拦截：真正需要判断的是"写作模型是否可达"，
+  /// 由服务内部 `testConnection` 给出，比在此处猜更准确。
   Future<void> _oneClickGenerate() async {
     final l10n = ref.read(l10nProvider);
-    final result = await showOneClickGenerationDialog(context);
+    final result = await showMultiAgentGenerationDialog(context);
     if (!mounted || result == null) return;
 
     if (result.projectId.isNotEmpty) {
@@ -265,8 +329,10 @@ class _AppShellState extends ConsumerState<AppShell> {
         return 1;
       case NavigationTarget.volumeManagement:
         return 2;
-      case NavigationTarget.characterManagement:
+      case NavigationTarget.chapterManagement:
         return 3;
+      case NavigationTarget.characterManagement:
+        return 4;
       case NavigationTarget.worldSettingManagement:
       case NavigationTarget.cultivationSystem:
       case NavigationTarget.politicalSystem:
@@ -274,7 +340,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       case NavigationTarget.resource:
       case NavigationTarget.race:
       case NavigationTarget.currencySystem:
-        return 4;
+        return 5;
       case NavigationTarget.aiCollaboration:
       case NavigationTarget.aiConfiguration:
       case NavigationTarget.dialogGeneration:
@@ -282,7 +348,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       case NavigationTarget.projectHealthCheck:
       case NavigationTarget.prerequisiteGeneration:
       case NavigationTarget.generationArchive:
-        return 5;
+        return 6;
       default:
         return 0;
     }
@@ -293,9 +359,10 @@ class _AppShellState extends ConsumerState<AppShell> {
       0 => NavigationTarget.projectManagement,
       1 => NavigationTarget.projectOverview,
       2 => NavigationTarget.volumeManagement,
-      3 => NavigationTarget.characterManagement,
-      4 => NavigationTarget.worldSettingManagement,
-      5 => NavigationTarget.aiCollaboration,
+      3 => NavigationTarget.chapterManagement,
+      4 => NavigationTarget.characterManagement,
+      5 => NavigationTarget.worldSettingManagement,
+      6 => NavigationTarget.aiCollaboration,
       _ => NavigationTarget.projectManagement,
     };
     ref.read(navigationProvider.notifier).navigateTo(target);
@@ -408,7 +475,9 @@ class _AppShellState extends ConsumerState<AppShell> {
     return switch (t) {
       NavigationTarget.projectManagement => l10n.t('Shell.PM.Title', '项目管理'),
       NavigationTarget.projectOverview => l10n.t('Shell.PO.Title', '项目概览'),
-      NavigationTarget.volumeManagement => l10n.t('VM.Title', '卷宗章节'),
+      NavigationTarget.volumeManagement => l10n.t('VM.Title', '卷宗管理'),
+      NavigationTarget.chapterManagement =>
+        l10n.t('CHM.Title', '章节管理'),
       NavigationTarget.characterManagement => l10n.t('CM.Title', '人物管理'),
       NavigationTarget.worldSettingManagement => l10n.t(
         'WSSub.WS.Title',
@@ -522,7 +591,7 @@ class _StatusBar extends ConsumerWidget {
           ),
           const Spacer(),
           Text(
-            'v1.0.0+4',
+            'v1.0.0+23',
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
         ],
@@ -550,18 +619,27 @@ class _WorldSubNav extends ConsumerWidget {
         .where(SystemScopes.isJsonSystem)
         .toList();
 
+    // 触屏窄屏（手机横屏逻辑宽 ~930 < 1000，与主侧栏收起阈值同源）：
+    // 160px 标签列把内容区挤到不足 600，标签两行换行也难读 ——
+    // 收起为 64px 图标列（Tooltip 显示全名）。
+    final bool iconOnly = kSubNavTouchPlatform &&
+        MediaQuery.sizeOf(context).width < 1000;
+
     return SizedBox(
-      width: 160,
+      width: iconOnly ? 64 : 160,
       child: ColoredBox(
         color: scheme.surfaceContainerLow,
         child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          padding: EdgeInsets.symmetric(vertical: 8, horizontal: iconOnly ? 6 : 8),
           children: [
-            _groupLabel(context, l10n.t('WSSub.DbEntities', '数据库实体')),
-            ...dbBacked.map((t) => _item(context, t, l10n)),
-            const SizedBox(height: 12),
-            _groupLabel(context, l10n.t('WSSub.JsonSystems', 'JSON 体系')),
-            ...jsonBacked.map((t) => _item(context, t, l10n)),
+            if (!iconOnly) _groupLabel(context, l10n.t('WSSub.DbEntities', '数据库实体')),
+            ...dbBacked.map((t) => _item(context, t, l10n, iconOnly: iconOnly)),
+            if (!iconOnly) ...[
+              const SizedBox(height: 12),
+              _groupLabel(context, l10n.t('WSSub.JsonSystems', 'JSON 体系')),
+            ] else
+              const SizedBox(height: 10),
+            ...jsonBacked.map((t) => _item(context, t, l10n, iconOnly: iconOnly)),
           ],
         ),
       ),
@@ -583,9 +661,43 @@ class _WorldSubNav extends ConsumerWidget {
     );
   }
 
-  Widget _item(BuildContext context, NavigationTarget t, L10n l10n) {
+  Widget _item(
+    BuildContext context,
+    NavigationTarget t,
+    L10n l10n, {
+    required bool iconOnly,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final selected = t == current;
+    if (iconOnly) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        // ListTile 必须自带 Material：外层 ColoredBox 会遮挡波纹/选中底色
+        // （Flutter 3.47 起该场景直接抛断言，全局每页触发）。
+        child: Material(
+          type: MaterialType.transparency,
+          child: Tooltip(
+            message: _label(t, l10n),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => onSelect(t),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                decoration: BoxDecoration(
+                  color: selected ? scheme.secondaryContainer : null,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _iconFor(t),
+                  size: 20,
+                  color: selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       // ListTile 必须自带 Material：外层 ColoredBox 会遮挡波纹/选中底色
@@ -613,6 +725,26 @@ class _WorldSubNav extends ConsumerWidget {
       ),
     );
   }
+
+  static IconData _iconFor(NavigationTarget t) => switch (t) {
+        NavigationTarget.worldSettingManagement => Icons.public,
+        NavigationTarget.cultivationSystem => Icons.self_improvement,
+        NavigationTarget.politicalSystem => Icons.account_balance,
+        NavigationTarget.secretRealm => Icons.landscape,
+        NavigationTarget.resource => Icons.diamond,
+        NavigationTarget.race => Icons.groups,
+        NavigationTarget.currencySystem => Icons.paid,
+        NavigationTarget.relationshipNetwork => Icons.hub,
+        NavigationTarget.timeline => Icons.schedule,
+        NavigationTarget.timelineEventManagement => Icons.event,
+        NavigationTarget.characterEventManagement => Icons.theater_comedy,
+        NavigationTarget.characterRelationshipManagement => Icons.diversity_3,
+        NavigationTarget.factionRelationshipManagement => Icons.flag,
+        NavigationTarget.raceRelationshipManagement => Icons.handshake,
+        NavigationTarget.cultivationLevelManagement => Icons.stairs,
+        NavigationTarget.politicalPositionManagement => Icons.badge,
+        _ => Icons.category,
+      };
 
   static String _label(NavigationTarget t, L10n l10n) {
     final scope = SystemScopes.of(t);
@@ -705,20 +837,23 @@ class _AiSubNav extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final l10n = ref.watch(l10nProvider);
+    // 与世界观二级导航同款触屏收起逻辑（64px 图标列，Tooltip 全名）。
+    final bool iconOnly = kSubNavTouchPlatform &&
+        MediaQuery.sizeOf(context).width < 1000;
     return SizedBox(
-      width: 160,
+      width: iconOnly ? 64 : 160,
       child: ColoredBox(
         color: scheme.surfaceContainerLow,
         child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          padding: EdgeInsets.symmetric(vertical: 8, horizontal: iconOnly ? 6 : 8),
           children: [
-            _groupLabel(context, l10n.t('AISub.Group', 'AI 功能')),
-            _item(context, NavigationTarget.aiCollaboration, l10n),
-            _item(context, NavigationTarget.aiConfiguration, l10n),
-            _item(context, NavigationTarget.dialogGeneration, l10n),
-            _item(context, NavigationTarget.prerequisiteGeneration, l10n),
-            _item(context, NavigationTarget.projectHealthCheck, l10n),
-            _item(context, NavigationTarget.generationArchive, l10n),
+            if (!iconOnly) _groupLabel(context, l10n.t('AISub.Group', 'AI 功能')),
+            _item(context, NavigationTarget.aiCollaboration, l10n, iconOnly: iconOnly),
+            _item(context, NavigationTarget.aiConfiguration, l10n, iconOnly: iconOnly),
+            _item(context, NavigationTarget.dialogGeneration, l10n, iconOnly: iconOnly),
+            _item(context, NavigationTarget.prerequisiteGeneration, l10n, iconOnly: iconOnly),
+            _item(context, NavigationTarget.projectHealthCheck, l10n, iconOnly: iconOnly),
+            _item(context, NavigationTarget.generationArchive, l10n, iconOnly: iconOnly),
           ],
         ),
       ),
@@ -740,9 +875,42 @@ class _AiSubNav extends ConsumerWidget {
     );
   }
 
-  Widget _item(BuildContext context, NavigationTarget t, L10n l10n) {
+  Widget _item(
+    BuildContext context,
+    NavigationTarget t,
+    L10n l10n, {
+    required bool iconOnly,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final selected = t == current;
+    if (iconOnly) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        // 同世界观二级导航：ListTile 自带 Material，避免 ColoredBox 遮挡
+        child: Material(
+          type: MaterialType.transparency,
+          child: Tooltip(
+            message: _labelForAi(t, l10n),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => onSelect(t),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                decoration: BoxDecoration(
+                  color: selected ? scheme.secondaryContainer : null,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _iconForAi(t),
+                  size: 20,
+                  color: selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       // 同世界观二级导航：ListTile 自带 Material，避免 ColoredBox 遮挡
@@ -769,6 +937,16 @@ class _AiSubNav extends ConsumerWidget {
       ),
     );
   }
+
+  static IconData _iconForAi(NavigationTarget t) => switch (t) {
+    NavigationTarget.aiCollaboration => Icons.forum,
+    NavigationTarget.aiConfiguration => Icons.settings,
+    NavigationTarget.dialogGeneration => Icons.edit_note,
+    NavigationTarget.prerequisiteGeneration => Icons.checklist,
+    NavigationTarget.projectHealthCheck => Icons.health_and_safety,
+    NavigationTarget.generationArchive => Icons.inventory_2,
+    _ => Icons.auto_awesome,
+  };
 
   static String _labelForAi(NavigationTarget t, L10n l10n) => switch (t) {
     NavigationTarget.aiCollaboration => l10n.t('AISub.AC.Title', 'AI 协作创作'),

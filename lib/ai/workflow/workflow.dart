@@ -17,6 +17,10 @@ import 'dart:async';
 import '../agents/agent.dart';
 import 'workflow_branch.dart';
 
+/// 库级自增序号：拼进默认 id，保证同一时钟粒度内创建的实体 id 不冲突
+/// （Windows 计时器粒度可达 15ms，纯时间戳会撞车）。
+int _idSeq = 0;
+
 /// 工作流状态枚举（对应 C# `WorkflowStatus`）。
 enum WorkflowStatus {
   /// 待执行。
@@ -41,6 +45,10 @@ enum WorkflowStatus {
 /// 工作流单个任务（对应 C# `WorkflowTask`）。
 class WorkflowTask {
   /// 任务唯一标识（Dart 端用时间戳字符串）。
+  ///
+  /// 时间戳后拼自增序号：Windows 计时器粒度可达 15ms，同批次连续创建的
+  /// 任务会拿到相同微秒值，导致 cancel 误中他人、_completed 按 id 去重
+  /// 丢条目（task_queue_test 曾因此双红）。
   final String id;
 
   /// 任务名称。
@@ -108,7 +116,7 @@ class WorkflowTask {
     List<String>? dependencies,
     this.priority = 5,
     this.branches,
-  })  : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+  })  : id = id ?? '${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}',
         parameters = parameters ?? <String, dynamic>{},
         dependencies = dependencies ?? <String>[],
         createdAt = DateTime.now();
@@ -161,7 +169,7 @@ class WorkflowDefinition {
     this.completedAt,
     this.progress = 0,
     Map<String, dynamic>? configuration,
-  })  : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+  })  : id = id ?? '${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}',
         tasks = tasks ?? <WorkflowTask>[],
         configuration = configuration ?? <String, dynamic>{},
         createdAt = DateTime.now();

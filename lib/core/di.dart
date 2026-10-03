@@ -56,9 +56,16 @@ import '../application/services/project_content_archive_service.dart';
 import '../application/services/ai_writing_service.dart';
 import '../application/services/prerequisite_generation_service.dart';
 import '../application/services/one_click_novel_generation_service.dart';
+import '../application/services/multi_agent_book_generation_service.dart';
+import '../application/services/writing_archive_service.dart';
+import '../application/services/continue_story_service.dart';
 import '../application/services/chapter_revision_service.dart';
 import '../application/services/chapter_ai_state_service.dart';
+import '../application/services/chapter_export_service.dart';
 import '../application/services/chapter_post_process_service.dart';
+import '../application/services/model_config_store.dart';
+import '../application/services/provider_auto_restore.dart';
+import '../application/services/team_update_dispatch_service.dart';
 
 import '../l10n/l10n.dart';
 import '../core/l10n_text_source.dart';
@@ -70,18 +77,20 @@ import '../ai/models/provider.dart';
 import '../ai/providers/model_manager.dart';
 import '../ai/providers/deepseek_provider.dart';
 import '../ai/providers/zhipu_provider.dart';
+import '../ai/providers/openrouter_provider.dart';
 import '../ai/providers/ollama_provider.dart';
 import '../ai/providers/rwkv_provider.dart';
 import '../ai/providers/rwkv_cloud_provider.dart';
 import '../ai/rwkv/rwkv_session_archive.dart';
 import '../ai/observability/ai_runtime_stats.dart';
 import '../ai/workflow/agent_batch_settings.dart';
+import '../ai/workflow/agent_state_manager.dart';
 import '../ai/workflow/batch_agent_executor.dart';
 import '../ai/workflow/dispatch_planner.dart';
 import '../ai/rwkv/rwkv_concurrency.dart' show RwkvServerCapacity;
 import '../ai/models/chat.dart' show ChatMessage, ChatRequest, ChatResponse;
-import '../ai/rwkv/rwkv_sampling.dart'
-    show isRwkvFamilyProvider, kRwkvAntiRepeatSampling;
+import '../ai/rwkv/rwkv_sampling.dart' show isRwkvFamilyProvider;
+import '../ai/runtime_settings.dart';
 import '../ai/providers/openai_compatible_provider.dart';
 import '../ai/workflow/task_queue.dart';
 import '../ai/workflow/workflow_engine.dart';
@@ -200,7 +209,21 @@ final databaseSeederProvider = Provider<DatabaseSeeder>(
 /// 启动初始化 Future：打开 keyValueStore 后立即执行 seeding，
 /// 完成后标志为 true。供 AppShell 在启动页阶段 wait。
 final appBootstrapProvider = FutureProvider<bool>((ref) async {
-  await ref.watch(keyValueStoreProvider.future);
+  final KeyValueStore kv = await ref.watch(keyValueStoreProvider.future);
+  // 载入采样/思维链运行时设置（缺失或损坏时回落官方推荐默认，不阻塞启动）
+  try {
+    final String? json = await kv.readJson('ai_config', 'runtime_settings');
+    if (json != null && json.isNotEmpty) {
+      final Object? decoded = jsonDecode(json);
+      if (decoded is Map<String, Object?>) {
+        aiRuntimeSettings = AiRuntimeSettings.fromJson(decoded);
+      }
+    }
+  } catch (_) {}
+  // 自动恢复上次持久化的模型配置（配置过的 provider 下次启动直接可用）
+  try {
+    await ref.read(providerAutoRestoreProvider).restore();
+  } catch (_) {}
   final seeder = ref.watch(databaseSeederProvider);
   await seeder.ensureSeeded();
   // 预热提示词模板：否则首个双 Agent 调用时 `_lazyTemplates` 读到的是 null，
@@ -351,6 +374,16 @@ final projectStatisticsServiceProvider = Provider<ProjectStatisticsService>(
     characterRepository: ref.watch(characterRepositoryProvider),
     factionRepository: ref.watch(factionRepositoryProvider),
     plotRepository: ref.watch(plotRepositoryProvider),
+    worldSettingRepository: ref.watch(worldSettingRepositoryProvider),
+    raceRepository: ref.watch(raceRepositoryProvider),
+    resourceRepository: ref.watch(resourceRepositoryProvider),
+    secretRealmRepository: ref.watch(secretRealmRepositoryProvider),
+    cultivationSystemRepository: ref.watch(cultivationSystemRepositoryProvider),
+    politicalSystemRepository: ref.watch(politicalSystemRepositoryProvider),
+    currencySystemRepository: ref.watch(currencySystemRepositoryProvider),
+    relationshipNetworkRepository:
+        ref.watch(relationshipNetworkRepositoryProvider),
+    timelineEventRepository: ref.watch(timelineEventRepositoryProvider),
   ),
 );
 
@@ -378,6 +411,34 @@ final modelManagerProvider = Provider<ModelManager>((ref) {
   final mm = ModelManager(logger: ref.watch(aiLoggerProvider));
   ref.onDispose(() => mm.dispose());
   return mm;
+});
+
+/// 模型配置本地持久化（provider 注册表 + 默认 provider）。
+final modelConfigStoreProvider = Provider<ModelConfigStore>((ref) {
+  return ModelConfigStore(store: () => ref.read(keyValueStoreProvider.future));
+});
+
+/// 启动时自动恢复已持久化的模型配置。
+final providerAutoRestoreProvider = Provider<ProviderAutoRestore>((ref) {
+  return ProviderAutoRestore(
+    store: ref.watch(modelConfigStoreProvider),
+    manager: ref.watch(modelManagerProvider),
+    providers: <String, IModelProvider>{
+      'deepseek': ref.watch(deepSeekProviderInstanceProvider),
+      'zhipu': ref.watch(zhipuProviderInstanceProvider),
+      'openrouter': ref.watch(openRouterProviderInstanceProvider),
+      'ollama': ref.watch(ollamaProviderInstanceProvider),
+      'rwkv': ref.watch(rwkvProviderInstanceProvider),
+      'rwkvCloud': ref.watch(rwkvCloudProviderInstanceProvider),
+      'custom': ref.watch(customOAICompatibleProviderInstanceProvider),
+    },
+    logger: ref.watch(aiLoggerProvider),
+  );
+});
+
+/// 章节结构化导出（Markdown + JSON 落盘到本地 exports 目录）。
+final chapterExportServiceProvider = Provider<ChapterExportService>((ref) {
+  return const ChapterExportService();
 });
 
 final rwkvProviderInstanceProvider = Provider<RwkvProvider>((ref) {
@@ -418,6 +479,13 @@ final deepSeekProviderInstanceProvider = Provider<DeepSeekProvider>((ref) {
 
 final zhipuProviderInstanceProvider = Provider<ZhipuProvider>((ref) {
   final p = ZhipuProvider(logger: ref.watch(aiLoggerProvider));
+  ref.onDispose(() => p.dispose());
+  return p;
+});
+
+/// OpenRouter 实例（全局单例，与其它云端 provider 一致）。
+final openRouterProviderInstanceProvider = Provider<OpenRouterProvider>((ref) {
+  final p = OpenRouterProvider(logger: ref.watch(aiLoggerProvider));
   ref.onDispose(() => p.dispose());
   return p;
 });
@@ -502,13 +570,25 @@ final workflowDispatchPlannerProvider = Provider<WorkflowDispatchPlanner>((
           temperature: 0.2,
           maxTokens: 16,
           parameters: isRwkvFamilyProvider(provider.providerName)
-              ? Map<String, dynamic>.of(kRwkvAntiRepeatSampling)
+              ? Map<String, dynamic>.of(aiRuntimeSettings.samplingParams())
               : <String, dynamic>{},
         ),
       );
       return resp.isSuccess ? resp.content : null;
     },
   );
+});
+
+/// 智能体 state 分组管理（按「1 组长 + 9 写手」团队分组，并发为 10 的倍数）。
+///
+/// 多智能体写书等团队流程在运行期激活分组，组内 10 个 state 独享；
+/// 快照（snapshot）挂 AI 健康页面板供开发人员判断 state 是否正常。
+final agentStateManagerProvider = Provider<AgentStateManager>((ref) {
+  final AgentStateManager m = AgentStateManager(
+    logger: ref.watch(aiLoggerProvider),
+  );
+  ref.onDispose(m.closeAll);
+  return m;
 });
 
 final allAgentsProvider = Provider<List<BaseAgent>>((ref) {
@@ -726,16 +806,30 @@ final dualAgentSettingsProvider =
       DualAgentSettingsNotifier.new,
     );
 
-/// 双 Agent 的提供者表：先取 ModelManager 注册表，再用 RWKV 单例兜底。
+/// 双 Agent 的提供者表：先取 ModelManager 注册表，再用**全部内置单例**兜底。
 ///
 /// 兜底的必要性：`ModelManager` 只在用户进过「AI 配置」并保存/测试后才注册 provider，
-/// 全新会话里注册表可能是空的，而本地 RWKV 单例始终存在。
+/// 全新会话里注册表可能是空的。旧实现只兜底两个 RWKV 单例，导致
+/// **OpenRouter / DeepSeek / ZhipuAI / Ollama / Custom 在 Agent 侧完全查不到**
+/// —— 表现就是「Agent 模型只能选 RWKV，换不了别的平台」。
+///
+/// ⚠ 仍然**不会误接管**：`resolveExactProvider` 依旧要求 `isAvailable`，
+/// 未 `initialize()` 过的单例返回 null，保持「指名精确匹配、不做首个可用者
+/// 兜底」的既有语义；用户在该供应商页保存/测试后即可正常被指名。
 Map<String, IModelProvider> _dualAgentProviders(Ref ref) {
   final Map<String, IModelProvider> map = <String, IModelProvider>{};
   for (final IModelProvider p
       in ref.read(modelManagerProvider).getAllProviders()) {
     map[p.providerName] = p;
   }
+  map.putIfAbsent('DeepSeek', () => ref.read(deepSeekProviderInstanceProvider));
+  map.putIfAbsent('ZhipuAI', () => ref.read(zhipuProviderInstanceProvider));
+  map.putIfAbsent(
+    'OpenRouter',
+    () => ref.read(openRouterProviderInstanceProvider),
+  );
+  map.putIfAbsent('Ollama', () => ref.read(ollamaProviderInstanceProvider));
+  map.putIfAbsent('Custom', () => ref.read(customOAICompatibleProviderInstanceProvider));
   map.putIfAbsent('RWKV', () => ref.read(rwkvProviderInstanceProvider));
   map.putIfAbsent(
     'RWKV Cloud',
@@ -843,8 +937,97 @@ final oneClickNovelGenerationServiceProvider =
         texts: ref.watch(aiTextSourceProvider),
         // 功能 C：首章落库后联动同步世界观（可关闭；失败如实汇报）
         postProcess: ref.watch(chapterPostProcessServiceProvider),
+        // 写作档案：首章落库即生成章节档案
+        writingArchive: ref.watch(writingArchiveServiceProvider),
       );
     });
+
+/// 多智能体协同写书（向导式：书名/作者/分卷数/每卷章数/子智能体数；
+/// 主线→分卷→章节三级大纲 + 每章「组长 + 写手」团队协作）。
+/// 验收后更新分派（组长罗列待更新项 → 9 写手按固定模板产出 → 防幻觉应用）。
+final teamUpdateDispatchServiceProvider =
+    Provider<TeamUpdateDispatchService>((ref) {
+      return TeamUpdateDispatchService(db: ref.watch(databaseProvider));
+    });
+
+/// 写作档案（项目/分卷/章节三档 + 四段描述格式）。
+final writingArchiveServiceProvider = Provider<WritingArchiveService>((ref) {
+  return WritingArchiveService(
+    archive: ref.watch(projectContentArchiveProvider),
+  );
+});
+
+final multiAgentBookGenerationServiceProvider =
+    Provider<MultiAgentBookGenerationService>((ref) {
+      return MultiAgentBookGenerationService(
+        projects: ref.watch(projectRepositoryProvider),
+        plots: ref.watch(plotRepositoryProvider),
+        volumes: ref.watch(volumeRepositoryProvider),
+        chapters: ref.watch(chapterRepositoryProvider),
+        // 写作 provider 与一键生成同源：双代理配置的 SubAgent provider。
+        writingProvider: () => resolveExactProvider(
+          ref,
+          ref.read(dualAgentSettingsProvider).subAgentProvider,
+        ),
+        postProcess: ref.watch(chapterPostProcessServiceProvider),
+        // 团队 state 分组与健康页快照共享同一实例 → 运行期可见。
+        stateManager: ref.watch(agentStateManagerProvider),
+        // 验收后更新分派（人物/世界观各子项）。
+        updateDispatch: ({
+          required String projectId,
+          required List<Map<String, Object?>> items,
+          required Future<String> Function(int writerSlot, String prompt)
+              writerChat,
+        }) =>
+            ref.read(teamUpdateDispatchServiceProvider).dispatchUpdates(
+                  projectId: projectId,
+                  items: items,
+                  writerChat: writerChat,
+                ),
+        // 章节结构化导出（Markdown + JSON 落盘，便于离线分析写作问题）。
+        exportService: ref.watch(chapterExportServiceProvider),
+        // 写作档案：项目建档 / 分卷建档 / 验收通过章节建档（四段描述）。
+        archiveHook: ({
+          required String level,
+          required String? projectId,
+          required String title,
+          required String content,
+          required Map<String, String> metadata,
+        }) async {
+          final WritingArchiveService svc =
+              ref.read(writingArchiveServiceProvider);
+          await svc.write(
+            level: level,
+            projectId: projectId,
+            title: title,
+            content: content,
+            desc: ArchiveDescription.fromMetadata(metadata),
+            volumeId: metadata['volumeId'],
+            chapterId: metadata['chapterId'],
+          );
+        },
+      );
+    });
+
+/// 继续规划剧情并续写（项目概览页按钮；基于最新 state 自主规划与续写）。
+final continueStoryServiceProvider = Provider<ContinueStoryService>((ref) {
+  return ContinueStoryService(
+    projects: ref.watch(projectRepositoryProvider),
+    plots: ref.watch(plotRepositoryProvider),
+    volumes: ref.watch(volumeRepositoryProvider),
+    chapters: ref.watch(chapterRepositoryProvider),
+    dualAgent: ref.watch(dualAgentWorkflowProvider),
+    writingProvider: () => resolveExactProvider(
+      ref,
+      ref.read(dualAgentSettingsProvider).subAgentProvider,
+    ),
+    postProcess: ref.watch(chapterPostProcessServiceProvider),
+    // 写作档案：续写章节落库即生成章节档案
+    writingArchive: ref.watch(writingArchiveServiceProvider),
+    // 章节结构化导出
+    exportService: ref.watch(chapterExportServiceProvider),
+  );
+});
 
 /// 功能 C：章节落库后的世界观自动同步 —— 规则同步（零模型）+ AI 状态抽取编排。
 final chapterPostProcessServiceProvider = Provider<ChapterPostProcessService>((

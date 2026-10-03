@@ -528,3 +528,88 @@ if ((resp.statusCode == 302 || resp.statusCode == 403) && resp.body.startsWith('
 - **智能排版**：正文列宽视口断点（≥1600→960 / ≥1200→840 / ≥900→760 / 窄屏全宽）+ 居中 + 字号 13-24 钳制；空正文占位时 AI 开关禁用。
 - **测试**：新增 chapter_reading_test 6 用例（面板契约/响应式断点/字号钳制/空态禁用）；累计 **123 用例 + 1 skip，analyze 0 issue**。
 - **测试基建注记**：3 个网络活跃页（aiCollaboration/aiConfiguration/projectHealthCheck）在渲染测试中 skip——它们加载即自动探测端点，flutter_test 对 pending-timer/HTTP-400 是硬断言；相关逻辑已由 mock 单测覆盖。
+
+---
+
+## 本轮交接（2026-09-27 ~ 09-29，v1.0.0+5 → v1.0.0+11，TRAE 收尾班）
+
+> 承接上文「GLM 增量」与既有基线。本轮把对班成果合入主线并连续交付 7 个版本，
+> 每版 `flutter analyze` 0 issue + 全量测试通过（终态 **273 用例 + 1 skip**）。
+> 交付产物：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+11_windows_release.zip`（14.3MB）、
+> `novelcraft_1.0.0+11_release.apk`（67.1MB，正式签名 CN=song，apksigner 验签通过）。
+
+### 版本时间线
+
+| 版本 | commit | 内容 |
+|---|---|---|
+| +5 | bb0a294 | 合入对班 GLM 成果（anti_ai_flavor / chapter_ai_panel / CI workflow / 新测试 / TaskQueue 唤醒式门控 / 章节同步 bugfix）；**顺手修 WorkflowTask.id 时间戳撞车**（见坑位 #2） |
+| +6 | 69ae33a | **章节管理接入导航**（此前 chapterEntityConfig 从未接线，「卷宗章节」入口名不副实只渲染卷宗）：新增 NavigationTarget.chapterManagement + 侧栏「章节管理」；原入口更名「卷宗管理」 |
+| +7 | 37e8987 | **采样预设 + 手动微调 + 思维链**：AI 配置页新增「生成采样参数与思维链」全局卡片；三档预设（官方推荐/强抗复读/宽松）+ 9 参数微调（RWKV alpha_* + llama.cpp DRY）；思维链开关 + 低/中/高强度；6 处下发点改读全局 `aiRuntimeSettings`；KVStore(ai_config, runtime_settings) 持久化、启动装载、**下一次模型调用即生效** |
+| +8 | 94f51ac | **结构化文件夹组导出**：导入导出页选 .md/.txt → 目录树（README/项目信息/逐卷/逐章/18 类实体逐记录），纯函数渲染 + 文件名净化 |
+| +9 | cd2d3c1 | **修「项目无法删除」**（坑位 #1）+ AI 面板唤出自动滚动（坑位 #3）+ 选节「去重润色」+ 扩写携带 本章梗概/卷宗大纲/前一章结尾 600 字 |
+| +10 | d7d108c | **多智能体协同写书向导**（见下） |
+| +11 | 6522fd3 | **项目概览升级**（见下） |
+
+### 三个关键修复（接手必读）
+
+1. **项目删除不生效**：`softDeleteRow/softDeleteByProject` 用裸 SQL（customStatement）更新，
+   **drift 的 watch() 流不响应 raw SQL** —— 列表永不刷新（库里已删、重启才消失）。
+   已在 repository_base 删除后按表名 `db.notifyUpdates({TableUpdate.onTable(t)})` 补偿。
+   **规则：以后任何 raw SQL 写库都必须手动 notifyUpdates**。回归测试 `project_deletion_test.dart`。
+2. **WorkflowTask.id 撞车**：`DateTime.now().microsecondsSinceEpoch` 在 Windows 计时器粒度（可达 15ms）下，
+   同批创建的任务拿到相同 id → cancel 按 id 误中他人、TaskQueue._completed 按 id 去重丢条目
+   （task_queue_test 双红）。id 已改为 `'${微秒}_${_idSeq++}'`（workflow.dart 库级计数器）。
+3. **AI 面板"无法唤出"**：选节面板渲染在整章正文后的 ListView 末尾，长章下点魔杖"看起来没反应"。
+   已改为唤出后 `Scrollable.ensureVisible` 自动滚动定位（GlobalKey）。
+
+### 新增能力速查（含文件坐标）
+
+- **章节管理页**（+6）：侧栏第 3 项；选中章节 → 表单右上「预览本章」→ 阅读页
+  （统计卡/状态 Chip/正文/备注）→ 正文内选中片段 → 右上魔杖唤出选节助手
+  （润色/**去重润色**/扩写/续写；扩写自动携带 本章梗概 + 卷宗大纲 + 前一章结尾 600 字，
+  进入阅读页即后台装载，失败静默降级）。
+- **AI 配置页「生成采样参数与思维链」卡片**（+7）：`lib/ai/runtime_settings.dart`
+  （`AiRuntimeSettings` + 全局 getter/setter）；预设档位 `RwkvSamplingPresetId`、
+  强度 `ThinkingIntensity`；Agent 门控在 `agent.shouldUseThinkingChain`。
+- **文件夹组导出**（+8）：`project_folder_export_service.dart`（`buildFileTree` 纯渲染 +
+  `writeTree` 落盘，`parseSectionPlan` 同风格可单测）；入口在导入导出页。
+- **多智能体协同写书**（+10）：`multi_agent_book_generation_service.dart` +
+  `multi_agent_generation_dialog.dart`（入口接管了原一键生成按钮）。向导五字段
+  （书名/作者/分卷数/每卷章数/子智能体数 ≥10 = 1 组长 + 9 写手，钳制 10..32）→
+  主线大纲 → 子智能体并行分卷大纲（落 Volumes.description，截 950）→ 并行章节大纲
+  （落 Chapters.summary，截 900）→ 每章「组长 JSON 分工（内容/边界/字数）+ 9 写手并行 +
+  组长拼接润色排版」→ 逐章落库 + 联动。分工解析 `parseSectionPlan` 容错围栏/杂文本，
+  失败走 `fallbackPlan` 均匀切分。并发池 `_runPool`（上限 = 子智能体数）。
+- **项目概览**（+11）：分类卡 6→15（全实体）+ **双击卡片直达对应管理页**
+  （NavigationContext 带项目）；「继续规划剧情并续写」按钮：
+  `continue_story_service.dart` —— 主编智能体基于最新 state（主线大纲 + 各卷状态与
+  大纲节选 + 最近一章结尾 800 字）输出 JSON 决策 `{needNewVolume, volumeName,
+  chapterTitle, chapterOutline}`，**自主判断是否追加新分卷，卷名/章名自主命名** →
+  双 Agent 成稿（失败回落单次写手）→ 落库联动；解析失败走保守兜底（不新建卷续写）。
+
+### 新增坑位（PITFALLS 级，别踩）
+
+- **C# language-table.csv 与 strings.g.dart 已分叉（缺约 330 个 Flutter 侧键）**
+  → **绝不可再跑 `tools/csv_to_dart.py` 全量重生成**（实测会丢 1340 行词条）。
+  新词条手工按生成格式补进 strings.g.dart 的 zh/en 两张 map；CSV 可同步追加键但别重生成。
+- **Windows 构建路径**：必须在纯英文路径跑 —— 用 junction `F:\30_Novelcraft_Flutter\novelcraft_en`
+  （从中文真实路径跑 `flutter build windows`，CMake 生成阶段 249ms 秒败 "Unable to generate build files"）；
+  APK 用 `subst S:` 盘（**映射重启失效**，重跑
+  `subst S: "F:\30_Novelcraft_Flutter\Flutter版代码\novelcraft"` 后在 `S:\` 构建）。
+- **凭据已脱敏**：CF Access Id/Secret 全部改为 `--dart-define RWKV_CF_ID / RWKV_CF_SECRET`
+  或页面输入；集成测试不再有默认值；密钥本体只存本机，未入任何仓库。
+- **多智能体写书采样门控**：新增的 `_chat` 通道同样要 `isRwkvFamilyProvider` 门控后再下发
+  防复读采样参数（DeepSeek/Zhipu 严格 API 会 400）——新服务已带，抄作业别抄丢。
+
+### 交付与仓库状态（接手起点）
+
+- **本地 git**：main 分支 9 个提交（5f8a240 初始 → 6522fd3 +11），工作区干净。
+- **GitHub 远端 `LuckySongXiao/Novelcraft_Flutter` 仍是 2026-09-15 旧快照（含 备份说明.txt）**，
+  本地领先 9 个提交；远端旧提交即旧快照，推送需 force（用户已知悉，**未执行**）。
+- **`F:\30_Novelcraft_Flutter\Novelcraft_Flutter_source\`**：对班同事的工作副本，
+  停留在合并前状态（不含 +5~+11）；同步方式 = 从主仓 `git archive` 重新导出
+  （注意 tar 解压中文文件名会乱码，从原项目复制修正）。
+- **已知遗留**：GLM 段落所列 遗留#8（导航状态保持）与 think 预算自适应仍未做；
+  新增遗留：旧 `one_click_novel_generation_service`（自命名流程）的入口已被多智能体
+  向导接管，代码暂留作单章双 Agent 基线，下批可评估移除；
+  `Novelcraft_Flutter_source` 与远端仓库的同步由用户决定时机。

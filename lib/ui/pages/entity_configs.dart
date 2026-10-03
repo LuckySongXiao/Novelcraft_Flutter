@@ -19,6 +19,12 @@ import 'world_system_page.dart' show SystemFieldDef, SystemFieldType;
 /// 改动前请对照 `lib/data/database.g.dart` 里的 `final Value<X> xxx;`。
 const _uuid = Uuid();
 
+/// 创建实体时允许导入器注入稳定的新主键；普通表单没有 `id` 字段时仍生成 UUID。
+String _entityId(Map<String, dynamic> values) {
+  final String? imported = values['id'] as String?;
+  return imported == null || imported.trim().isEmpty ? _uuid.v4() : imported;
+}
+
 SystemFieldDef _text(String key, String labelZh, [String? labelEn]) =>
     SystemFieldDef(key: key, labelZh: labelZh, labelEn: labelEn);
 
@@ -113,12 +119,20 @@ d.Value<String?> _vStrN(Map<String, dynamic> v, String k) =>
     d.Value(v[k] as String?);
 
 /// 布尔列（`Value<bool>`）：表单返回 'true' / 'false' / null
-d.Value<bool> _vBool(Map<String, dynamic> v, String k) =>
-    d.Value(v[k] == 'true');
+d.Value<bool> _vBool(Map<String, dynamic> v, String k) {
+  final Object? raw = v[k];
+  if (raw is bool) return d.Value(raw);
+  if (raw is num) return d.Value(raw != 0);
+  final String normalized = raw?.toString().trim().toLowerCase() ?? '';
+  return d.Value(normalized == 'true' || normalized == '1' || normalized == 'yes');
+}
 
 /// 必填日期列（`DateTime`，如 TimelineEvent.eventDate）：解析失败回退 now
-DateTime _date(Map<String, dynamic> v, String k) =>
-    DateTime.tryParse(v[k] as String? ?? '') ?? DateTime.now();
+DateTime _date(Map<String, dynamic> v, String k) {
+  final Object? raw = v[k];
+  if (raw is DateTime) return raw;
+  return DateTime.tryParse(raw?.toString() ?? '') ?? DateTime.now();
+}
 
 /// 子实体（无 projectId）的列表按关键词在内存中过滤
 List<Map<String, dynamic>> _kwFilter(
@@ -189,7 +203,7 @@ final characterEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_characterToMap).toList(),
       onCreate: (pid, v) => svc.create(
         CharactersCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String,
           type: v['type'] as String? ?? '配角',
@@ -270,7 +284,7 @@ final volumeEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_volumeToMap).toList(),
       onCreate: (pid, v) => svc.create(
         VolumesCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           title: v['title'] as String,
           orderIndex: d.Value(v['orderIndex'] as int? ?? 0),
@@ -304,6 +318,8 @@ final volumeEntityConfig = EntityPageConfig(
 
 Map<String, dynamic> _chapterToMap(dynamic r) => {
       'id': r.id,
+      // 保留卷宗归属，项目备份恢复时才能重建卷→章层级。
+      'volumeId': r.volumeId,
       'title': r.title,
       'summary': r.summary,
       'content': r.content,
@@ -357,9 +373,9 @@ final chapterEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_chapterToMap).toList(),
       onCreate: (pid, v) => svc.create(
         ChaptersCompanion.insert(
-          id: _uuid.v4(),
-          // 未挂载卷宗时留空串，由用户在卷宗页分配
-          volumeId: '',
+          id: _entityId(v),
+          // 导入备份时沿用原卷宗 ID；新建表单没有该字段则回退为空串。
+          volumeId: v['volumeId'] as String? ?? '',
           title: v['title'] as String,
           projectId: d.Value(pid),
           status: d.Value(v['status'] as String? ?? 'Draft'),
@@ -433,7 +449,7 @@ final plotEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_plotToMap).toList(),
       onCreate: (pid, v) => svc.create(
         PlotsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           title: v['title'] as String,
           type: v['type'] as String? ?? '支线',
@@ -497,7 +513,7 @@ final factionEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_factionToMap).toList(),
       onCreate: (pid, v) => svc.create(
         FactionsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String,
           type: v['type'] as String? ?? '宗门',
@@ -565,7 +581,7 @@ final worldSettingEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_worldSettingToMap).toList(),
       onCreate: (pid, v) => svc.create(
         WorldSettingsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String,
           type: v['type'] as String? ?? '通用',
@@ -664,7 +680,7 @@ final raceEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_raceToMap).toList(),
       onCreate: (pid, v) => svc.create(
         RacesCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -781,7 +797,7 @@ final resourceEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_resourceToMap).toList(),
       onCreate: (pid, v) => svc.create(
         ResourcesCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -894,7 +910,7 @@ final secretRealmEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_secretRealmToMap).toList(),
       onCreate: (pid, v) => svc.create(
         SecretRealmsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -1007,7 +1023,7 @@ final cultivationSystemEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_cultivationSystemToMap).toList(),
       onCreate: (pid, v) => svc.create(
         CultivationSystemsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -1124,7 +1140,7 @@ final politicalSystemEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_politicalSystemToMap).toList(),
       onCreate: (pid, v) => svc.create(
         PoliticalSystemsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -1259,7 +1275,7 @@ final currencySystemEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_currencySystemToMap).toList(),
       onCreate: (pid, v) => svc.create(
         CurrencySystemsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           monetarySystem: v['monetarySystem'] as String? ?? '金银本位',
@@ -1394,7 +1410,7 @@ final relationshipNetworkEntityConfig = EntityPageConfig(
           .toList(),
       onCreate: (pid, v) => svc.create(
         RelationshipNetworksCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           name: v['name'] as String? ?? '未命名',
           type: v['type'] as String? ?? '其他',
@@ -1497,7 +1513,7 @@ final timelineEventEntityConfig = EntityPageConfig(
           (await svc.search(pid, kw)).map(_timelineEventToMap).toList(),
       onCreate: (pid, v) => svc.create(
         TimelineEventsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           projectId: pid,
           title: v['title'] as String? ?? '未命名事件',
           eventDate: _date(v, 'eventDate'),
@@ -1590,7 +1606,7 @@ final characterEventEntityConfig = EntityPageConfig(
       ),
       onCreate: (_, v) => svc.create(
         CharacterEventsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           characterId: v['characterId'] as String? ?? '',
           title: v['title'] as String? ?? '未命名事件',
           description: _vStrN(v, 'description'),
@@ -1686,7 +1702,7 @@ final characterRelationshipEntityConfig = EntityPageConfig(
           .toList(),
       onCreate: (pid, v) => svc.create(
         CharacterRelationshipsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           sourceCharacterId: v['sourceCharacterId'] as String? ?? '',
           targetCharacterId: v['targetCharacterId'] as String? ?? '',
           relationshipType: v['relationshipType'] as String? ?? '其他',
@@ -1793,7 +1809,7 @@ final factionRelationshipEntityConfig = EntityPageConfig(
           .toList(),
       onCreate: (pid, v) => svc.create(
         FactionRelationshipsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           sourceFactionId: v['sourceFactionId'] as String? ?? '',
           targetFactionId: v['targetFactionId'] as String? ?? '',
           relationshipType: v['relationshipType'] as String? ?? '中立',
@@ -1896,7 +1912,7 @@ final raceRelationshipEntityConfig = EntityPageConfig(
           .toList(),
       onCreate: (pid, v) => svc.create(
         RaceRelationshipsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           sourceRaceId: v['sourceRaceId'] as String? ?? '',
           targetRaceId: v['targetRaceId'] as String? ?? '',
           relationshipType: v['relationshipType'] as String? ?? '其他',
@@ -1973,16 +1989,26 @@ final cultivationLevelEntityConfig = EntityPageConfig(
   ],
   sourceBuilder: (ref) {
     final svc = ref.read(cultivationLevelServiceProvider);
+    final systems = ref.read(cultivationSystemServiceProvider);
+
+    Future<List<Map<String, dynamic>>> listForProject(String projectId) async {
+      final systemIds = (await systems.getByProjectId(projectId))
+          .map((system) => system.id)
+          .toSet();
+      return (await svc.getAll())
+          .where((level) => systemIds.contains(level.cultivationSystemId))
+          .map(_cultivationLevelToMap)
+          .toList();
+    }
+
     return CallbackEntityDataSource(
-      onList: (_) async =>
-          (await svc.getAll()).map(_cultivationLevelToMap).toList(),
-      onSearch: (_, kw) async => _kwFilter(
-        (await svc.getAll()).map(_cultivationLevelToMap).toList(),
-        kw,
-      ),
+      // 等级表本身没有 projectId，必须通过所属体系反查，避免项目 A
+      // 的设定出现在项目 B 的导出与实体页中。
+      onList: listForProject,
+      onSearch: (pid, kw) async => _kwFilter(await listForProject(pid), kw),
       onCreate: (_, v) => svc.create(
         CultivationLevelsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           name: v['name'] as String? ?? '未命名等级',
           cultivationSystemId: v['cultivationSystemId'] as String? ?? '',
           orderIndex: _vInt(v, 'orderIndex'),
@@ -2052,16 +2078,24 @@ final politicalPositionEntityConfig = EntityPageConfig(
   ],
   sourceBuilder: (ref) {
     final svc = ref.read(politicalPositionServiceProvider);
+    final systems = ref.read(politicalSystemServiceProvider);
+
+    Future<List<Map<String, dynamic>>> listForProject(String projectId) async {
+      final systemIds = (await systems.getByProjectId(projectId))
+          .map((system) => system.id)
+          .toSet();
+      return (await svc.getAll())
+          .where((position) => systemIds.contains(position.politicalSystemId))
+          .map(_politicalPositionToMap)
+          .toList();
+    }
+
     return CallbackEntityDataSource(
-      onList: (_) async =>
-          (await svc.getAll()).map(_politicalPositionToMap).toList(),
-      onSearch: (_, kw) async => _kwFilter(
-        (await svc.getAll()).map(_politicalPositionToMap).toList(),
-        kw,
-      ),
+      onList: listForProject,
+      onSearch: (pid, kw) async => _kwFilter(await listForProject(pid), kw),
       onCreate: (_, v) => svc.create(
         PoliticalPositionsCompanion.insert(
-          id: _uuid.v4(),
+          id: _entityId(v),
           name: v['name'] as String? ?? '未命名职位',
           politicalSystemId: v['politicalSystemId'] as String? ?? '',
           level: _vInt(v, 'level'),
@@ -2098,6 +2132,7 @@ final politicalPositionEntityConfig = EntityPageConfig(
 final entityConfigByTarget = <NavigationTarget, EntityPageConfig>{
   NavigationTarget.characterManagement: characterEntityConfig,
   NavigationTarget.volumeManagement: volumeEntityConfig,
+  NavigationTarget.chapterManagement: chapterEntityConfig,
   NavigationTarget.plotManagement: plotEntityConfig,
   NavigationTarget.factionManagement: factionEntityConfig,
   NavigationTarget.worldSettingManagement: worldSettingEntityConfig,

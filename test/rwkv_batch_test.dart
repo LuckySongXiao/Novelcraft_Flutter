@@ -187,6 +187,33 @@ void main() {
   });
 
   group('SSE 按 index 分组（PITFALLS §27.3：到达顺序无序）', () {
+    test('流式响应正文消费完之前保持并发许可', () async {
+      final body = StreamController<List<int>>();
+      final client = MockClient.streaming(
+          (http.BaseRequest req, http.ByteStream _) async {
+        return http.StreamedResponse(body.stream, 200);
+      });
+      final capacity = RwkvConcurrencyController(clientHardCap: 1);
+      final batch = RwkvBatchClient(
+        client: client,
+        baseUrl: () => 'https://x',
+        headers: () => <String, String>{},
+        concurrency: capacity,
+      );
+      final subscription = batch
+          .chatStream(RwkvBatchRequest(contents: <String>['p0'], stream: true))
+          .listen((_) {});
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(capacity.inFlight, 1);
+      body.add(utf8.encode(
+          'data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}\n\n'
+          'data: {"choices":[{"index":0,"finish_reason":"stop","delta":{}}]}\n\n'
+          'data: [DONE]\n\n'));
+      await body.close();
+      await subscription.asFuture<void>();
+      expect(capacity.inFlight, 0);
+    });
+
     test('交错到达时内容不混串，且最后按 index 对齐', () async {
       // 构造 index 1 先到、index 0 后到的交错流
       const String sse = 'data: {"choices":[{"index":1,"delta":{"content":"B1"}}]}\n'

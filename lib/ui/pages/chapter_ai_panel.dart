@@ -19,7 +19,19 @@ import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 
 /// 选节 AI 操作类型。
-enum ChapterAiAction { polish, expand, continueWrite }
+enum ChapterAiAction {
+  /// 润色（保持原意，提升文笔）。
+  polish,
+
+  /// 去重润色 —— 专治选中片段内的重复句式 / 复读段落。
+  dedupePolish,
+
+  /// 扩写（结合写作大纲与上下文）。
+  expand,
+
+  /// 续写（紧接选区结尾）。
+  continueWrite,
+}
 
 /// 选节 AI 助手面板：由阅读页传入当前选中文本（SelectionArea.onSelectionChanged）。
 class ChapterAiPanel extends ConsumerStatefulWidget {
@@ -27,6 +39,10 @@ class ChapterAiPanel extends ConsumerStatefulWidget {
     super.key,
     required this.selectedText,
     required this.fullContent,
+    this.chapterOutline = '',
+    this.volumeOutline = '',
+    this.prevChapterTail = '',
+    this.onClearSelection,
   });
 
   /// 当前选中的正文片段（空 = 未选节，按钮将提示）。
@@ -34,6 +50,20 @@ class ChapterAiPanel extends ConsumerStatefulWidget {
 
   /// 整章正文（续写场景需要上文语境）。
   final String fullContent;
+
+  /// 本章梗概（写作大纲的一部分，扩写时贴合）。
+  final String chapterOutline;
+
+  /// 所属卷宗的大纲/简介（扩写时贴合）。
+  final String volumeOutline;
+
+  /// 前一章结尾片段（跨章上下文，扩写/续写时保持衔接）。
+  final String prevChapterTail;
+
+  /// 显式清除粘性选区（面板「重新选择」按钮；null = 不显示清除入口）。
+  ///
+  /// 粘性选区下点击面板按钮不会丢选区，因此提供手动清除让用户重新框选。
+  final VoidCallback? onClearSelection;
 
   @override
   ConsumerState<ChapterAiPanel> createState() => _ChapterAiPanelState();
@@ -64,28 +94,128 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
         : (widget.fullContent.isEmpty
             ? ''
             : '【上文节选】\n${widget.fullContent}\n\n');
+    final String outlineBlock = _outlineBlock();
+    final String prevTail = widget.prevChapterTail.trim().isEmpty
+        ? ''
+        : '【前一章结尾】\n${widget.prevChapterTail.trim()}\n\n';
     switch (action) {
       case ChapterAiAction.polish:
         return '你是资深网文编辑。请润色以下正文片段：保持原意、人物与情节'
             '完全不变，提升文笔流畅度与画面感，禁止新增情节或设定。$extraLine'
             '【待润色片段】\n$selected\n\n只输出润色后的片段本身。';
+      case ChapterAiAction.dedupePolish:
+        return '你是资深网文编辑。以下片段存在重复内容（重复句式、复读段落或'
+            '语义雷同的表述）。请先去重：每层意思只保留表达最自然、信息量最足'
+            '的一处，删除其余；再对保留文本做轻度润色，使行文连贯自然。保持原意、'
+            '人物与情节完全不变，禁止新增情节或设定，篇幅只减不增。$extraLine'
+            '【待处理片段】\n$selected\n\n只输出去重润色后的片段本身。';
       case ChapterAiAction.expand:
-        return '你是资深网文作者。请对以下正文片段进行扩写：补充环境细节、'
-            '动作拆解与心理描写，篇幅扩至约 2-3 倍，人物性格与既定情节'
-            '不得改变。$extraLine【待扩写片段】\n$selected\n\n只输出扩写后的片段。';
+        return '你是资深网文作者。请结合写作大纲与上下文，对以下正文片段进行'
+            '扩写：补充环境细节、动作拆解与心理描写，篇幅扩至约 2-3 倍；'
+            '人物性格与既定情节不得改变，不得与大纲冲突或提前泄露后续情节。'
+            '$outlineBlock$prevTail$extraLine'
+            '【待扩写片段】\n$selected\n\n只输出扩写后的片段。';
       case ChapterAiAction.continueWrite:
         return '你是资深网文作者。请紧接以下片段自然续写约 600 字：保持'
             '叙事视角与文风连贯，推进情节但不要在本轮结束故事。'
-            '$contextHead$extraLine【待续写片段（结尾处续写）】\n$selected\n\n'
+            '$outlineBlock$contextHead$extraLine【待续写片段（结尾处续写）】\n$selected\n\n'
             '只输出续写的新增内容。';
     }
   }
 
+  /// 组装【写作大纲】块：本章梗概 + 卷宗大纲（都为空时返回空串）。
+  String _outlineBlock() {
+    final List<String> parts = <String>[
+      if (widget.chapterOutline.trim().isNotEmpty)
+        '本章梗概：${widget.chapterOutline.trim()}',
+      if (widget.volumeOutline.trim().isNotEmpty)
+        '卷宗大纲：${widget.volumeOutline.trim()}',
+    ];
+    if (parts.isEmpty) return '';
+    return '【写作大纲（创作须贴合，不得冲突）】\n${parts.join('\n')}\n\n';
+  }
+
   String _actionLabel(ChapterAiAction a, L10n l10n) => switch (a) {
         ChapterAiAction.polish => l10n.t('RAI.Polish', '润色'),
+        ChapterAiAction.dedupePolish =>
+          l10n.t('RAI.Dedupe', '去重润色'),
         ChapterAiAction.expand => l10n.t('RAI.Expand', '扩写'),
         ChapterAiAction.continueWrite => l10n.t('RAI.Continue', '续写'),
       };
+
+  /// 已捕获选区预览卡：选中文本快照 + 字数 + 「重新选择」清除按钮。
+  /// 未捕获时展示引导文案（选区为空时按钮仍会提示，这里是前置引导）。
+  Widget _buildSelectionPreview(L10n l10n, ColorScheme scheme) {
+    final String selected = _selectedText();
+    final bool has = selected.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: has
+            ? scheme.primaryContainer.withValues(alpha: 0.35)
+            : scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: has ? scheme.primary.withValues(alpha: 0.4) : scheme.outlineVariant,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                has ? Icons.select_all_outlined : Icons.pan_tool_outlined,
+                size: 14,
+                color: has ? scheme.primary : scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  has
+                      ? l10n.tf('RAI.SelectionCapturedFmt', '已捕获选区 · {0} 字',
+                          <Object>[selected.trim().length])
+                      : l10n.t('RAI.SelectionNone', '尚未捕获选区'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: has ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              if (has && widget.onClearSelection != null)
+                _ReselectButton(
+                  tooltip: l10n.t('RAI.ReselectTooltip', '清除当前选区，重新框选'),
+                  label: l10n.t('RAI.Reselect', '重新选择'),
+                  onPressed: widget.onClearSelection!,
+                ),
+            ],
+          ),
+          if (has) ...[
+            const SizedBox(height: 4),
+            SelectableText(
+              selected,
+              maxLines: 3,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 2),
+            Text(
+              l10n.t('RAI.SelectionGuide',
+                  '回到正文拖动鼠标选中一段文字，选区会自动捕获到这里（点击面板不会丢失）'),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   Future<void> _run(ChapterAiAction action) async {
     final l10n = ref.read(l10nProvider);
@@ -149,6 +279,8 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ---- 已捕获选区预览（粘性选区的可见性保障：用户能确认选中文本被识别）----
+        _buildSelectionPreview(l10n, scheme),
         // ---- 要求输入 + 操作按钮 ----
         Row(
           children: [
@@ -185,6 +317,8 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
                     : switch (action) {
                         ChapterAiAction.polish =>
                           const Icon(Icons.auto_fix_high, size: 16),
+                        ChapterAiAction.dedupePolish =>
+                          const Icon(Icons.cleaning_services_outlined, size: 16),
                         ChapterAiAction.expand =>
                           const Icon(Icons.unfold_more, size: 16),
                         ChapterAiAction.continueWrite =>
@@ -263,6 +397,49 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 「重新选择」紧凑按钮 —— 清除粘性选区让用户重新框选。
+class _ReselectButton extends StatelessWidget {
+  const _ReselectButton({
+    required this.tooltip,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.restart_alt, size: 13, color: scheme.primary),
+              const SizedBox(width: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.primary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

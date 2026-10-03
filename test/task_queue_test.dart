@@ -10,11 +10,8 @@ import 'package:novelcraft/ai/agents/agent.dart';
 import 'package:novelcraft/ai/workflow/task_queue.dart';
 import 'package:novelcraft/ai/workflow/workflow.dart';
 
-WorkflowTask _task(String name, {List<String>? deps}) => WorkflowTask(
-      name: name,
-      taskType: 'Test',
-      dependencies: deps,
-    );
+WorkflowTask _task(String name, {List<String>? deps}) =>
+    WorkflowTask(name: name, taskType: 'Test', dependencies: deps);
 
 AgentTaskResult _ok() => AgentTaskResult(isSuccess: true, data: 'ok');
 
@@ -79,6 +76,32 @@ void main() {
       q.dispose();
     });
 
+    test('取消运行中任务不会提前释放并发槽', () async {
+      final q = TaskQueue(Logger('t'), maxConcurrentTasks: 1);
+      final gate = Completer<void>();
+      final t1 = _task('t1');
+      final t2 = _task('t2');
+      q.enqueueAll(<WorkflowTask>[t1, t2]);
+      var t2Started = false;
+      final running = q.runAll((task) async {
+        if (identical(task, t1)) {
+          await gate.future;
+        } else {
+          t2Started = true;
+        }
+        return _ok();
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(q.cancel(t1.id), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(t2Started, isFalse, reason: '取消只改变状态，runner 未退出前仍应占用并发槽');
+      gate.complete();
+      await running;
+      expect(t1.status, WorkflowStatus.cancelled);
+      expect(t2.status, WorkflowStatus.completed);
+      q.dispose();
+    });
+
     test('clearFinishedState 清理终结态登记（防内存泄漏）', () async {
       final q = TaskQueue(Logger('t'), maxConcurrentTasks: 2);
       q.enqueueAll(<WorkflowTask>[_task('a'), _task('b')]);
@@ -88,8 +111,11 @@ void main() {
       expect(q.getByStatus(WorkflowStatus.completed).length, 2);
 
       q.clearFinishedState();
-      expect(q.getByStatus(WorkflowStatus.completed).isEmpty, isTrue,
-          reason: 'clearFinishedState 后终结态应被清理');
+      expect(
+        q.getByStatus(WorkflowStatus.completed).isEmpty,
+        isTrue,
+        reason: 'clearFinishedState 后终结态应被清理',
+      );
       q.dispose();
     });
 
@@ -126,8 +152,7 @@ void main() {
       expect(t1.status, WorkflowStatus.completed);
       expect(t2.status, WorkflowStatus.completed);
       // 唤醒路径下总耗时应远小于忙等轮询的量级（留 3 倍余量防 CI 抖动）
-      expect(sw.elapsedMilliseconds, lessThan(60),
-          reason: '任务完成应即时唤醒门控等待者');
+      expect(sw.elapsedMilliseconds, lessThan(60), reason: '任务完成应即时唤醒门控等待者');
       q.dispose();
     });
 
@@ -149,8 +174,7 @@ void main() {
       // 立即返回，因此 50ms 后应已进入终态 completed 而非卡在 pending）
       q.setMaxConcurrentTasks(4);
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(t2.status, WorkflowStatus.completed,
-          reason: '上限调大后等待任务应被唤醒并完成执行');
+      expect(t2.status, WorkflowStatus.completed, reason: '上限调大后等待任务应被唤醒并完成执行');
 
       gate.complete();
       await running;

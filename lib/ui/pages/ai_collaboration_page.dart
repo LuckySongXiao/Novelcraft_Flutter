@@ -651,7 +651,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
 
     return Scaffold(
       body: Padding(
-        padding: EdgeInsets.all(short ? 12 : 20),
+        padding: EdgeInsets.all(short ? 10 : 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -662,7 +662,10 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
               ),
               const SizedBox(height: 12),
             ],
-            SegmentedButton<_ChatMode>(
+            // 手机横屏：模式切换器压缩高度（默认 ~48px 挤占聊天区）
+            SizedBox(
+              height: short ? 36 : null,
+              child: SegmentedButton<_ChatMode>(
               segments: [
                 ButtonSegment(
                   value: _ChatMode.freechat,
@@ -678,11 +681,12 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
               selected: {mode},
               onSelectionChanged: (set) =>
                   ref.read(_chatModeProvider.notifier).setMode(set.first),
+              ),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: short ? 8 : 12),
             if (projectId == null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: 8),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     border: Border.all(
@@ -692,10 +696,11 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                     color: Colors.orange.withValues(alpha: 0.06),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(10),
+                    padding: EdgeInsets.all(short ? 6 : 10),
                     child: Row(
                       children: [
-                        const Icon(Icons.info_outline, color: Colors.orange),
+                        Icon(Icons.info_outline,
+                            size: short ? 16 : 24, color: Colors.orange),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -818,7 +823,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
         _buildChapterRefBar(context, l10n, ref.watch(chapterReferralProvider)),
         const SizedBox(height: 8),
         Container(
-          padding: const EdgeInsets.all(10),
+          padding: EdgeInsets.all(short ? 6 : 10),
           decoration: BoxDecoration(
             border: Border.all(color: scheme.outlineVariant),
             borderRadius: BorderRadius.circular(12),
@@ -829,7 +834,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
               Expanded(
                 child: TextField(
                   controller: _promptCtrl,
-                  maxLines: short ? 2 : 5,
+                  maxLines: short ? 1 : 5,
                   minLines: 1,
                   decoration: InputDecoration(
                     hintText: ref.watch(chapterReferralProvider).isLinked
@@ -1118,10 +1123,12 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
 
   Widget _buildWorkflows(BuildContext context, L10n l10n) {
     final scheme = Theme.of(context).colorScheme;
+    // 手机横屏：卡片与输入控件压缩，参数字段宽度自适应（防横向溢出）
+    final bool short = MediaQuery.sizeOf(context).height < 520;
     return ListView.separated(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.only(bottom: 12),
       itemCount: _presets.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 12),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (ctx, i) {
         final p = _presets[i];
         final flow = _activeFlows[p.id];
@@ -1130,7 +1137,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
         final presetSubtitle = _presetSubtitleFor(p.id, l10n);
         return Card(
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(short ? 10 : 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1184,8 +1191,8 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                   runSpacing: 10,
                   children: [
                     for (final param in p.params)
-                      SizedBox(
-                        width: 260,
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 260),
                         child: TextField(
                           controller: _wfCtrl[param],
                           decoration: InputDecoration(

@@ -115,13 +115,15 @@ class _NovelCraftAppState extends ConsumerState<NovelCraftApp> {
         if (child == null) return const SizedBox.shrink();
         // 安卓：系统字体缩放常被调到 1.3+，而本应用按桌面密度设计，
         // 直接把布局挤爆（真机横屏踩坑：导航标签换行、卡片溢出、
-        // 内容区控件看不全）。真机反馈 1.2 仍偏大 → 干脆钳到 1.0，
-        // 完全按设计密度渲染；桌面 / Web 不干预。
+        // 内容区控件看不全）。真机反馈 1.2 仍偏大 → 钳到 1.0；用户再反馈
+        // 按设计密度依然偏大（Magic 7 Pro 横屏可用空间不足）→ 2026-09-29
+        // 收紧到 0.85（整体再缩 ~15%，Material 组件的 sp 字号随之变小）；
+        // 桌面 / Web 不干预。
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
           return MediaQuery(
             data: MediaQuery.of(context).copyWith(
               textScaler:
-                  MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.0),
+                  MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 0.85),
             ),
             child: child,
           );
