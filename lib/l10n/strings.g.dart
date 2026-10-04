@@ -192,12 +192,14 @@ const Map<String, String> zhStrings = <String, String>{
   'CPS.StatusChapters': '- 章节：{0} 章（已完成正文 {1} 章，共 {2} 字）',
   'CPS.StatusPipeline': '- 流水线：{0}',
   'CPS.QueryFailed': '查询失败：{0}',
-  'CPS.OfflineFreeQa': 'AI 推理服务当前离线，无法回答自由问题。导航、查询与流水线操作不受影响；可在「AI模型配置」页检查服务状态。',
+  'CPS.OfflineFreeQa':
+      'AI 推理服务当前离线，无法回答自由问题。导航、查询与流水线操作不受影响；可在「AI模型配置」页检查服务状态。',
   'CPS.EmptyAIResponse': 'AI 返回了空内容，请换个问法。',
   'CPS.AIInferFailed': 'AI 推理失败：{0}',
   'CPS.UnknownError': '未知错误',
   'CPS.RefBrief': '｜梗概：{0}',
-  'CPS.AttachedRef': '已关联《{0}》第{1}卷第{2}章《{3}》{4}。\n直接输入要求即可处理本章（如：润色全文 / 重写开头 / 扩写战斗场面 / 续写结尾），处理结果将生成确认卡，采纳后直接更新本章正文；也可以针对本章提问（如：这章的节奏有什么问题）。输入「取消关联」可解除。',
+  'CPS.AttachedRef':
+      '已关联《{0}》第{1}卷第{2}章《{3}》{4}。\n直接输入要求即可处理本章（如：润色全文 / 重写开头 / 扩写战斗场面 / 续写结尾），处理结果将生成确认卡，采纳后直接更新本章正文；也可以针对本章提问（如：这章的节奏有什么问题）。输入「取消关联」可解除。',
   'CPS.ChapterRefCleared': '已取消章节关联，恢复普通助手模式。',
   'CPS.ChapterProcessFailed': '章节处理失败：{0}',
   'CPS.OfflineChapterQa': 'AI 推理服务当前离线，无法分析章节内容。处理章节与取消关联不受影响。',
@@ -258,7 +260,8 @@ const Map<String, String> zhStrings = <String, String>{
   'CPS.CardChapterProcessTitle': '章节处理：{0}（{1} → {2} 字）',
   'CPS.OriginalWords': '原文 {0} 字',
   'CPS.DraftToText': '草稿成文',
-  'CPS.CardChapterProcessSummary': '已按你的要求处理该章，采纳后直接更新本章正文；也可逐项修改后采纳，或放弃整卡重新提要求。',
+  'CPS.CardChapterProcessSummary':
+      '已按你的要求处理该章，采纳后直接更新本章正文；也可逐项修改后采纳，或放弃整卡重新提要求。',
   'CPS.StageReportChapterProcessed': '《{0}》处理完成',
   'CPS.OriginalToProcessed': '原文 {0} 字 → 处理后 {1} 字',
   'CPS.GeneratedFromBrief': '根据梗概生成 {0} 字',
@@ -288,7 +291,14 @@ const Map<String, String> zhStrings = <String, String>{
   'AICfg.HintDefaultCompletionProvider': '默认续写类AI提供者',
   'AICfg.ProviderRWKV': 'RWKV (本地续写)',
   'AICfg.DualAgentTitle': 'MainAgent / SubAgent 双代理配置',
-  'AICfg.DualAgentDesc': '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。',
+  'AICfg.G1kPreset': '预置 G1K 7.2B 主编 + 2.9B 写手',
+  'AICfg.G1kPresetSaved': '已配置 G1K：7.2B 规划/润色，2.9B 写正文。',
+  'AICfg.G1kPresetSetup': '请先在 RWKV 云端页保存 7B 官方端点和 CF 凭据，并测试连接。',
+  'AICfg.G1kPresetFailed': '无法唯一匹配 G1K 两个模型，请检查 7B/3B 端点模型列表，或手动填写完整 ID。',
+  'AICfg.G1kPresetHint': '多智能体写书专用：7.2B 负责大纲与润色，2.9B 负责正文；不修改普通双代理配置。',
+  'AICfg.G1kDisable': '停用写书预设',
+  'AICfg.DualAgentDesc':
+      '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。',
   'AICfg.EnableDualAgent': '启用 MainAgent / SubAgent 双代理写作流',
   'AICfg.HintMainAgentProvider': 'MainAgent 提供者',
   'AICfg.ProviderDeepSeekDense': 'DeepSeek (推荐稠密模型)',
@@ -309,7 +319,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AICfg.AllowArchiveWrite': '允许 SubAgent 将纯净定稿写入正式项目档案库',
   'AICfg.RwkvTitle': 'RWKV 续写模型配置',
   'AICfg.StatusNotConfigured': '未配置',
-  'AICfg.RwkvDesc': '本地 RWKV 推理服务，默认优先集成纯 CUDA 版，适配 RWKV7-G1i 并为 RWKV8 RPU 预留，扫描支持 .pth / .safetensors / .st',
+  'AICfg.RwkvDesc':
+      '本地 RWKV 推理服务，默认优先集成纯 CUDA 版，适配 RWKV7-G1i 并为 RWKV8 RPU 预留，扫描支持 .pth / .safetensors / .st',
   'AICfg.RefreshStatus': '刷新状态',
   'AICfg.StartRuntime': '一键启动',
   'AICfg.StopRuntime': '一键关闭',
@@ -616,7 +627,8 @@ const Map<String, String> zhStrings = <String, String>{
   'DG.TemplateLoadedFmt': '模板已加载：{0}',
   'DG.LoadSuccessTitle': '加载成功',
   'DG.TemplateLoadFailedFmt': '模板加载失败：{0}',
-  'DG.HelpText': 'AI对话生成器使用说明:\n\n1. 角色设置: 输入参与对话的角色名称, 选择角色关系\n2. 情境设置: 描述对话场景和目的\n3. 风格设置: 选择情感基调、语言风格和对话长度\n4. 点击"生成对话"按钮开始生成\n5. 可以对生成的对话进行优化\n6. 支持复制、保存和导出功能\n\n提示:\n- 角色名称用逗号分隔\n- 详细的场景描述有助于生成更好的对话\n- 可以多次优化以获得满意的结果',
+  'DG.HelpText':
+      'AI对话生成器使用说明:\n\n1. 角色设置: 输入参与对话的角色名称, 选择角色关系\n2. 情境设置: 描述对话场景和目的\n3. 风格设置: 选择情感基调、语言风格和对话长度\n4. 点击"生成对话"按钮开始生成\n5. 可以对生成的对话进行优化\n6. 支持复制、保存和导出功能\n\n提示:\n- 角色名称用逗号分隔\n- 详细的场景描述有助于生成更好的对话\n- 可以多次优化以获得满意的结果',
   'DG.CharacterServiceNotInit': '角色服务未初始化。',
   'DG.NoCharacters': '当前项目还没有角色，请先创建角色。',
   'DG.LoadCharactersFailedFmt': '加载角色失败：{0}',
@@ -676,7 +688,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AA.ContextInfo': '上下文信息',
   'AA.ContextPlaceholder': '当前上下文信息将显示在这里',
   'AA.Name': 'AI助手',
-  'AA.Welcome': '您好！我是您的AI助手，专门帮助您管理书籍设定。我可以帮您生成新设定、分析现有设定、提供优化建议等。请告诉我您需要什么帮助？',
+  'AA.Welcome':
+      '您好！我是您的AI助手，专门帮助您管理书籍设定。我可以帮您生成新设定、分析现有设定、提供优化建议等。请告诉我您需要什么帮助？',
   'AA.HintInput': '输入您的问题或需求...',
   'AA.Send': '发送',
   'AA.ClearChat': '清空对话',
@@ -700,7 +713,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AA.ErrorResponse': 'AI 响应失败。',
   'AA.ErrorEmptyResponse': 'AI 返回空内容。',
   'OCG.CheckingRwkv': '正在检查 RWKV 推理服务...',
-  'OCG.RwkvUnreachable': 'RWKV 推理服务不可达。请先在「AI模型配置」页启动 RWKV 服务（经 rwkv_launcher 拉起）。',
+  'OCG.RwkvUnreachable':
+      'RWKV 推理服务不可达。请先在「AI模型配置」页启动 RWKV 服务（经 rwkv_launcher 拉起）。',
   'OCG.Concepting': 'RWKV 正在构思新书...',
   'OCG.CreatingBook': '正在创建新书《{0}》...',
   'OCG.GeneratingOutlineFor': 'MainAgent/SubAgent 正在为《{0}》生成大纲...',
@@ -992,7 +1006,8 @@ const Map<String, String> zhStrings = <String, String>{
   'POL.ModelOnlineFmt': '{0}（当前在线）',
   'POL.RwkvNotRegistered': 'RWKV 推理服务未注册，请检查应用配置。',
   'POL.AiUnavailable': 'AI服务不可用',
-  'POL.RwkvOfflineDetailsFmt': 'RWKV 推理服务不在线或无响应（{0}）。\n\n请到「AI模型配置」页启动 RWKV 服务后再试。',
+  'POL.RwkvOfflineDetailsFmt':
+      'RWKV 推理服务不在线或无响应（{0}）。\n\n请到「AI模型配置」页启动 RWKV 服务后再试。',
   'POL.RwkvCheckFailedFmt': '检查 RWKV 推理服务状态失败：{0}',
   'POL.UnknownError': '未知错误，请重试。',
   'POL.ConnectionError': '模型服务连接失败，请确认 RWKV 推理服务已启动（可在「AI模型配置」页查看状态），然后重试。',
@@ -1046,7 +1061,8 @@ const Map<String, String> zhStrings = <String, String>{
   'POL.DiffDialogTitle': '文本对比',
   'PG.Title': '前置条件生成',
   'PG.Header': 'AI编辑前置条件生成',
-  'PG.Desc': '为确保AI编辑功能正常运行，系统将检查并生成必要的前置数据，并按项目基础信息、世界观、大纲、配套设定、卷章写作的顺序展示当前流程状态。',
+  'PG.Desc':
+      '为确保AI编辑功能正常运行，系统将检查并生成必要的前置数据，并按项目基础信息、世界观、大纲、配套设定、卷章写作的顺序展示当前流程状态。',
   'PG.ProjectSelection': '项目选择',
   'PG.HintSelectProject': '选择已有项目',
   'PG.SummaryPlaceholder': '请选择项目后查看当前写作流程状态。',
@@ -1247,7 +1263,8 @@ const Map<String, String> zhStrings = <String, String>{
   'IE.Fmt.Size': '大小: {0:N0} 字节',
   'AMC.Timeout30s': '30秒',
   'DG.SampleChars': '主角,配角A',
-  'TC.ExportFilter': 'Markdown文件 (*.md)|*.md|JSON文件 (*.json)|*.json|文本文件 (*.txt)|*.txt|HTML文件 (*.html)|*.html',
+  'TC.ExportFilter':
+      'Markdown文件 (*.md)|*.md|JSON文件 (*.json)|*.json|文本文件 (*.txt)|*.txt|HTML文件 (*.html)|*.html',
   'AMC.InitFallbackFmt': '配置服务初始化失败，使用默认服务: {0}',
   'AMC.MaxLengthLiveFmt': '{0:F0}字符',
   'AMC.TimeoutLiveFmt': '{0:F0}秒',
@@ -1400,7 +1417,8 @@ const Map<String, String> zhStrings = <String, String>{
   'PO.CountZero': '0个',
   'PO.SettingCompletion': '设定完成度',
   'PO.ProcessFlowTitle': '运行流程与闭环',
-  'PO.ProcessFlowIntro': '推荐顺序：项目基础信息 → 世界观 → 大纲 → 配套设定 → 卷章写作。进入配套设定后，角色、势力和细分体系可以同步补齐；写作后再回到剧情/设定做一致性校正，形成闭环。',
+  'PO.ProcessFlowIntro':
+      '推荐顺序：项目基础信息 → 世界观 → 大纲 → 配套设定 → 卷章写作。进入配套设定后，角色、势力和细分体系可以同步补齐；写作后再回到剧情/设定做一致性校正，形成闭环。',
   'PO.Stage1': '1. 项目基础信息',
   'PO.Stage2': '2. 世界观',
   'PO.Stage3': '3. 大纲',
@@ -1452,20 +1470,27 @@ const Map<String, String> zhStrings = <String, String>{
   'PO.StageSupportPending': '待开始\n建议在大纲后补齐',
   'PO.StageWritingDone': '进行中/已完成\n卷 {0} / 章 {1}',
   'PO.StageWritingPending': '未开始\n请在基础设定后写作',
-  'PO.ParallelHintWithOutline': '并行提示：当前已进入配套设定阶段，角色、势力、修炼体系、政治体系等可以同步补齐，但都应遵循项目基础信息、世界观与大纲。',
+  'PO.ParallelHintWithOutline':
+      '并行提示：当前已进入配套设定阶段，角色、势力、修炼体系、政治体系等可以同步补齐，但都应遵循项目基础信息、世界观与大纲。',
   'PO.ParallelHintNoOutline': '并行提示：先完成项目基础信息、世界观和大纲，再并行补齐角色、势力与其他配套设定。',
-  'PO.ClosedLoopHintWriting': '闭环提示：写作推进后，应回到剧情、人物、势力、世界设定和一致性检查入口做校正，再进入下一轮卷章写作。',
-  'PO.ClosedLoopHintNoWriting': '闭环提示：当卷章开始推进后，系统应进入“写作 → 同步上下文 → 检查一致性 → 回补设定/大纲”的闭环。',
-  'PO.AutoUpdateHintWriting': '更新工艺：章节保存后，系统会先自动同步剧情、设定、角色履历、势力履历、人物关系、势力关系与时间线。',
+  'PO.ClosedLoopHintWriting':
+      '闭环提示：写作推进后，应回到剧情、人物、势力、世界设定和一致性检查入口做校正，再进入下一轮卷章写作。',
+  'PO.ClosedLoopHintNoWriting':
+      '闭环提示：当卷章开始推进后，系统应进入“写作 → 同步上下文 → 检查一致性 → 回补设定/大纲”的闭环。',
+  'PO.AutoUpdateHintWriting':
+      '更新工艺：章节保存后，系统会先自动同步剧情、设定、角色履历、势力履历、人物关系、势力关系与时间线。',
   'PO.AutoUpdateHintNoWriting': '更新工艺：进入卷章写作后，每次章节保存都应触发剧情、设定、履历、关系和时间线的自动更新。',
-  'PO.ReviewHintWriting': '复核工艺：自动更新完成后，建议依次检查时间线管理、关系网络、角色管理、势力管理、一致性检查和质量检查页面，确认自动更新结果。',
-  'PO.ReviewHintNoWriting': '复核工艺：当前还未进入写作阶段。待章节开始推进后，再进入“自动更新 → 人工复核 → 回补设定/剧情”的闭环。',
+  'PO.ReviewHintWriting':
+      '复核工艺：自动更新完成后，建议依次检查时间线管理、关系网络、角色管理、势力管理、一致性检查和质量检查页面，确认自动更新结果。',
+  'PO.ReviewHintNoWriting':
+      '复核工艺：当前还未进入写作阶段。待章节开始推进后，再进入“自动更新 → 人工复核 → 回补设定/剧情”的闭环。',
   'PO.Next.ProjectBase': '下一步建议：先完善项目基础信息，再进入世界设定与 AI 生成。',
   'PO.Next.WorldSettings': '下一步建议：优先补齐世界观。可以进入“世界设定”或“流程工作台”生成前置设定。',
   'PO.Next.Outline': '下一步建议：基于当前世界观生成剧情大纲，再继续补齐角色和势力。',
   'PO.Next.Support': '下一步建议：当前已具备基础世界观和大纲，可以并行补齐角色、势力及其他细分设定。',
   'PO.Next.Writing': '下一步建议：进入卷章管理开始写作，并在写作后持续回补剧情和设定。',
-  'PO.Next.ClosedLoop': '下一步建议：项目已进入创作闭环，建议按“写作 → 自动更新时间线/关系/履历 → 复核时间线与关系网络 → 一致性检查 → 回补设定/大纲”的节奏持续推进。',
+  'PO.Next.ClosedLoop':
+      '下一步建议：项目已进入创作闭环，建议按“写作 → 自动更新时间线/关系/履历 → 复核时间线与关系网络 → 一致性检查 → 回补设定/大纲”的节奏持续推进。',
   'PO.OpenVolumeChapterFailed': '打开卷章管理失败：{0}',
   'PO.OpenCharacterFailed': '打开角色管理失败：{0}',
   'PO.OpenFactionFailed': '打开势力管理失败：{0}',
@@ -1488,9 +1513,11 @@ const Map<String, String> zhStrings = <String, String>{
   'PO.StatisticsServiceNotInitialized': '项目统计服务未初始化',
   'PO.OpenStatisticsFailed': '打开统计分析失败：{0}',
   'PO.ProjectServiceNotInitialized': '项目服务未初始化',
-  'PO.BackupConfirm': '确定要备份当前项目“{0}”吗？\n\n备份将包含：\n• 所有文本内容\n• 角色设定\n• 剧情大纲\n• 世界设定\n• 项目配置',
+  'PO.BackupConfirm':
+      '确定要备份当前项目“{0}”吗？\n\n备份将包含：\n• 所有文本内容\n• 角色设定\n• 剧情大纲\n• 世界设定\n• 项目配置',
   'PO.BackupConfirmTitle': '备份确认',
-  'PO.BackupNotImplemented': '当前项目：{0}\n\n真实备份链路尚未接入，本入口已完成项目上下文收口。\n后续将统一接入导出/备份服务，避免继续使用演示数据。',
+  'PO.BackupNotImplemented':
+      '当前项目：{0}\n\n真实备份链路尚未接入，本入口已完成项目上下文收口。\n后续将统一接入导出/备份服务，避免继续使用演示数据。',
   'PO.FeaturePending': '功能待完善',
   'PO.BackupFailed': '备份项目失败：{0}',
   'VM.Subtitle': '管理项目的卷宗和章节结构',
@@ -1735,7 +1762,8 @@ const Map<String, String> zhStrings = <String, String>{
   'CM.UpdateSuccessLocal': '角色信息更新成功（仅本地）！',
   'CM.EditFailed': '编辑角色失败: {0}',
   'CM.SelectToDelete': '请先选择要删除的角色',
-  'CM.ReferencedBody': '角色 \'{0}\' 已被以下内容引用：\n\n{1}\n\n已被引用的角色只能编辑，不能删除。是否要编辑此角色？',
+  'CM.ReferencedBody':
+      '角色 \'{0}\' 已被以下内容引用：\n\n{1}\n\n已被引用的角色只能编辑，不能删除。是否要编辑此角色？',
   'CM.ReferencedTitle': '角色已被引用',
   'CM.DeleteSuccess': '角色 \'{0}\' 删除成功！',
   'CM.DeleteFailedMsg': '删除失败: {0}',
@@ -2163,7 +2191,8 @@ const Map<String, String> zhStrings = <String, String>{
   'VM.DefaultVolumeName': '默认卷',
   'VM.DefaultVolumeDesc': '系统自动创建的默认卷',
   'CE.PrereqGeneratedTitle': '前置数据生成完成',
-  'CE.PrereqGeneratedBody': '为确保AI编辑功能正常运行，系统已自动生成必要的前置数据：\n\n{0}\n\n这些数据将帮助AI更好地理解您的书籍世界观和角色设定。',
+  'CE.PrereqGeneratedBody':
+      '为确保AI编辑功能正常运行，系统已自动生成必要的前置数据：\n\n{0}\n\n这些数据将帮助AI更好地理解您的书籍世界观和角色设定。',
   'CW.ChapterLocationFmt': '第{0}章（{1}）',
   'CW.UntitledChapter': '未命名章节',
   'CE.Title': '章节编辑器',
@@ -2279,7 +2308,8 @@ const Map<String, String> zhStrings = <String, String>{
   'CPV.UpdateStatsFailed': '更新统计信息失败：{0}',
   'CPV.FontSizeFailed': '更改字体大小失败：{0}',
   'CPV.ExportTitle': '导出章节',
-  'CPV.ExportFilter': '文本文件 (*.txt)|*.txt|Word文档 (*.docx)|*.docx|所有文件 (*.*)|*.*',
+  'CPV.ExportFilter':
+      '文本文件 (*.txt)|*.txt|Word文档 (*.docx)|*.docx|所有文件 (*.*)|*.*',
   'CPV.ExportSuccess': '章节已导出到：{0}',
   'CPV.ExportDoneTitle': '导出成功',
   'CPV.ExportFailed': '导出章节失败：{0}',
@@ -2412,7 +2442,8 @@ const Map<String, String> zhStrings = <String, String>{
   'MW.ProjectNotFound': '未找到当前项目，请重新选择项目。',
   'MW.ProjectGuardNotInit': '项目校验服务未初始化',
   'MW.HelpTitle': '使用帮助',
-  'MW.HelpText': '常用入口说明：\n1. 左侧导航用于项目、人物、设定、AI 协作等功能切换。\n2. 右上角齿轮用于打开 AI 模型配置中心。\n3. AI 模型配置会保存到当前用户的本地配置目录，不会覆盖发布目录。\n4. 修改模型配置后，部分选项需要重启应用才会完全生效。\n\n如果某个页面打不开，请把完整弹窗内容发给我继续修复。',
+  'MW.HelpText':
+      '常用入口说明：\n1. 左侧导航用于项目、人物、设定、AI 协作等功能切换。\n2. 右上角齿轮用于打开 AI 模型配置中心。\n3. AI 模型配置会保存到当前用户的本地配置目录，不会覆盖发布目录。\n4. 修改模型配置后，部分选项需要重启应用才会完全生效。\n\n如果某个页面打不开，请把完整弹窗内容发给我继续修复。',
   'MW.AIGenFileTitle': 'AI内容生成',
   'MW.ShowPrereqDialogFailed': '显示前置条件生成对话框失败：{0}',
   'MW.OneClickServiceMissing': '一键生成服务未注册',
@@ -2425,7 +2456,8 @@ const Map<String, String> zhStrings = <String, String>{
   'MW.BatchModeQuickSwitch': '快速切卷（每卷 3 章后切新卷）',
   'MW.BatchModeStandard': '标准模式',
   'MW.BatchModeSuffix': '，每卷 {0} 章',
-  'MW.BatchConfirm': '将启动长篇批量生成：{0} × 每章 ≥{1} 字。\n采样采用 RWKV 官方创意参数 + DRY 抗复读采样，\n章节正文使用“切片创作 + 拼接”工艺（16K 上下文限制）。\n\n任务在后台运行，期间可正常使用软件其他功能。\n若存在未完成的批量任务将自动从断点继续。\n\n确定开始？',
+  'MW.BatchConfirm':
+      '将启动长篇批量生成：{0} × 每章 ≥{1} 字。\n采样采用 RWKV 官方创意参数 + DRY 抗复读采样，\n章节正文使用“切片创作 + 拼接”工艺（16K 上下文限制）。\n\n任务在后台运行，期间可正常使用软件其他功能。\n若存在未完成的批量任务将自动从断点继续。\n\n确定开始？',
   'MW.Started': '已启动',
   'MW.BatchStartFailed': '启动批量生成失败：{0}',
   'MW.BatchProgressTitle': '长篇批量生成进度',
@@ -2474,7 +2506,8 @@ const Map<String, String> zhStrings = <String, String>{
   'MW.BackupDoneTitle': '备份成功',
   'MW.RestoreDialogTitle': '选择要恢复的数据库备份',
   'MW.FilterSQLite': 'SQLite 数据库|*.db|所有文件|*.*',
-  'MW.RestoreConfirm': '恢复数据库将覆盖当前数据库文件。系统会先自动为当前数据库创建一个恢复前备份。恢复完成后建议立即重启应用。\n\n是否继续？',
+  'MW.RestoreConfirm':
+      '恢复数据库将覆盖当前数据库文件。系统会先自动为当前数据库创建一个恢复前备份。恢复完成后建议立即重启应用。\n\n是否继续？',
   'MW.RestoreConfirmTitle': '确认恢复',
   'MW.PreRestoreFailed': '恢复前备份失败',
   'MW.RestoreFailedTitle': '恢复失败',
@@ -2833,7 +2866,8 @@ const Map<String, String> zhStrings = <String, String>{
   'TS.AddCustom': '新增自定义皮肤',
   'TS.AddCustomTooltip': '以当前选中皮肤为基础新增自定义皮肤',
   'TS.EditTooltip': '编辑自定义皮肤的全部颜色（含窗口框架）',
-  'TS.Hint': '提示：内置皮肤不可编辑或删除，可基于它复制为自定义皮肤后修改；切换项目或批量生成检测到女频文时，将临时切换为红粉花漾少女风，退出后自动恢复。',
+  'TS.Hint':
+      '提示：内置皮肤不可编辑或删除，可基于它复制为自定义皮肤后修改；切换项目或批量生成检测到女频文时，将临时切换为红粉花漾少女风，退出后自动恢复。',
   'TS.SkinNameHint': '皮肤名称 *',
   'TS.IsDark': '深色基调（使用 MaterialDesign Dark / HandyControl SkinDark 资源）',
   'TS.SaveSkin': '保存皮肤',
@@ -2912,7 +2946,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AHW.Copied': '错误详情已复制到剪贴板。',
   'CRP.Title': '关联章节',
   'CRP.Heading': '关联目标章节',
-  'CRP.Description': '依次选择书籍、分卷与章节。关联后，创作助手的后续输入将直接作用于该章节：输入要求即处理（润色/重写/扩写/续写等），也可针对章节提问；输入「取消关联」可解除。',
+  'CRP.Description':
+      '依次选择书籍、分卷与章节。关联后，创作助手的后续输入将直接作用于该章节：输入要求即处理（润色/重写/扩写/续写等），也可针对章节提问；输入「取消关联」可解除。',
   'CRP.Book': '书籍',
   'CRP.Volume': '分卷',
   'CRP.Chapter': '章节',
@@ -3786,24 +3821,20 @@ const Map<String, String> zhStrings = <String, String>{
   'AC.Ref.Linked': '已关联《{0}》第{1}卷第{2}章《{3}》',
   'AC.Ref.Mode.Revise': '按意见改写',
   'AC.Ref.Mode.Continue': '按意见续写',
-  'AC.Ref.InstructionHint':
-      '输入改进意见（如：重写开头，加强冲突；扩写战斗场面）… 带问号则只作解答，不改正文',
+  'AC.Ref.InstructionHint': '输入改进意见（如：重写开头，加强冲突；扩写战斗场面）… 带问号则只作解答，不改正文',
   'AC.Ref.Processing': '正在处理关联章节…',
   'AC.Ref.Answering': '正在阅读本章并作答…',
   'AC.Ref.SegmentProgress': '正在分段改写 {0}/{1} 段…',
   'AC.Ref.PickIncomplete': '请先选择书籍、分卷与章节。',
   'AC.Ref.NoChapter': '该分卷下暂无章节。',
   'AC.Ref.Failed': '章节处理失败：{0}',
-  'AC.ChatSystem':
-      '你是 NovelCraft 的书籍创作助手，负责帮助作者构思、分析与撰写作品。回答简洁、可执行。',
+  'AC.ChatSystem': '你是 NovelCraft 的书籍创作助手，负责帮助作者构思、分析与撰写作品。回答简洁、可执行。',
   'CRS.ChapterMissing': '目标章节不存在或已被删除，请重新关联。',
-  'CRS.NoWriter':
-      '未找到可用的写作模型。请先到「AI 配置」注册并启用模型（或配好双代理提供者）。',
+  'CRS.NoWriter': '未找到可用的写作模型。请先到「AI 配置」注册并启用模型（或配好双代理提供者）。',
   'CRS.Empty': 'AI 返回了空内容，请换个说法重试。',
   'CRS.PersistFailed': '已生成内容，但回写章节失败：{0}',
   'CRS.Applied': '已按你的要求更新《{0}》正文：{1} 字 → {2} 字。',
-  'CRS.AppliedSegmented':
-      '已按你的要求分段改写《{0}》正文（{3} 段）：{1} 字 → {2} 字。',
+  'CRS.AppliedSegmented': '已按你的要求分段改写《{0}》正文（{3} 段）：{1} 字 → {2} 字。',
   'CRS.SegmentFailed': '分段改写第 {0}/{1} 段失败，正文未改动。请检查模型服务后重试。',
   'CRS.SegmentLimit':
       '本章 {0} 字，按每段 {1} 字需分成 {2} 段，超过上限 {3} 段。请拆成多章、或缩小改写范围后重试。',
@@ -3948,7 +3979,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AIC.LlamaServerInstalled': '✅ llama-server.exe 已安装',
   'AIC.BuiltIn.Title': '内置推理引擎 · rwkv_lightning_cuda',
   'AIC.BuiltIn.Badge': '推荐 · 免编译',
-  'AIC.BuiltIn.Desc': '官方预编译 CUDA 包，下载后校验 SHA-256 并自动解压。只支持 .pth / .rwkvq 权重，且必须配套外置词表（引擎不内嵌词表）。',
+  'AIC.BuiltIn.Desc':
+      '官方预编译 CUDA 包，下载后校验 SHA-256 并自动解压。只支持 .pth / .rwkvq 权重，且必须配套外置词表（引擎不内嵌词表）。',
   'AIC.BuiltIn.Variant': 'CUDA 档位',
   'AIC.BuiltIn.InstallBtn': '⚡ 安装内置引擎 + 词表',
   'AIC.BuiltIn.DownloadModelBtn': '📥 下载 .pth 原生权重',
@@ -3958,11 +3990,25 @@ const Map<String, String> zhStrings = <String, String>{
   'AIC.BuiltIn.PickModel': '选择官方原生 .pth 权重',
   'AIC.BuiltIn.NoModel': '未找到可用 .pth 权重，请稍后重试或手动下载到 rwkv_models/。',
   'AIC.BuiltIn.StatefulRoute': '会话 state 续跑（每轮只发增量）',
-  'AIC.BuiltIn.StatefulRouteHint': '走 /state/chat/completions，由服务端按 session_id 维护 state。实测有效；若换成不提供 /state/* 的引擎请关闭。',
+  'AIC.BuiltIn.StatefulRouteHint':
+      '走 /state/chat/completions，由服务端按 session_id 维护 state。实测有效；若换成不提供 /state/* 的引擎请关闭。',
   'AIC.BuiltIn.ThinkType': '思考前缀',
-  'AIC.BuiltIn.ThinkHint': '控制助手思考前缀；采样参数（top_k/top_p/alpha_*）与 stop_tokens 已按官方默认值固定透传。',
+  'AIC.BuiltIn.ThinkHint':
+      '控制助手思考前缀；采样参数（top_k/top_p/alpha_*）与 stop_tokens 已按官方默认值固定透传。',
   'AIC.Cloud.CfTitle': 'Cloudflare Access 凭证（Service Token）',
-  'AIC.Cloud.CfHint': '头名按字节精确匹配：CF-Access-Client-Id / CF-Access-Client-Secret。拼错不会报 401，而是静默返回 HTML 登录页。',
+  'AIC.Cloud.CfHint':
+      '头名按字节精确匹配：CF-Access-Client-Id / CF-Access-Client-Secret。拼错不会报 401，而是静默返回 HTML 登录页。',
+  'AIC.Cloud.EndpointProfile': '云端端点配置',
+  'AIC.Cloud.AddProfile': '添加云端配置',
+  'AIC.Cloud.ProfileName': '配置名称',
+  'AIC.Cloud.RemoveProfile': '删除此配置',
+  'AIC.Cloud.ApiKeyOptional': 'API Key（可选）',
+  'AIC.Cloud.ModelsFromEndpoint': '从当前 API 地址获取模型',
+  'AIC.Cloud.FetchModelsHint': '获取后选择模型',
+  'AIC.Cloud.SelectModel': '请选择模型',
+  'AIC.Cloud.FetchModels': '从 API 地址获取模型',
+  'AIC.Cloud.ModelsUnavailable':
+      '未能从该 API 地址读取模型列表，请检查地址和 Cloudflare Access 凭据。',
   'AIC.Cloud.FetchStatus': '🩺 取引擎状态（验证是否真的连通）',
   'AIC.Cloud.StatusUnavailable': '取不到引擎状态：端点未响应或不是 rwkv_lightning_cuda。',
   'Set.Diagnostics': '诊断',
@@ -3970,13 +4016,16 @@ const Map<String, String> zhStrings = <String, String>{
   'Set.AgentBatchDesc': '指定哪些 Agent 参与攒批、各自归到哪个分组（长 prompt 单独成组）',
   'ABatch.Title': 'Agent 攒批配置',
   'ABatch.Intro': '攒批与分组',
-  'ABatch.IntroBody': '同一分组内的 Agent 才会合进一次批量请求。攒批是同批同速的——把长 prompt 和短 prompt 混在一批，整批的首 token 时间都会被拉长，所以建议给长任务单独设一个组。',
+  'ABatch.IntroBody':
+      '同一分组内的 Agent 才会合进一次批量请求。攒批是同批同速的——把长 prompt 和短 prompt 混在一批，整批的首 token 时间都会被拉长，所以建议给长任务单独设一个组。',
   'ABatch.Groups': '当前分组',
   'ABatch.NoGroups': '（未开启任何 Agent）',
   'ABatch.DefaultGroup': '默认',
-  'ABatch.NoCapable': '⚠ 当前没有任何 Agent 实现了 buildPromptForBatch，因此攒批不会生效（这是刻意的：批量路由无状态，prompt 必须自包含，否则会静默降质）。',
+  'ABatch.NoCapable':
+      '⚠ 当前没有任何 Agent 实现了 buildPromptForBatch，因此攒批不会生效（这是刻意的：批量路由无状态，prompt 必须自包含，否则会静默降质）。',
   'ABatch.Misconfigured': '⚠ 以下 Agent 已开启攒批但未实现批量 prompt，实际不会生效',
-  'ABatch.AllDefaultGroup': '提示：所有已开启的 Agent 都在「默认」组，等于没分组——若其中有特别长的任务，建议单独分一组。',
+  'ABatch.AllDefaultGroup':
+      '提示：所有已开启的 Agent 都在「默认」组，等于没分组——若其中有特别长的任务，建议单独分一组。',
   'ABatch.Capable': '已实现批量 prompt，可用于攒批',
   'ABatch.NotCapable': '未实现 buildPromptForBatch —— 攒批不会生效（会走单路）',
   'ABatch.Group': '分组',
@@ -4041,7 +4090,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AIH.State.ClientHitWarn': '命中率低 → 每轮都在重编码历史，检查会话是否被误关/被 TTL 清掉',
   'AIH.State.ClientBytes': '占用',
   'AIH.State.Server': '服务端（引擎三级缓存）',
-  'AIH.State.ServerNote': '服务端 L1 VRAM / L2 RAM / SQLite 是另一个进程的事，且多节点部署下 /state/status 可能问到别的节点（会显示全 0），所以两侧命中率不能混成一个数。',
+  'AIH.State.ServerNote':
+      '服务端 L1 VRAM / L2 RAM / SQLite 是另一个进程的事，且多节点部署下 /state/status 可能问到别的节点（会显示全 0），所以两侧命中率不能混成一个数。',
   'AIH.Kind.Bsz': '并发超限（应拆批重试）',
   'AIH.Kind.Auth': 'Cloudflare 认证失败（应检查 Token）',
   'AIH.Kind.Server': '服务端 5xx（应退避重试）',
@@ -4056,8 +4106,7 @@ const Map<String, String> zhStrings = <String, String>{
   'AIH.AgentState.Turns': '累计对话轮次',
   'AIH.AgentState.GroupList': '分组明细（并发 10 = 1 团队并行写 1 章）',
   'AIH.AgentState.GroupRowFmt': '活跃成员 {0}/10 · 轮次 {1}',
-  'AIH.AgentState.Empty':
-      '当前没有已激活的团队分组（启动「多智能体协同写书」后此处会出现分组）',
+  'AIH.AgentState.Empty': '当前没有已激活的团队分组（启动「多智能体协同写书」后此处会出现分组）',
   'AIC.DownloadOfficialModelBtn': '📥 下载官方原生 RWKV 模型',
   'AIC.LatestModelDownloadedBtn': '✅ 已下载最新模型',
   'AIC.OfficialModelDownloaded': '✅ 官方模型已下载',
@@ -4066,7 +4115,8 @@ const Map<String, String> zhStrings = <String, String>{
   'AIC.StartLocalRwkvServer': '启动本地 RWKV Server',
   'AIC.Starting': '启动中…',
   'AIC.FieldRwkvExecutable': 'RWKV Server 可执行文件',
-  'AIC.HintRwkvExecutable': r'C:\path\to\llama-server.exe 或 rwkv.cpp\server.exe',
+  'AIC.HintRwkvExecutable':
+      r'C:\path\to\llama-server.exe 或 rwkv.cpp\server.exe',
   'AIC.FieldLocalGgufModel': '本地 GGUF 模型（下拉选择）',
   'AIC.NoGgufFiles': 'rwkv_models/ 无 GGUF 文件',
   'AIC.SelectModelHint': '请选择模型',
@@ -4136,16 +4186,14 @@ const Map<String, String> zhStrings = <String, String>{
   'PM.Type.Other': '其他',
   'PM.Progress': '进度',
   'PM.Open': '打开',
-  'PM.DeleteCascadeHint':
-      '该项目关联的分卷/章节/世界观数据将一并删除（角色库保留）。',
+  'PM.DeleteCascadeHint': '该项目关联的分卷/章节/世界观数据将一并删除（角色库保留）。',
   'PM.DeleteDone': '已删除「{0}」及其关联数据',
   'PM.DeleteFailed': '删除失败：{0}',
   'Common.Edit': '修改',
   'Common.More': '更多',
   'Common.Refreshed': '已刷新',
   'AIC.FieldMaxRefLength': '最大参考长度',
-  'AIC.MaxRefLengthHint':
-      '自动等于「最大令牌数」；实际在 {0} 窗口内切分为 参考 {1} / 输出 {2}',
+  'AIC.MaxRefLengthHint': '自动等于「最大令牌数」；实际在 {0} 窗口内切分为 参考 {1} / 输出 {2}',
   'GAP.Edit.Title': '修改档案',
   'GAP.Edit.EntryTitle': '标题',
   'GAP.Edit.Content': '正文',
@@ -4223,6 +4271,7 @@ const Map<String, String> zhStrings = <String, String>{
   // --- Common / Dlg (跨页面通用) ---
   'Common.Close': '关闭',
   'Common.Cancel': '取消',
+  'Common.Add': '添加',
   // --- GLM 增补：AI 协作聊天（源 CSV 未含，格式与生成器一致）---
   'AC.ClearChat': '清空会话',
   'AC.ClearChatConfirm': '将清空当前聊天记录并重新开始（已持久保存的历史将被删除，此操作不可撤销）。',
@@ -4318,11 +4367,9 @@ const Map<String, String> zhStrings = <String, String>{
   // ---- 功能 C：章节落库后自动同步世界观 ----
   'SYN.GroupTitle': '章节自动同步（世界观联动）',
   'SYN.ToggleTitle': '章节保存后自动同步世界观',
-  'SYN.ToggleSub':
-      '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）',
+  'SYN.ToggleSub': '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）',
   'SYN.AIToggleTitle': 'AI 状态抽取（实验）',
-  'SYN.AIToggleSub':
-      '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）',
+  'SYN.AIToggleSub': '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）',
   'SYN.CountsFmt': '人物 {0} · 势力 {1} · 剧情 {2} · 设定 {3} · 时间线 {4}',
   'SYN.SyncDoneFmt': '（世界观自动同步：{0}）',
   'SYN.SyncFailFmt': '（世界观同步未执行：{0}）',
@@ -4351,8 +4398,7 @@ const Map<String, String> zhStrings = <String, String>{
   'AIC.Thinking.Enable': '启用思维链',
   'AIC.Thinking.EnableSub': '关闭后 Agent 直接产出结果，不再构造/解析思维步骤',
   'AIC.Thinking.Intensity': '思考强度',
-  'AIC.Thinking.IntensitySub':
-      '低 = 仅正文/大纲/续写/角色等核心长文任务；中 = 复杂任务（默认）；高 = 全部任务',
+  'AIC.Thinking.IntensitySub': '低 = 仅正文/大纲/续写/角色等核心长文任务；中 = 复杂任务（默认）；高 = 全部任务',
   'AIC.Thinking.Low': '低',
   'AIC.Thinking.Medium': '中',
   'AIC.Thinking.High': '高',
@@ -4370,14 +4416,12 @@ const Map<String, String> zhStrings = <String, String>{
   'RAI.Dedupe': '去重润色',
   'RAI.SelectionCapturedFmt': '已捕获选区 · {0} 字',
   'RAI.SelectionNone': '尚未捕获选区',
-  'RAI.SelectionGuide':
-      '回到正文拖动鼠标选中一段文字，选区会自动捕获到这里（点击面板不会丢失）',
+  'RAI.SelectionGuide': '回到正文拖动鼠标选中一段文字，选区会自动捕获到这里（点击面板不会丢失）',
   'RAI.Reselect': '重新选择',
   'RAI.ReselectTooltip': '清除当前选区，重新框选',
   // ---- 多智能体协同写书（MAG.*）----
   'MAG.Title': '多智能体协同写书',
-  'MAG.FormIntro':
-      '开始前请填写以下信息。开始后：主智能体先规划主线大纲，再自主分派子智能体并行规划分卷大纲与章节大纲；每章由一个写作团队（含组长）分段协同完成，组长负责分工、边界与最终拼接润色排版。',
+  'MAG.FormIntro': '先配置书籍信息。G1K 默认续写优选工艺中，7.2B 负责大纲和润色，2.9B 负责正文；其他模型按所选工艺执行。',
   'MAG.BookTitle': '书籍名称',
   'MAG.Author': '作者署名',
   'MAG.TargetVolumes': '目标分卷数',
@@ -4387,13 +4431,14 @@ const Map<String, String> zhStrings = <String, String>{
   'MAG.SubAgentsLocked': '团队编制（固定）',
   'MAG.TeamFixedValue': '10（1 组长 + 9 写手）',
   'MAG.Concurrency': '并行章节数（每章 1 个写作团队）',
-  'MAG.ConcurrencyHelper':
-      '并发 N = N 章 N 个团队并行写作；填章节数即可全部并行',
+  'MAG.ConcurrencyHelper': '并发 N = N 章 N 个团队并行写作；填章节数即可全部并行',
   'MAG.ConcurrencyMinus': '减 1',
   'MAG.ConcurrencyPlus': '加 1',
   'MAG.Background': '收起，后台继续',
   'MAG.Mode.Normal': '普通模式（≤100 团队）',
+  'MAG.Mode.NormalShort': '普通',
   'MAG.Mode.Turbo': '高速模式（全部同时开工）',
+  'MAG.Mode.TurboShort': '高速',
   'MAG.ReservedTeams': '目标预留团队数',
   'MAG.ReservedHelper': '普通模式上限（≤100）；0 = 不限，由硬上限兜底',
   'MAG.ComputedTitle': '并发自动计算',
@@ -4453,7 +4498,8 @@ const Map<String, String> enStrings = <String, String>{
   'AC.EnableStreaming': 'Enable streaming response',
   'AC.QuickTest': 'Quick Test',
   'AC.TestPromptHint': 'Enter a test prompt',
-  'AC.TestPromptDefault': 'Enter project settings, chapter outline, or text to review, then run a workflow below or send a test.',
+  'AC.TestPromptDefault':
+      'Enter project settings, chapter outline, or text to review, then run a workflow below or send a test.',
   'AC.SendTest': 'Send Test',
   'AC.StreamingResponse': 'Streaming response',
   'AC.ResponsePlaceholder': 'AI response will appear here',
@@ -4495,16 +4541,20 @@ const Map<String, String> enStrings = <String, String>{
   'AC.ColError': 'Error',
   'AC.AgentLog': 'Agent Interaction Log',
   'AC.ClearLog': 'Clear log',
-  'AC.CtorFailed': 'Failed to construct AI collaboration view: {0}\n\nDetails: {1}',
+  'AC.CtorFailed':
+      'Failed to construct AI collaboration view: {0}\n\nDetails: {1}',
   'AC.InitError': 'Initialization Error',
   'AC.InitFailed': 'Failed to initialize AI collaboration system: {0}',
-  'AC.AIServiceInitFailed': 'AI service initialization failed: {0}\n\nThe application will continue running, but AI features may be unavailable.',
+  'AC.AIServiceInitFailed':
+      'AI service initialization failed: {0}\n\nThe application will continue running, but AI features may be unavailable.',
   'AC.UIInitFailed': 'UI initialization failed: {0}',
   'AC.AgentDetails': 'Agent Details',
-  'AC.AgentDetailsBody': 'Agent: {0}\nDescription: {1}\nVersion: {2}\n\nCapabilities:\n{3}',
+  'AC.AgentDetailsBody':
+      'Agent: {0}\nDescription: {1}\nVersion: {2}\n\nCapabilities:\n{3}',
   'AC.ViewAgentDetailsFailed': 'Failed to view agent details: {0}',
   'AC.ResetAgentFailed': 'Failed to reset agent: {0}',
-  'AC.EnterTestPromptFirst': 'Please enter project settings, chapter outline, or text to process in the Quick Test area on the right first.',
+  'AC.EnterTestPromptFirst':
+      'Please enter project settings, chapter outline, or text to process in the Quick Test area on the right first.',
   'AC.StatusIdle': 'Idle',
   'AC.StatusWorking': 'Working',
   'AC.StatusWaiting': 'Waiting',
@@ -4531,18 +4581,25 @@ const Map<String, String> enStrings = <String, String>{
   'AC.UnsupportedProvider': 'Unsupported provider: {0}',
   'AC.SaveConfigException': 'Exception while saving configuration: {0}',
   'AC.TestChainTitle': 'Test Chain of Thought',
-  'AC.TestChainDesc': 'This is a test chain of thought demonstrating the AI\'s reasoning process',
+  'AC.TestChainDesc':
+      'This is a test chain of thought demonstrating the AI\'s reasoning process',
   'AC.TestStepAnalysisTitle': 'Analyze the Problem',
-  'AC.TestStepAnalysisContent': 'First analyze the user\'s question and identify the core requirements',
+  'AC.TestStepAnalysisContent':
+      'First analyze the user\'s question and identify the core requirements',
   'AC.TestStepPlanningTitle': 'Make a Plan',
-  'AC.TestStepPlanningContent': 'Define concrete solution steps based on the problem analysis',
+  'AC.TestStepPlanningContent':
+      'Define concrete solution steps based on the problem analysis',
   'AC.TestStepReasoningTitle': 'Reasoning',
-  'AC.TestStepReasoningContent': 'Apply logical reasoning to derive possible solutions step by step',
+  'AC.TestStepReasoningContent':
+      'Apply logical reasoning to derive possible solutions step by step',
   'AC.TestStepEvaluationTitle': 'Evaluate Solutions',
-  'AC.TestStepEvaluationContent': 'Assess the feasibility, pros, and cons of each solution',
+  'AC.TestStepEvaluationContent':
+      'Assess the feasibility, pros, and cons of each solution',
   'AC.TestStepConclusionTitle': 'Final Conclusion',
-  'AC.TestStepConclusionContent': 'Synthesize all findings into the final solution',
-  'AC.TestChainFinal': 'Test chain of thought completed; all steps were processed successfully.',
+  'AC.TestStepConclusionContent':
+      'Synthesize all findings into the final solution',
+  'AC.TestChainFinal':
+      'Test chain of thought completed; all steps were processed successfully.',
   'AC.StatisticsServiceNotInit': 'Statistics service is not initialized',
   'AC.ExportFileName': 'AI usage stats_{0}',
   'AC.StatsExported': 'Statistics exported to: {0}',
@@ -4576,13 +4633,16 @@ const Map<String, String> enStrings = <String, String>{
   'CP.RejectCard': 'Discard Card',
   'CP.CollapseTooltip': 'Collapse AI Copilot',
   'CP.StageNotStarted': 'Pipeline: not started',
-  'CP.StageNotStartedHint': 'Pipeline: not started (reply "Start Planning" to begin)',
+  'CP.StageNotStartedHint':
+      'Pipeline: not started (reply "Start Planning" to begin)',
   'CP.StageGenerating': 'Pipeline: {0} · generating...',
   'CP.Stage': 'Pipeline: {0}',
-  'CP.ChapterRef': 'Linked to "{0}", Volume {1} "{2}", Chapter {3} "{4}" — type your request to work on this chapter',
+  'CP.ChapterRef':
+      'Linked to "{0}", Volume {1} "{2}", Chapter {3} "{4}" — type your request to work on this chapter',
   'CP.ClearChapterRefTooltip': 'Unlink chapter',
   'CP.EditModeHint': 'Edit mode: type the revised content and send to apply it',
-  'CP.AttachChapterTooltip': 'Link a chapter (Book → Volume → Chapter); once linked, type your request to work on it directly',
+  'CP.AttachChapterTooltip':
+      'Link a chapter (Book → Volume → Chapter); once linked, type your request to work on it directly',
   'CP.SendTooltip': 'Send (Enter)',
   'CP.StageBlueprint': 'Blueprint Planning',
   'CP.StagePlotLines': 'Plot Line Planning',
@@ -4597,11 +4657,15 @@ const Map<String, String> enStrings = <String, String>{
   'CP.StatusCardRejected': 'Card Discarded',
   'CP.StatusRejected': 'Discarded',
   'CP.StatusExpired': 'Expired (superseded by a newer card)',
-  'CPS.Connected': 'Connected to the writing assistant for "{0}". Just tell me what you\'d like to do (e.g. plan this book, look at chapter three, open plot management) and I\'ll take care of it.',
+  'CPS.Connected':
+      'Connected to the writing assistant for "{0}". Just tell me what you\'d like to do (e.g. plan this book, look at chapter three, open plot management) and I\'ll take care of it.',
   'CPS.ProcessFailed': 'Processing failed: {0}',
-  'CPS.PipelineInProgress': 'A pipeline is already running (current stage: {0}). Reply "Continue Writing" to advance, or "Regenerate" to rework the current stage.',
-  'CPS.AskIdea': 'First tell me in one sentence what your book is about (genre, protagonist, core conflict, or the story you want to write), and I\'ll plan the overall outline accordingly.',
-  'CPS.NoStageToRegenerate': 'There is no active pipeline stage to regenerate. Reply "Start Planning" to begin.',
+  'CPS.PipelineInProgress':
+      'A pipeline is already running (current stage: {0}). Reply "Continue Writing" to advance, or "Regenerate" to rework the current stage.',
+  'CPS.AskIdea':
+      'First tell me in one sentence what your book is about (genre, protagonist, core conflict, or the story you want to write), and I\'ll plan the overall outline accordingly.',
+  'CPS.NoStageToRegenerate':
+      'There is no active pipeline stage to regenerate. Reply "Start Planning" to begin.',
   'CPS.LocateOrdinalChapter': '(Locating chapter {0})',
   'CPS.LocateOrdinalItem': '(Locating item {0})',
   'CPS.LocateEntity': '(Locating: {0})',
@@ -4609,80 +4673,121 @@ const Map<String, String> enStrings = <String, String>{
   'CPS.StatusHeader': 'Current progress of "{0}":',
   'CPS.StatusVolumes': '- Volumes: {0} volume(s)',
   'CPS.StatusPlots': '- Plots/storylines: {0}',
-  'CPS.StatusChapters': '- Chapters: {0} ({1} with finished content, {2} characters in total)',
+  'CPS.StatusChapters':
+      '- Chapters: {0} ({1} with finished content, {2} characters in total)',
   'CPS.StatusPipeline': '- Pipeline: {0}',
   'CPS.QueryFailed': 'Query failed: {0}',
-  'CPS.OfflineFreeQa': 'The AI inference service is currently offline and cannot answer free-form questions. Navigation, queries, and pipeline operations are unaffected; check the service status on the "AI Model Configuration" page.',
-  'CPS.EmptyAIResponse': 'The AI returned an empty response. Please try rephrasing your question.',
+  'CPS.OfflineFreeQa':
+      'The AI inference service is currently offline and cannot answer free-form questions. Navigation, queries, and pipeline operations are unaffected; check the service status on the "AI Model Configuration" page.',
+  'CPS.EmptyAIResponse':
+      'The AI returned an empty response. Please try rephrasing your question.',
   'CPS.AIInferFailed': 'AI inference failed: {0}',
   'CPS.UnknownError': 'Unknown error',
   'CPS.RefBrief': '| Synopsis: {0}',
-  'CPS.AttachedRef': 'Linked to "{0}", Volume {1}, Chapter {2} "{3}"{4}.\nType your request to work on this chapter directly (e.g. polish the whole text / rewrite the opening / expand the fight scene / continue the ending). The result will appear as a confirmation card; once accepted, this chapter\'s content is updated immediately. You can also ask questions about this chapter (e.g. what\'s wrong with its pacing). Type "Unlink" to detach.',
-  'CPS.ChapterRefCleared': 'Chapter link removed; back to normal assistant mode.',
+  'CPS.AttachedRef':
+      'Linked to "{0}", Volume {1}, Chapter {2} "{3}"{4}.\nType your request to work on this chapter directly (e.g. polish the whole text / rewrite the opening / expand the fight scene / continue the ending). The result will appear as a confirmation card; once accepted, this chapter\'s content is updated immediately. You can also ask questions about this chapter (e.g. what\'s wrong with its pacing). Type "Unlink" to detach.',
+  'CPS.ChapterRefCleared':
+      'Chapter link removed; back to normal assistant mode.',
   'CPS.ChapterProcessFailed': 'Chapter processing failed: {0}',
-  'CPS.OfflineChapterQa': 'The AI inference service is currently offline and cannot analyze chapter content. Processing chapters and unlinking are unaffected.',
+  'CPS.OfflineChapterQa':
+      'The AI inference service is currently offline and cannot analyze chapter content. Processing chapters and unlinking are unaffected.',
   'CPS.ChapterQaFailed': 'Chapter Q&A failed: {0}',
-  'CPS.NoItemsSelected': 'Please first check the items to accept (click "Accept" on each item), or use "Accept All".',
+  'CPS.NoItemsSelected':
+      'Please first check the items to accept (click "Accept" on each item), or use "Accept All".',
   'CPS.Persisted': 'Persisted {0} item(s) to the database.',
-  'CPS.ChapterUpdated': '"{0}" has been updated. You can keep entering new requests, or type "Unlink" to detach.',
+  'CPS.ChapterUpdated':
+      '"{0}" has been updated. You can keep entering new requests, or type "Unlink" to detach.',
   'CPS.PersistFailed': 'Failed to persist: {0}',
   'CPS.DefaultChapterTitle': 'Target chapter',
-  'CPS.CardRejectedRegenerating': 'All content in this card was discarded; regenerating...',
-  'CPS.EditSaved': 'The edits for "{0}" have been saved. Click "Accept" on that item to apply them.',
-  'CPS.ErrNoVolumesForVolumes': 'The project has no volumes yet. Please accept the volume plan card first.',
-  'CPS.SummaryTruncated': 'The synopsis of "{0}" exceeded 1000 characters and was truncated before saving.',
-  'CPS.ErrChapterMissing': 'The target chapter does not exist or has been deleted. Please link a chapter again.',
+  'CPS.CardRejectedRegenerating':
+      'All content in this card was discarded; regenerating...',
+  'CPS.EditSaved':
+      'The edits for "{0}" have been saved. Click "Accept" on that item to apply them.',
+  'CPS.ErrNoVolumesForVolumes':
+      'The project has no volumes yet. Please accept the volume plan card first.',
+  'CPS.SummaryTruncated':
+      'The synopsis of "{0}" exceeded 1000 characters and was truncated before saving.',
+  'CPS.ErrChapterMissing':
+      'The target chapter does not exist or has been deleted. Please link a chapter again.',
   'CPS.ErrNoVolumes': 'The project has no volumes yet.',
-  'CPS.ErrNoPendingChapters': 'The current volume has no chapters waiting to be written.',
-  'CPS.StatusNotStarted': 'The writing pipeline hasn\'t started yet. Reply "Start Planning" with your idea to begin.',
-  'CPS.StatusCompleted': 'The pipeline has finished writing {0} volume(s). Reply "Continue Writing" to add the next one.',
-  'CPS.StatusInProgress': 'Pipeline in progress: {0} (Volume {1}, Chapter {2}). Waiting for your ruling on the current confirmation card.',
+  'CPS.ErrNoPendingChapters':
+      'The current volume has no chapters waiting to be written.',
+  'CPS.StatusNotStarted':
+      'The writing pipeline hasn\'t started yet. Reply "Start Planning" with your idea to begin.',
+  'CPS.StatusCompleted':
+      'The pipeline has finished writing {0} volume(s). Reply "Continue Writing" to add the next one.',
+  'CPS.StatusInProgress':
+      'Pipeline in progress: {0} (Volume {1}, Chapter {2}). Waiting for your ruling on the current confirmation card.',
   'CPS.DestVolumeManagement': 'Volume & Chapter Management',
   'CPS.DestTimeline': 'Timeline',
   'CPS.DestDialogGeneration': 'Dialogue Generator',
-  'CPS.StartPlanning': 'Got it! I\'ll plan the whole book "{0}" based on your idea, starting with the overall outline.',
-  'CPS.Resumed': 'Resumed the writing pipeline for "{0}" (current stage: {1}); rebuilding confirmation cards...',
-  'CPS.Regenerating': 'Got your revision notes; regenerating the current stage as requested...',
-  'CPS.AppendVolumeIntro': 'All right, let\'s continue planning the remaining volumes. Based on the outline and existing plots, I\'ll lay out the next few volumes.',
+  'CPS.StartPlanning':
+      'Got it! I\'ll plan the whole book "{0}" based on your idea, starting with the overall outline.',
+  'CPS.Resumed':
+      'Resumed the writing pipeline for "{0}" (current stage: {1}); rebuilding confirmation cards...',
+  'CPS.Regenerating':
+      'Got your revision notes; regenerating the current stage as requested...',
+  'CPS.AppendVolumeIntro':
+      'All right, let\'s continue planning the remaining volumes. Based on the outline and existing plots, I\'ll lay out the next few volumes.',
   'CPS.StageReportAllDone': 'All planned volumes and chapters are complete',
   'CPS.DoneVolumes': '{0} volume(s) completed',
-  'CPS.AppendNextHint': 'To add more outline content, reply "Continue Writing" and I\'ll plan the next volume; you can also tell me what to adjust at any time.',
-  'CPS.GenerateFailed': 'Generation failed: {0}. Reply "Regenerate" to try again, or tell me a new idea.',
+  'CPS.AppendNextHint':
+      'To add more outline content, reply "Continue Writing" and I\'ll plan the next volume; you can also tell me what to adjust at any time.',
+  'CPS.GenerateFailed':
+      'Generation failed: {0}. Reply "Regenerate" to try again, or tell me a new idea.',
   'CPS.CardBlueprintTitle': 'Overall Outline ({0})',
-  'CPS.CardBlueprintSummary': 'Here is the overall outline I\'ve planned for you. Accept it, edit it, or discard it and ask me to regenerate.',
+  'CPS.CardBlueprintSummary':
+      'Here is the overall outline I\'ve planned for you. Accept it, edit it, or discard it and ask me to regenerate.',
   'CPS.StageReportBlueprint': 'Overall outline planning complete',
-  'CPS.ErrNoBlueprintPlots': 'No accepted overall outline found; cannot plan plot lines. Please accept the outline card first.',
-  'CPS.ErrParsePlotLines': 'Failed to parse the plot line output (no numbered lines found). Reply "Regenerate" to try again.',
+  'CPS.ErrNoBlueprintPlots':
+      'No accepted overall outline found; cannot plan plot lines. Please accept the outline card first.',
+  'CPS.ErrParsePlotLines':
+      'Failed to parse the plot line output (no numbered lines found). Reply "Regenerate" to try again.',
   'CPS.CardPlotLinesTitle': 'Plot Line Planning',
-  'CPS.CardPlotLinesSummary': '{0} plot line(s) in total; accepting will write them into Plot Management.',
+  'CPS.CardPlotLinesSummary':
+      '{0} plot line(s) in total; accepting will write them into Plot Management.',
   'CPS.StageReportPlotLines': 'Plot line planning complete',
-  'CPS.ErrNoBlueprintVolumes': 'No accepted overall outline found; cannot plan volumes. Please accept the outline card first.',
-  'CPS.ErrParseVolumes': 'Failed to parse the volume output (no numbered lines found). Reply "Regenerate" to try again.',
+  'CPS.ErrNoBlueprintVolumes':
+      'No accepted overall outline found; cannot plan volumes. Please accept the outline card first.',
+  'CPS.ErrParseVolumes':
+      'Failed to parse the volume output (no numbered lines found). Reply "Regenerate" to try again.',
   'CPS.CardVolumesTitle': 'Volume Planning',
-  'CPS.CardVolumesSummary': '{0} volume(s) in total; accepting will create the volume records.',
+  'CPS.CardVolumesSummary':
+      '{0} volume(s) in total; accepting will create the volume records.',
   'CPS.StageReportVolumes': 'Volume planning complete',
-  'CPS.ErrNoVolumeDrafts': 'Current volume not found. Please accept the volume plan card first.',
-  'CPS.ErrParseChapterDrafts': 'Failed to parse the chapter synopsis output (no numbered lines found). Reply "Regenerate" to try again.',
+  'CPS.ErrNoVolumeDrafts':
+      'Current volume not found. Please accept the volume plan card first.',
+  'CPS.ErrParseChapterDrafts':
+      'Failed to parse the chapter synopsis output (no numbered lines found). Reply "Regenerate" to try again.',
   'CPS.CardChapterDraftsTitle': 'Chapter Plot Drafts for Volume {0}',
-  'CPS.CardChapterDraftsSummary': '{0} chapter synopsis(es) in total; accepting will create the chapters (status: draft).',
+  'CPS.CardChapterDraftsSummary':
+      '{0} chapter synopsis(es) in total; accepting will create the chapters (status: draft).',
   'CPS.StageReportChapterDrafts': 'Chapter plot drafts for Volume {0} complete',
   'CPS.CoverChapterBriefs': 'Covers {0} chapter synopsis(es)',
-  'CPS.ErrNoChapterDrafts': 'No chapters waiting to be written. Please accept the chapter draft card first.',
-  'CPS.CreatingChapterContent': 'Writing the content of Volume {0}, Chapter {1} "{2}" (stitched slices, targeting at least {3} characters)...',
+  'CPS.ErrNoChapterDrafts':
+      'No chapters waiting to be written. Please accept the chapter draft card first.',
+  'CPS.CreatingChapterContent':
+      'Writing the content of Volume {0}, Chapter {1} "{2}" (stitched slices, targeting at least {3} characters)...',
   'CPS.CardChapterContentTitle': 'Chapter {0} Content ({1} characters)',
-  'CPS.CardChapterContentSummary': 'The content of "{0}" is complete, {1} characters in total. Accept to save it, edit items one by one before accepting, or discard the card to rewrite.',
+  'CPS.CardChapterContentSummary':
+      'The content of "{0}" is complete, {1} characters in total. Accept to save it, edit items one by one before accepting, or discard the card to rewrite.',
   'CPS.StageReportChapterContent': 'Content of Chapter {0} complete',
   'CPS.ChapterWordCount': '"{0}": {1} characters in total',
-  'CPS.ProcessingChapter': 'Processing "{0}", Volume {1}, Chapter {2} "{3}" as requested ({4} characters of original text)...',
-  'CPS.CreatingFromBrief': '"{0}" has no content yet; I\'ll write this chapter based on the synopsis and your request...',
+  'CPS.ProcessingChapter':
+      'Processing "{0}", Volume {1}, Chapter {2} "{3}" as requested ({4} characters of original text)...',
+  'CPS.CreatingFromBrief':
+      '"{0}" has no content yet; I\'ll write this chapter based on the synopsis and your request...',
   'CPS.CardChapterProcessTitle': 'Chapter processing: {0} ({1} → {2} chars)',
   'CPS.OriginalWords': 'original {0} characters',
   'CPS.DraftToText': 'draft turned into text',
-  'CPS.CardChapterProcessSummary': 'This chapter has been processed as requested; accepting directly updates its content. You can also edit items one by one before accepting, or discard the card and make a new request.',
+  'CPS.CardChapterProcessSummary':
+      'This chapter has been processed as requested; accepting directly updates its content. You can also edit items one by one before accepting, or discard the card and make a new request.',
   'CPS.StageReportChapterProcessed': '"{0}" processing complete',
-  'CPS.OriginalToProcessed': 'original {0} characters → processed {1} characters',
+  'CPS.OriginalToProcessed':
+      'original {0} characters → processed {1} characters',
   'CPS.GeneratedFromBrief': '{0} characters generated from the synopsis',
-  'CPS.WillUpdateChapter': 'Accepting will directly update this chapter\'s content (the pipeline will not advance)',
+  'CPS.WillUpdateChapter':
+      'Accepting will directly update this chapter\'s content (the pipeline will not advance)',
   'AICfg.Subtitle': 'Configure and manage AI model providers',
   'AICfg.TestConnection': 'Test Connection',
   'AICfg.SaveConfig': 'Save Configuration',
@@ -4692,11 +4797,14 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.Step3': '3. Click Test Connection and save the configuration',
   'AICfg.UsageTips': 'Usage Tips',
   'AICfg.TipMainAgentCloud': 'MainAgent works best with a strong cloud model',
-  'AICfg.TipSubAgentLocal': 'SubAgent works best with a local model for organizing and archiving',
-  'AICfg.TipReleaseDir': 'Release builds save to the user directory and never overwrite installed files',
+  'AICfg.TipSubAgentLocal':
+      'SubAgent works best with a local model for organizing and archiving',
+  'AICfg.TipReleaseDir':
+      'Release builds save to the user directory and never overwrite installed files',
   'AICfg.ConfigFileLocation': 'Current configuration file location',
   'AICfg.LoadingDots': 'Loading...',
-  'AICfg.SaveEffectiveNote': 'Changes take effect immediately after saving. No restart required.',
+  'AICfg.SaveEffectiveNote':
+      'Changes take effect immediately after saving. No restart required.',
   'AICfg.DefaultProvider': 'Default AI Providers',
   'AICfg.HintDefaultDecisionProvider': 'Default decision-making AI provider',
   'AICfg.ProviderLlamaCpp': 'llama.cpp (local GGUF)',
@@ -4708,28 +4816,46 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.HintDefaultCompletionProvider': 'Default continuation AI provider',
   'AICfg.ProviderRWKV': 'RWKV (local continuation)',
   'AICfg.DualAgentTitle': 'MainAgent / SubAgent Dual-Agent Setup',
-  'AICfg.DualAgentDesc': 'Use a dense model for MainAgent and a MoE or local GGUF model for SubAgent. SubAgent summarizes requirements, polishes final drafts, and archives them.',
-  'AICfg.EnableDualAgent': 'Enable the MainAgent / SubAgent dual-agent workflow',
+  'AICfg.G1kPreset': 'Preset G1K 7.2B editor + 2.9B writer',
+  'AICfg.G1kPresetSaved':
+      'G1K configured: 7.2B plans and edits, 2.9B writes drafts.',
+  'AICfg.G1kPresetSetup':
+      'Save the official 7B endpoint and CF credentials under RWKV Cloud, then test the connection first.',
+  'AICfg.G1kPresetFailed':
+      'Could not uniquely match both G1K models. Check the 7B/3B model lists or enter full IDs manually.',
+  'AICfg.G1kPresetHint':
+      'Book generation only: 7.2B plans and edits; 2.9B writes prose. Other dual-agent settings stay unchanged.',
+  'AICfg.G1kDisable': 'Disable book preset',
+  'AICfg.DualAgentDesc':
+      'Use a dense model for MainAgent and a MoE or local GGUF model for SubAgent. SubAgent summarizes requirements, polishes final drafts, and archives them.',
+  'AICfg.EnableDualAgent':
+      'Enable the MainAgent / SubAgent dual-agent workflow',
   'AICfg.HintMainAgentProvider': 'MainAgent provider',
   'AICfg.ProviderDeepSeekDense': 'DeepSeek (dense model recommended)',
   'AICfg.ProviderZhipuAIOnly': 'ZhipuAI',
   'AICfg.ProviderLlamaCppGguf': 'llama.cpp (GGUF recommended)',
   'AICfg.ProviderXiaoMi': 'Xiaomi MiMo',
-  'AICfg.HintMainAgentModel': 'MainAgent model (optional; leave empty to use the provider default)',
+  'AICfg.HintMainAgentModel':
+      'MainAgent model (optional; leave empty to use the provider default)',
   'AICfg.HintMainAgentRole': 'MainAgent role description',
-  'AICfg.MainAgentRoleText': 'Write the final prose based on SubAgent\'s requirement briefs, focused on content creation.',
+  'AICfg.MainAgentRoleText':
+      'Write the final prose based on SubAgent\'s requirement briefs, focused on content creation.',
   'AICfg.HintSubAgentProvider': 'SubAgent provider',
   'AICfg.ProviderLlamaCppMoe': 'llama.cpp (MoE/GGUF recommended)',
   'AICfg.ProviderOllamaShort': 'Ollama',
   'AICfg.ProviderDeepSeekOnly': 'DeepSeek',
   'AICfg.ProviderOpenAI': 'OpenAI',
-  'AICfg.HintSubAgentModel': 'SubAgent model (optional; leave empty to use the provider default)',
+  'AICfg.HintSubAgentModel':
+      'SubAgent model (optional; leave empty to use the provider default)',
   'AICfg.HintSubAgentRole': 'SubAgent role description',
-  'AICfg.SubAgentRoleText': 'Summarize writing requirements, organize MainAgent drafts, and write clean content into the project archive.',
-  'AICfg.AllowArchiveWrite': 'Allow SubAgent to write clean final drafts into the project archive',
+  'AICfg.SubAgentRoleText':
+      'Summarize writing requirements, organize MainAgent drafts, and write clean content into the project archive.',
+  'AICfg.AllowArchiveWrite':
+      'Allow SubAgent to write clean final drafts into the project archive',
   'AICfg.RwkvTitle': 'RWKV Continuation Model',
   'AICfg.StatusNotConfigured': 'Not configured',
-  'AICfg.RwkvDesc': 'Local RWKV inference service. The pure CUDA build is integrated first; fits RWKV7-G1i with RWKV8 RPU reserved. Scans .pth / .safetensors / .st files',
+  'AICfg.RwkvDesc':
+      'Local RWKV inference service. The pure CUDA build is integrated first; fits RWKV7-G1i with RWKV8 RPU reserved. Scans .pth / .safetensors / .st files',
   'AICfg.RefreshStatus': 'Refresh Status',
   'AICfg.StartRuntime': 'Start',
   'AICfg.StopRuntime': 'Stop',
@@ -4754,7 +4880,8 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.HintContextSize': 'Context size',
   'AICfg.HintMaxConcurrent': 'Max concurrent requests',
   'AICfg.LlamaTitle': 'llama.cpp Local Inference',
-  'AICfg.LlamaDesc': 'Local GGUF inference service based on llama-server.exe, started on demand per backend and model',
+  'AICfg.LlamaDesc':
+      'Local GGUF inference service based on llama-server.exe, started on demand per backend and model',
   'AICfg.ScanModels': 'Scan Models',
   'AICfg.HintLlamaBackend': 'llama.cpp backend',
   'AICfg.HintServerUrl': 'Server URL',
@@ -4775,7 +4902,8 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.HintAutoFitContext': 'AutoFit minimum context',
   'AICfg.SkipWarmup': 'Skip warmup for faster startup',
   'AICfg.ZhipuTitle': 'ZhipuAI Cloud Model',
-  'AICfg.ZhipuDesc': 'ZhipuAI free online model (glm-4-flash) via the OpenAI-compatible API',
+  'AICfg.ZhipuDesc':
+      'ZhipuAI free online model (glm-4-flash) via the OpenAI-compatible API',
   'AICfg.HintZhipuApiKey': 'API key (get one at open.bigmodel.cn)',
   'AICfg.HintApiUrl': 'API URL',
   'AICfg.HintDefaultModel': 'Default model',
@@ -4809,8 +4937,10 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.EnableCompression': 'Enable compression',
   'AICfg.StatusReady': 'Ready',
   'AICfg.CurrentProviderLabel': 'Current provider:',
-  'AICfg.ServiceNotInit': 'Application services are not initialized yet. The AI model configuration cannot be opened right now.',
-  'AICfg.InitFailed': 'Failed to initialize the AI model configuration view: the model list control was not loaded correctly.',
+  'AICfg.ServiceNotInit':
+      'Application services are not initialized yet. The AI model configuration cannot be opened right now.',
+  'AICfg.InitFailed':
+      'Failed to initialize the AI model configuration view: the model list control was not loaded correctly.',
   'AICfg.LoadFailedFmt': 'Loading failed: {0}',
   'AICfg.ConfigLoaded': 'Configuration loaded',
   'AICfg.LoadConfigFailedFmt': 'Failed to load configuration: {0}',
@@ -4827,7 +4957,8 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.ScanGgufFailedFmt': 'Failed to scan GGUF models: {0}',
   'AICfg.NoRwkvModels': 'No RWKV models found in the rwkv_models directory',
   'AICfg.RwkvModelsScannedFmt': 'Scanned {0} RWKV models',
-  'AICfg.RwkvModelsScannedWithPthFmt': 'Scanned {0} RWKV models ({1} raw .pth weights included)',
+  'AICfg.RwkvModelsScannedWithPthFmt':
+      'Scanned {0} RWKV models ({1} raw .pth weights included)',
   'AICfg.ScanRwkvFailedFmt': 'Failed to scan RWKV models: {0}',
   'AICfg.RwkvStatusRefreshed': 'RWKV status refreshed',
   'AICfg.StartingRwkv': 'Starting RWKV inference service...',
@@ -4850,7 +4981,8 @@ const Map<String, String> enStrings = <String, String>{
   'AICfg.ConnectionTestDone': 'Connection test completed',
   'AICfg.SavingConfig': 'Saving configuration...',
   'AICfg.ConfigSavedStatus': 'Configuration saved and applied immediately',
-  'AICfg.ConfigSavedMsgFmt': 'Configuration saved to the user config file:\n{0}\n\nHot-reloaded. No restart required.',
+  'AICfg.ConfigSavedMsgFmt':
+      'Configuration saved to the user config file:\n{0}\n\nHot-reloaded. No restart required.',
   'AICfg.SaveSuccessTitle': 'Saved Successfully',
   'AICfg.SaveConfigFailedFmt': 'Failed to save configuration: {0}',
   'AICfg.InvalidConfigDir': 'The user configuration directory is invalid.',
@@ -4908,13 +5040,16 @@ const Map<String, String> enStrings = <String, String>{
   'AMC.ResetDefaults': 'Reset Defaults',
   'AMC.ExportConfig': 'Export Config',
   'AMC.ImportConfig': 'Import Config',
-  'AMC.ConfigServiceInitFailedFmt': 'Failed to initialize the configuration service. Using the default service: {0}',
+  'AMC.ConfigServiceInitFailedFmt':
+      'Failed to initialize the configuration service. Using the default service: {0}',
   'AMC.TestingConnection': 'Testing connection...',
   'AMC.TestSuccessStatus': 'Connection test passed. All models are responding',
   'AMC.TestSuccessMsg': 'Connection test passed!',
   'AMC.TestResultTitle': 'Test Result',
-  'AMC.TestFailStatus': 'Connection test failed. Please check the configuration',
-  'AMC.TestFailMsg': 'Connection test failed. Please check the API key and network connection',
+  'AMC.TestFailStatus':
+      'Connection test failed. Please check the configuration',
+  'AMC.TestFailMsg':
+      'Connection test failed. Please check the API key and network connection',
   'AMC.TestErrorStatus': 'An error occurred during the connection test',
   'AMC.TestErrorFmt': 'An error occurred during the test: {0}',
   'AMC.SavingConfig': 'Saving configuration...',
@@ -4923,7 +5058,8 @@ const Map<String, String> enStrings = <String, String>{
   'AMC.SaveResultTitle': 'Save Result',
   'AMC.SaveFailStatus': 'Failed to save configuration',
   'AMC.SaveFailFmt': 'Failed to save configuration: {0}',
-  'AMC.ResetConfirmMsg': 'Reset to default configuration? This will overwrite all current settings.',
+  'AMC.ResetConfirmMsg':
+      'Reset to default configuration? This will overwrite all current settings.',
   'AMC.ResetConfirmTitle': 'Confirm Reset',
   'AMC.ResetDone': 'Reset to default configuration',
   'AMC.ExportDialogTitle': 'Export AI Model Configuration',
@@ -4943,7 +5079,8 @@ const Map<String, String> enStrings = <String, String>{
   'AMC.ImportFailStatus': 'Failed to import configuration',
   'AMC.ImportFailFmt': 'Failed to import configuration: {0}',
   'DG.Title': 'AI Dialogue Generator',
-  'DG.Subtitle': 'Generate character dialogue intelligently with multiple styles and emotions',
+  'DG.Subtitle':
+      'Generate character dialogue intelligently with multiple styles and emotions',
   'DG.SaveTemplate': 'Save Template',
   'DG.LoadTemplate': 'Load Template',
   'DG.Help': 'Help',
@@ -5006,10 +5143,12 @@ const Map<String, String> enStrings = <String, String>{
   'DG.HintResultPlaceholder': 'Generated dialogue will appear here...',
   'DG.Generating': 'Generating dialogue...',
   'DG.Optimizing': 'Optimizing dialogue...',
-  'DG.GenerateFailedMsg': 'Dialogue generation failed. Please check the parameters',
+  'DG.GenerateFailedMsg':
+      'Dialogue generation failed. Please check the parameters',
   'DG.GenerateFailedFmt': 'Generation failed: {0}',
   'DG.OptimizeFailedFmt': 'Optimization failed: {0}',
-  'DG.ServiceInitFailedFmt': 'Failed to initialize services. Using defaults: {0}',
+  'DG.ServiceInitFailedFmt':
+      'Failed to initialize services. Using defaults: {0}',
   'DG.CopiedMsg': 'Dialogue copied to the clipboard',
   'DG.NothingToSave': 'There is no dialogue content to save.',
   'DG.SaveToProject': 'Save Dialogue to Project',
@@ -5036,9 +5175,11 @@ const Map<String, String> enStrings = <String, String>{
   'DG.TemplateLoadedFmt': 'Template loaded: {0}',
   'DG.LoadSuccessTitle': 'Loaded Successfully',
   'DG.TemplateLoadFailedFmt': 'Failed to load template: {0}',
-  'DG.HelpText': 'AI Dialogue Generator help:\n\n1. Characters: enter the character names and pick their relationship\n2. Situation: describe the scene and purpose\n3. Style: choose the emotional tone, language style, and dialogue length\n4. Click "Generate Dialogue" to start\n5. You can optimize the generated dialogue\n6. Copy, save, and export are supported\n\nTips:\n- Separate character names with commas\n- A detailed scene description helps generate better dialogue\n- Optimize repeatedly until you are satisfied',
+  'DG.HelpText':
+      'AI Dialogue Generator help:\n\n1. Characters: enter the character names and pick their relationship\n2. Situation: describe the scene and purpose\n3. Style: choose the emotional tone, language style, and dialogue length\n4. Click "Generate Dialogue" to start\n5. You can optimize the generated dialogue\n6. Copy, save, and export are supported\n\nTips:\n- Separate character names with commas\n- A detailed scene description helps generate better dialogue\n- Optimize repeatedly until you are satisfied',
   'DG.CharacterServiceNotInit': 'The character service is not initialized.',
-  'DG.NoCharacters': 'This project has no characters yet. Please create characters first.',
+  'DG.NoCharacters':
+      'This project has no characters yet. Please create characters first.',
   'DG.LoadCharactersFailedFmt': 'Failed to load characters: {0}',
   'DG.SelectCharactersPrompt': 'Select the characters in this dialogue:',
   'DG.EnterContent': 'Please enter some content.',
@@ -5063,7 +5204,8 @@ const Map<String, String> enStrings = <String, String>{
   'OG.LenMedium': 'Medium (100k-300k characters)',
   'OG.LenLong': 'Long (300k-1M characters)',
   'OG.LenEpic': 'Epic (1M+ characters)',
-  'OG.HintMainCharacter': 'Main character (name, personality, background, etc.)',
+  'OG.HintMainCharacter':
+      'Main character (name, personality, background, etc.)',
   'OG.HintSetting': 'Setting (worldview, era, etc.)',
   'OG.HintRequirements': 'Special requirements (plot preferences, style, etc.)',
   'OG.StartGenerate': 'Start Generation',
@@ -5096,7 +5238,8 @@ const Map<String, String> enStrings = <String, String>{
   'AA.ContextInfo': 'Context Info',
   'AA.ContextPlaceholder': 'Current context info will appear here',
   'AA.Name': 'AI Assistant',
-  'AA.Welcome': 'Hi! I\'m your AI assistant for managing book settings. I can generate new settings, analyze existing ones, offer optimization suggestions, and more. What do you need?',
+  'AA.Welcome':
+      'Hi! I\'m your AI assistant for managing book settings. I can generate new settings, analyze existing ones, offer optimization suggestions, and more. What do you need?',
   'AA.HintInput': 'Type your question or request...',
   'AA.Send': 'Send',
   'AA.ClearChat': 'Clear Chat',
@@ -5108,46 +5251,64 @@ const Map<String, String> enStrings = <String, String>{
   'AA.StatusReady': 'Ready',
   'AA.StatusProcessing': 'Processing...',
   'AA.StatusError': 'Error',
-  'AA.PromptGenerateSetting': 'Please generate a new setting for me. Requirements:',
-  'AA.PromptAnalyzeSetting': 'Please analyze the selected setting, including its plausibility, completeness, and connections to other settings:',
-  'AA.PromptOptimizeSetting': 'Please suggest improvements for the current setting, including how to make it more compelling and logical:',
-  'AA.PromptCheckConsistency': 'Please check the current setting against the whole worldview and point out possible conflicts or contradictions:',
+  'AA.PromptGenerateSetting':
+      'Please generate a new setting for me. Requirements:',
+  'AA.PromptAnalyzeSetting':
+      'Please analyze the selected setting, including its plausibility, completeness, and connections to other settings:',
+  'AA.PromptOptimizeSetting':
+      'Please suggest improvements for the current setting, including how to make it more compelling and logical:',
+  'AA.PromptCheckConsistency':
+      'Please check the current setting against the whole worldview and point out possible conflicts or contradictions:',
   'AA.ClearChatConfirm': 'Clear the conversation history?',
-  'AA.ErrorBubbleFmt': 'Sorry, an error occurred while processing your request: {0}',
+  'AA.ErrorBubbleFmt':
+      'Sorry, an error occurred while processing your request: {0}',
   'AA.You': 'You',
   'AA.ErrorModelManagerNotInit': 'The AI model manager is not initialized.',
   'AA.ErrorNoProvider': 'No AI provider is available.',
   'AA.ErrorResponse': 'The AI request failed.',
   'AA.ErrorEmptyResponse': 'The AI returned empty content.',
   'OCG.CheckingRwkv': 'Checking the RWKV inference service...',
-  'OCG.RwkvUnreachable': 'The RWKV inference service is unreachable. Start it from the "AI Model Configuration" page first (launch via rwkv_launcher).',
+  'OCG.RwkvUnreachable':
+      'The RWKV inference service is unreachable. Start it from the "AI Model Configuration" page first (launch via rwkv_launcher).',
   'OCG.Concepting': 'RWKV is brainstorming a new book...',
   'OCG.CreatingBook': 'Creating the new book "{0}"...',
-  'OCG.GeneratingOutlineFor': 'MainAgent/SubAgent is generating the outline for "{0}"...',
-  'OCG.GeneratingSupport': 'Generating main characters / world settings / factions...',
+  'OCG.GeneratingOutlineFor':
+      'MainAgent/SubAgent is generating the outline for "{0}"...',
+  'OCG.GeneratingSupport':
+      'Generating main characters / world settings / factions...',
   'OCG.GeneratingChapter': 'MainAgent/SubAgent is writing chapter one...',
   'OCG.LinkingUpdate': 'Updating characters / plots / worldview / timeline...',
-  'OCG.ResultCreatedFmt': 'New book "{0}" has been created and appears in the left navigation.',
+  'OCG.ResultCreatedFmt':
+      'New book "{0}" has been created and appears in the left navigation.',
   'OCG.ResultGenreFmt': 'Genre: {0}',
   'OCG.ResultPremiseFmt': 'Premise: {0}',
-  'OCG.ResultOutlineSaved': 'Outline: generated by the dual agents and saved to the plot library (main line).',
-  'OCG.ResultOutlineArchiveFail': 'Outline: generated and archived, but saving to the plot library failed (see logs).',
+  'OCG.ResultOutlineSaved':
+      'Outline: generated by the dual agents and saved to the plot library (main line).',
+  'OCG.ResultOutlineArchiveFail':
+      'Outline: generated and archived, but saving to the plot library failed (see logs).',
   'OCG.ResultOutlineFail': 'Outline: generation failed (see logs).',
-  'OCG.ResultChapterSaved': 'Chapter 1: written by the dual agents and saved to the chapter library (Volume 1).',
-  'OCG.ResultChapterArchiveFail': 'Chapter 1: generated and archived, but saving to the chapter library failed (see logs).',
+  'OCG.ResultChapterSaved':
+      'Chapter 1: written by the dual agents and saved to the chapter library (Volume 1).',
+  'OCG.ResultChapterArchiveFail':
+      'Chapter 1: generated and archived, but saving to the chapter library failed (see logs).',
   'OCG.ResultChapterFail': 'Chapter 1: generation failed (see logs).',
-  'OCG.ResultPrereqSaved': 'Characters / world settings / factions: generated automatically and saved to their modules.',
-  'OCG.ResultPrereqFail': 'Characters / world settings / factions: generation failed (see logs); retry from "Prerequisite Generation".',
-  'OCG.ResultLinkDone': 'Linked updates: character appearances & history, plot progress, world settings, and timeline were synced with chapter 1.',
+  'OCG.ResultPrereqSaved':
+      'Characters / world settings / factions: generated automatically and saved to their modules.',
+  'OCG.ResultPrereqFail':
+      'Characters / world settings / factions: generation failed (see logs); retry from "Prerequisite Generation".',
+  'OCG.ResultLinkDone':
+      'Linked updates: character appearances & history, plot progress, world settings, and timeline were synced with chapter 1.',
   'AAW.Title': 'AI Workspace',
-  'AAW.Subtitle': 'Stable AI assistant entry point: generate characters, plots, world settings, or a book outline directly.',
+  'AAW.Subtitle':
+      'Stable AI assistant entry point: generate characters, plots, world settings, or a book outline directly.',
   'AAW.ModeLabel': 'Generation Mode',
   'AAW.ModeCharacter': 'Character Completion',
   'AAW.ModePlot': 'Plot Completion',
   'AAW.ModeWorld': 'Worldbuilding Completion',
   'AAW.ModeOutline': 'Book Outline',
   'AAW.InputLabel': 'Your Request',
-  'AAW.PromptPlaceholder': 'Enter your creative request. The AI will return content ready for further editing.',
+  'AAW.PromptPlaceholder':
+      'Enter your creative request. The AI will return content ready for further editing.',
   'AAW.ResultLabel': 'Result',
   'AAW.StartGenerate': 'Start Generation',
   'AAW.OpenOutlineGen': 'Open AI Outline Generator',
@@ -5162,12 +5323,15 @@ const Map<String, String> enStrings = <String, String>{
   'AAW.FailedFallback': 'AI generation failed.',
   'AAW.DoneFallback': 'AI has finished generating.',
   'AAW.EnterRequest': 'Please enter your request.',
-  'AAW.OpenProjectFirstOutline': 'Please open a project before using the AI outline generator.',
-  'AAW.OpenProjectFirstPrerequisite': 'Please open a project before generating prerequisites.',
+  'AAW.OpenProjectFirstOutline':
+      'Please open a project before using the AI outline generator.',
+  'AAW.OpenProjectFirstPrerequisite':
+      'Please open a project before generating prerequisites.',
   'CWR.Title': 'AI Chapter Writing',
   'CWR.HintModel': 'AI model',
   'CWR.ManageTemplatesTip': 'Manage generation templates',
-  'CWR.Desc': 'AI generates chapter content automatically based on chapter info, outline, plot settings, and more',
+  'CWR.Desc':
+      'AI generates chapter content automatically based on chapter info, outline, plot settings, and more',
   'CWR.GenSettings': 'Generation Settings',
   'CWR.HintChapterTitle': 'Chapter title',
   'CWR.HintWritingStyle': 'Writing style',
@@ -5195,7 +5359,8 @@ const Map<String, String> enStrings = <String, String>{
   'CWR.IntensityLight': 'Light',
   'CWR.IntensityMedium': 'Medium',
   'CWR.IntensityStrong': 'Strong',
-  'CWR.HintSpecialReq': 'Special requirements (e.g. focus areas, emotional tone)',
+  'CWR.HintSpecialReq':
+      'Special requirements (e.g. focus areas, emotional tone)',
   'CWR.StartGenerate': 'Start Generation',
   'CWR.QuickGenTip': 'Quick generation (default settings)',
   'CWR.Result': 'Result',
@@ -5206,7 +5371,8 @@ const Map<String, String> enStrings = <String, String>{
   'CWR.SessionLabel': 'Session:',
   'CWR.BatchLabel': 'Batch candidates:',
   'CWR.LastSelectionLabel': 'Last selection:',
-  'CWR.HintGeneratedPlaceholder': 'AI-generated chapter content will appear here...',
+  'CWR.HintGeneratedPlaceholder':
+      'AI-generated chapter content will appear here...',
   'CWR.CharCount0': 'Chars: 0',
   'CWR.ParaCount0': 'Paragraphs: 0',
   'CWR.ReadingTime0': 'Reading time: 0 min',
@@ -5217,9 +5383,11 @@ const Map<String, String> enStrings = <String, String>{
   'CWR.Regenerate': 'Regenerate',
   'CWR.PolishContentTip': 'Polish content',
   'CWR.ApplyContent': 'Apply Content',
-  'CWR.ServiceNotInit': 'AI service not initialized. Please check the configuration',
+  'CWR.ServiceNotInit':
+      'AI service not initialized. Please check the configuration',
   'CWR.ServiceNotInitShort': 'AI service not initialized',
-  'CWR.ServiceNotInitDetails': 'The AI service is not initialized, so chapter content cannot be generated. Please enable an available model in the AI configuration first.',
+  'CWR.ServiceNotInitDetails':
+      'The AI service is not initialized, so chapter content cannot be generated. Please enable an available model in the AI configuration first.',
   'CWR.ServiceInitFailedFmt': 'Failed to initialize the AI service: {0}',
   'CWR.ServiceUnavailable': 'AI service unavailable',
   'CWR.Copied': 'Content copied to the clipboard',
@@ -5260,10 +5428,12 @@ const Map<String, String> enStrings = <String, String>{
   'CWR.OpenFolder': 'Open Folder',
   'CWR.Load': 'Load',
   'CWR.SelectTemplateFirst': 'Please select a template first.',
-  'CWR.DeleteTemplateConfirmFmt': 'Are you sure you want to delete the template "{0}"?',
+  'CWR.DeleteTemplateConfirmFmt':
+      'Are you sure you want to delete the template "{0}"?',
   'CWR.ConfirmDeleteTitle': 'Confirm Deletion',
   'CW.Title': 'AI Chapter Continuation',
-  'CW.Subtitle': 'AI continues the remaining chapters based on the existing content and chapter settings',
+  'CW.Subtitle':
+      'AI continues the remaining chapters based on the existing content and chapter settings',
   'CW.ExistingContent': 'Existing Content',
   'CW.ZeroWords': '(0 words)',
   'CW.WordCountFmt': '({0:N0} words)',
@@ -5282,7 +5452,8 @@ const Map<String, String> enStrings = <String, String>{
   'CW.ContinueShort': 'Continue',
   'CW.PreviewMerged': 'Preview Merged',
   'CW.ApplyContinuation': 'Apply Continuation',
-  'CW.ServiceNotInit': 'AI service not initialized. Please check the configuration',
+  'CW.ServiceNotInit':
+      'AI service not initialized. Please check the configuration',
   'CW.ServiceNotInitShort': 'AI service not initialized',
   'CW.ServiceInitFailedFmt': 'Failed to initialize the AI service: {0}',
   'CW.Copied': 'Continued content copied to the clipboard',
@@ -5293,17 +5464,22 @@ const Map<String, String> enStrings = <String, String>{
   'CW.SuccessTitle': 'Success',
   'CW.ContinueFailedFmt': 'AI continuation failed: {0}',
   'CW.ContinueErrorFmt': 'Failed to continue the chapter: {0}',
-  'CW.RwkvNotRegistered': 'The RWKV inference service is not registered. Please check the app configuration.',
+  'CW.RwkvNotRegistered':
+      'The RWKV inference service is not registered. Please check the app configuration.',
   'CW.AiUnavailable': 'AI Service Unavailable',
-  'CW.RwkvOfflineFmt': 'The RWKV inference service is offline or not responding ({0}).\n\nStart the RWKV service on the AI Model Configuration page and try again.',
-  'CW.RwkvCheckFailedFmt': 'Failed to check the RWKV inference service status: {0}',
+  'CW.RwkvOfflineFmt':
+      'The RWKV inference service is offline or not responding ({0}).\n\nStart the RWKV service on the AI Model Configuration page and try again.',
+  'CW.RwkvCheckFailedFmt':
+      'Failed to check the RWKV inference service status: {0}',
   'CW.UnknownError': 'Unknown error. Please try again.',
-  'CW.ConnectionError': 'Could not connect to the model service. Make sure the RWKV inference service is running (check its status on the AI Model Configuration page), then try again.',
+  'CW.ConnectionError':
+      'Could not connect to the model service. Make sure the RWKV inference service is running (check its status on the AI Model Configuration page), then try again.',
   'POL.Title': 'AI Text Polish',
   'POL.HintModel': 'AI model',
   'POL.HistoryTip': 'Polish history',
   'POL.BatchTip': 'Batch polish',
-  'POL.Desc': 'AI improves the prose, wording, and expression to boost quality and readability',
+  'POL.Desc':
+      'AI improves the prose, wording, and expression to boost quality and readability',
   'POL.Settings': 'Polish Settings',
   'POL.HintTargetStyle': 'Target style',
   'POL.StyleElegant': 'Classical elegance',
@@ -5344,7 +5520,8 @@ const Map<String, String> enStrings = <String, String>{
   'POL.EnhanceDescription': 'Enhance description',
   'POL.OptimizeDialogue': 'Optimize dialogue',
   'POL.KeepOriginalStyle': 'Keep original style',
-  'POL.HintSpecialReq': 'Special requirements (e.g. word preferences, expressions to avoid)',
+  'POL.HintSpecialReq':
+      'Special requirements (e.g. word preferences, expressions to avoid)',
   'POL.Original': 'Original',
   'POL.ZeroWords': '(0 words)',
   'POL.WordCountFmt': '({0:N0} words)',
@@ -5372,13 +5549,15 @@ const Map<String, String> enStrings = <String, String>{
   'POL.ApplyPolish': 'Apply Polish',
   'POL.Polishing': 'Polishing...',
   'POL.PreparingParams': 'Preparing polish parameters...',
-  'POL.ServiceNotInit': 'AI service not initialized. Please check the configuration',
+  'POL.ServiceNotInit':
+      'AI service not initialized. Please check the configuration',
   'POL.ServiceNotInitShort': 'AI service not initialized',
   'POL.ServiceInitFailedFmt': 'Failed to initialize the AI service: {0}',
   'POL.CallingService': 'Calling the AI polish service...',
   'POL.AiAnalyzing': 'AI is analyzing the text...',
   'POL.ProcessingResult': 'Processing polish results...',
-  'POL.EmptyResult': 'The AI polish returned empty content and produced no usable result. Adjust the requirements or switch models and try again.',
+  'POL.EmptyResult':
+      'The AI polish returned empty content and produced no usable result. Adjust the requirements or switch models and try again.',
   'POL.DoneStatus': 'Text polishing complete!',
   'POL.DoneMsg': 'Text polishing complete!',
   'POL.SuccessTitle': 'Success',
@@ -5410,12 +5589,16 @@ const Map<String, String> enStrings = <String, String>{
   'POL.BatchDoneFmt': 'Batch polish complete. {0} segments processed.',
   'POL.RwkvOfflineFmt': 'RWKV (offline, {0})',
   'POL.ModelOnlineFmt': '{0} (online)',
-  'POL.RwkvNotRegistered': 'The RWKV inference service is not registered. Please check the app configuration.',
+  'POL.RwkvNotRegistered':
+      'The RWKV inference service is not registered. Please check the app configuration.',
   'POL.AiUnavailable': 'AI Service Unavailable',
-  'POL.RwkvOfflineDetailsFmt': 'The RWKV inference service is offline or not responding ({0}).\n\nStart the RWKV service on the AI Model Configuration page and try again.',
-  'POL.RwkvCheckFailedFmt': 'Failed to check the RWKV inference service status: {0}',
+  'POL.RwkvOfflineDetailsFmt':
+      'The RWKV inference service is offline or not responding ({0}).\n\nStart the RWKV service on the AI Model Configuration page and try again.',
+  'POL.RwkvCheckFailedFmt':
+      'Failed to check the RWKV inference service status: {0}',
   'POL.UnknownError': 'Unknown error. Please try again.',
-  'POL.ConnectionError': 'Could not connect to the model service. Make sure the RWKV inference service is running (check its status on the AI Model Configuration page), then try again.',
+  'POL.ConnectionError':
+      'Could not connect to the model service. Make sure the RWKV inference service is running (check its status on the AI Model Configuration page), then try again.',
   'POL.Tweak': 'Tweaked',
   'POL.ExpandFmt': 'Expanded +{0:F1}%',
   'POL.CondenseFmt': 'Condensed {0:F1}%',
@@ -5423,24 +5606,31 @@ const Map<String, String> enStrings = <String, String>{
   'POL.TypeFullPolish': 'Full-text polish',
   'POL.TypeOptimize': 'Optimize',
   'POL.SugVocabulary': 'Vocabulary richness',
-  'POL.SugVocabularyContent': 'Add more adjectives and adverbs to enrich the expression',
+  'POL.SugVocabularyContent':
+      'Add more adjectives and adverbs to enrich the expression',
   'POL.SugSentence': 'Sentence variety',
   'POL.SugSentenceContent': 'Vary sentence length to add rhythm',
   'POL.SugEmotion': 'Emotional expression',
-  'POL.SugEmotionContent': 'Strengthen the portrayal of characters\' inner feelings',
+  'POL.SugEmotionContent':
+      'Strengthen the portrayal of characters\' inner feelings',
   'POL.SugScene': 'Scene description',
-  'POL.SugSceneContent': 'Make the environmental description more vivid and detailed',
+  'POL.SugSceneContent':
+      'Make the environmental description more vivid and detailed',
   'POL.SugDialogue': 'Dialogue polish',
-  'POL.SugDialogueContent': 'Make the dialogue better fit each character\'s personality',
+  'POL.SugDialogueContent':
+      'Make the dialogue better fit each character\'s personality',
   'POL.PriorityHigh': 'High',
   'POL.PriorityMedium': 'Medium',
   'POL.PriorityLow': 'Low',
   'POL.QaVocabulary': 'Vocabulary richness',
-  'POL.QaVocabularyDesc': 'Vocabulary is fairly rich, but more synonyms could be used',
+  'POL.QaVocabularyDesc':
+      'Vocabulary is fairly rich, but more synonyms could be used',
   'POL.QaSentence': 'Sentence variety',
-  'POL.QaSentenceDesc': 'Sentences vary somewhat; consider more complex sentences and rhetorical devices',
+  'POL.QaSentenceDesc':
+      'Sentences vary somewhat; consider more complex sentences and rhetorical devices',
   'POL.QaGrammar': 'Grammar correctness',
-  'POL.QaGrammarDesc': 'Grammar is mostly correct; only a few punctuation marks need adjusting',
+  'POL.QaGrammarDesc':
+      'Grammar is mostly correct; only a few punctuation marks need adjusting',
   'POL.QaLogic': 'Logical coherence',
   'POL.QaLogicDesc': 'The logic is clear and paragraphs transition naturally',
   'POL.QaEmotion': 'Emotional expression',
@@ -5466,12 +5656,15 @@ const Map<String, String> enStrings = <String, String>{
   'POL.DiffDialogTitle': 'Text Comparison',
   'PG.Title': 'Prerequisite Generation',
   'PG.Header': 'AI Edit Prerequisite Generation',
-  'PG.Desc': 'To ensure AI editing works properly, the system will check and generate the required prerequisite data, showing the current pipeline status in the order of project basics, worldview, outline, supporting settings, and volume/chapter writing.',
+  'PG.Desc':
+      'To ensure AI editing works properly, the system will check and generate the required prerequisite data, showing the current pipeline status in the order of project basics, worldview, outline, supporting settings, and volume/chapter writing.',
   'PG.ProjectSelection': 'Project Selection',
   'PG.HintSelectProject': 'Select an existing project',
-  'PG.SummaryPlaceholder': 'Select a project to see the current writing pipeline status.',
+  'PG.SummaryPlaceholder':
+      'Select a project to see the current writing pipeline status.',
   'PG.ContextSummary': 'AI Context Constraints Summary',
-  'PG.ContextPlaceholder': 'Select a project to see the master settings and generation order the AI will follow.',
+  'PG.ContextPlaceholder':
+      'Select a project to see the master settings and generation order the AI will follow.',
   'PG.FlowChart': 'Book Writing Pipeline',
   'PG.StageProject': '1. Project Basics',
   'PG.StageWorld': '2. Worldview',
@@ -5489,7 +5682,8 @@ const Map<String, String> enStrings = <String, String>{
   'PG.WorldStatusFmt': 'World settings: {0} {1}',
   'PG.FactionsStatusFmt': 'Factions: {0} {1}',
   'PG.CultivationReadyFmt': 'Cultivation systems: {0} ✓',
-  'PG.CultivationEmpty': 'Cultivation systems: none yet. The AI can generate a custom tier system top-down',
+  'PG.CultivationEmpty':
+      'Cultivation systems: none yet. The AI can generate a custom tier system top-down',
   'PG.NeedGenerate': 'generation needed',
   'PG.PlotsNoProject': 'Plots: no project selected',
   'PG.CharactersNoProject': 'Main characters: no project selected',
@@ -5518,7 +5712,8 @@ const Map<String, String> enStrings = <String, String>{
   'PG.WorldAncient': 'Ancient history',
   'PG.WorldMixed': 'Mixed style',
   'PG.UseAiGen': 'Use AI generation (more personalized)',
-  'PG.HintAiPrompt': 'AI prompt (describe your desired book style, theme, etc.)',
+  'PG.HintAiPrompt':
+      'AI prompt (describe your desired book style, theme, etc.)',
   'PG.AllowEditing': 'Allow the user to edit and trim later',
   'PG.Progress': 'Progress',
   'PG.Preparing': 'Preparing to generate...',
@@ -5544,34 +5739,45 @@ const Map<String, String> enStrings = <String, String>{
   'PG.NoContextSummary': 'This project has no AI context summary yet.',
   'PG.StageNotStarted': 'Not started',
   'PG.StageReady': 'Ready\nName and genre configured',
-  'PG.StagePendingProject': 'Incomplete\nAt least a name and genre are required',
+  'PG.StagePendingProject':
+      'Incomplete\nAt least a name and genre are required',
   'PG.StageWorldProgressFmt': 'In progress / done\n{0} world settings so far',
   'PG.StageWorldPending': 'Not started\nFill in the worldview first',
   'PG.StageOutlineProgressFmt': 'In progress / done\n{0} outlines so far',
   'PG.StageOutlinePending': 'Not started\nShould be based on the worldview',
-  'PG.StageSupportProgressFmt': 'In progress / done\n{0} characters / {1} factions',
+  'PG.StageSupportProgressFmt':
+      'In progress / done\n{0} characters / {1} factions',
   'PG.StageSupportPending': 'Not started\nRecommended after the outline',
-  'PG.StageWritingProgressFmt': 'In progress / done\n{0} volumes / {1} chapters',
-  'PG.StageWritingNotStarted': 'Not started\nStart writing after the basics are in place',
+  'PG.StageWritingProgressFmt':
+      'In progress / done\n{0} volumes / {1} chapters',
+  'PG.StageWritingNotStarted':
+      'Not started\nStart writing after the basics are in place',
   'PG.SelectProjectFirst': 'Please select a project first.',
   'PG.Starting': 'Starting prerequisite generation...',
   'PG.AiGenerating': 'Generating with AI...',
   'PG.TemplateGenerating': 'Generating from templates...',
   'PG.Done': 'Generation complete',
   'PG.GenerateDoneFmt': 'Prerequisite generation complete!\n\n{0}',
-  'PG.DoneNoteEdit': '\n\n✅ You can edit, trim, or extend this data at any time',
-  'PG.DoneNoteAi': '\n✅ The AI can also generate and write new content on its own as needed',
+  'PG.DoneNoteEdit':
+      '\n\n✅ You can edit, trim, or extend this data at any time',
+  'PG.DoneNoteAi':
+      '\n✅ The AI can also generate and write new content on its own as needed',
   'PG.SuccessTitle': 'Generation Successful',
-  'PG.EnoughData': 'The project already has enough prerequisite data. No generation needed.',
+  'PG.EnoughData':
+      'The project already has enough prerequisite data. No generation needed.',
   'PG.NoNeedTitle': 'No Generation Needed',
   'PG.GenerateFailedFmt': 'Prerequisite generation failed: {0}',
   'PG.FailedTitle': 'Generation Failed',
-  'PG.GenerateErrorFmt': 'An error occurred while generating prerequisites: {0}',
+  'PG.GenerateErrorFmt':
+      'An error occurred while generating prerequisites: {0}',
   'BGO.Title': 'Long-Form Batch Generation Options',
   'BGO.Header': 'Batch Generation Task Options',
-  'BGO.Desc': 'Unfinished tasks resume automatically from where they stopped. New options only affect later chapters and new volumes.',
-  'BGO.UnlimitedMode': 'Unlimited continuation mode (no volume limit; keeps writing new volumes until cancelled)',
-  'BGO.QuickSwitch': 'Quick volume switch: write 3 more chapters in the current volume, then start the next one (to verify cross-volume transitions)',
+  'BGO.Desc':
+      'Unfinished tasks resume automatically from where they stopped. New options only affect later chapters and new volumes.',
+  'BGO.UnlimitedMode':
+      'Unlimited continuation mode (no volume limit; keeps writing new volumes until cancelled)',
+  'BGO.QuickSwitch':
+      'Quick volume switch: write 3 more chapters in the current volume, then start the next one (to verify cross-volume transitions)',
   'BGO.ChaptersPerVolume': 'Chapters per volume:',
   'BGO.ChaptersPerVolumeHint': '(default 30, range 3–100)',
   'BGO.TargetWordsPerChapter': 'Target words per chapter:',
@@ -5581,7 +5787,8 @@ const Map<String, String> enStrings = <String, String>{
   'BGO.WordsNotNumber': 'Target words per chapter must be a number.',
   'BGO.InvalidInputTitle': 'Invalid Input',
   'CC.Title': 'Chapter Consistency Check',
-  'CC.Desc': 'AI checks whether the chapter matches the outline, plot settings, and character profiles, and offers improvement suggestions',
+  'CC.Desc':
+      'AI checks whether the chapter matches the outline, plot settings, and character profiles, and offers improvement suggestions',
   'CC.Settings': 'Check Settings',
   'CC.CheckScope': 'Check Scope',
   'CC.PlotConsistency': 'Plot consistency',
@@ -5606,7 +5813,8 @@ const Map<String, String> enStrings = <String, String>{
   'CC.InitFailedFmt': 'Failed to initialize the AI service: {0}',
   'CC.ReportCopied': 'The check report has been copied to the clipboard',
   'CC.ExportFailedFmt': 'Failed to export the report: {0}',
-  'CC.ServiceNotInit': 'The AI service is not initialized, so the consistency check cannot run.\nPlease make sure the AI service is configured correctly.',
+  'CC.ServiceNotInit':
+      'The AI service is not initialized, so the consistency check cannot run.\nPlease make sure the AI service is configured correctly.',
   'CC.ResultTitle': 'Check Result',
   'CC.NoValidResultFmt': 'The consistency check returned no valid result: {0}',
   'CC.DoneTitle': 'Check Complete',
@@ -5634,13 +5842,17 @@ const Map<String, String> enStrings = <String, String>{
   'CC.ReportDescFmt': 'Description: {0}\n',
   'CC.ReportSuggestionFmt': 'Suggestion: {0}\n\n',
   'CC.AutoFixTitle': 'Auto-Fix',
-  'CC.NoIssuesConfirm': 'There are no fixable issues right now. Run a consistency check first?',
-  'CC.AutoFixServiceNotInit': 'The AI service is not initialized, so auto-fix cannot run.',
+  'CC.NoIssuesConfirm':
+      'There are no fixable issues right now. Run a consistency check first?',
+  'CC.AutoFixServiceNotInit':
+      'The AI service is not initialized, so auto-fix cannot run.',
   'CC.AutoFixNoResultFmt': 'Auto-fix produced no valid result: {0}',
   'CC.AutoFixPreviewTitle': 'Consistency Auto-Fix Preview',
   'CC.ApplyFixTitle': 'Apply Fix',
-  'CC.ApplyFixConfirm': 'A fixed draft has been generated. Apply the fix to the chapter editor?\nChoosing "Yes" writes it back to the chapter text; choosing "No" only copies it to the clipboard.',
-  'CC.FixCopied': 'The fixed draft has been copied to the clipboard. Compare it manually before use.',
+  'CC.ApplyFixConfirm':
+      'A fixed draft has been generated. Apply the fix to the chapter editor?\nChoosing "Yes" writes it back to the chapter text; choosing "No" only copies it to the clipboard.',
+  'CC.FixCopied':
+      'The fixed draft has been copied to the clipboard. Compare it manually before use.',
   'CC.AutoFixFailedFmt': 'Auto-fix failed: {0}',
   'TC.WindowTitle': 'AI Thinking Process',
   'TC.PinTip': 'Toggle always on top',
@@ -5667,8 +5879,10 @@ const Map<String, String> enStrings = <String, String>{
   'IE.Fmt.Size': 'Size: {0:N0} bytes',
   'AMC.Timeout30s': '30 seconds',
   'DG.SampleChars': 'Protagonist, Supporting A',
-  'TC.ExportFilter': 'Markdown Files (*.md)|*.md|JSON Files (*.json)|*.json|Text Files (*.txt)|*.txt|HTML Files (*.html)|*.html',
-  'AMC.InitFallbackFmt': 'Configuration service initialization failed, using default service: {0}',
+  'TC.ExportFilter':
+      'Markdown Files (*.md)|*.md|JSON Files (*.json)|*.json|Text Files (*.txt)|*.txt|HTML Files (*.html)|*.html',
+  'AMC.InitFallbackFmt':
+      'Configuration service initialization failed, using default service: {0}',
   'AMC.MaxLengthLiveFmt': '{0:F0} chars',
   'AMC.TimeoutLiveFmt': '{0:F0} s',
   'AMC.ExportedStatusFmt': 'Configuration exported to {0}',
@@ -5677,7 +5891,8 @@ const Map<String, String> enStrings = <String, String>{
   'AMC.FilterJsonAll': 'JSON Files|*.json|All Files|*.*',
   'AMC.LoadFail': 'Failed to load the configuration',
   'AMC.UpdateMetricsFail': 'Failed to update performance metrics',
-  'DG.InitFallbackFmt': 'Service initialization failed, using default service: {0}',
+  'DG.InitFallbackFmt':
+      'Service initialization failed, using default service: {0}',
   'DG.LenMedium': 'Medium',
   'DG.GenFailFmt': 'Generation failed: {0}',
   'DG.OptFailFmt': 'Optimization failed: {0}',
@@ -5703,7 +5918,8 @@ const Map<String, String> enStrings = <String, String>{
   'CWR.DebugEnabledFmt': 'Enabled={0}, hit rounds={1}, fallback rounds={2}',
   'CWR.DebugCandidateFmt': 'Candidate index={0}, score={1}',
   'POL.InitFailedFmt': 'Failed to initialize the AI service: {0}',
-  'POL.CheckRwkvFailedFmt': 'Failed to check the RWKV inference service status: {0}',
+  'POL.CheckRwkvFailedFmt':
+      'Failed to check the RWKV inference service status: {0}',
   'POL.DiffFailFmt': 'Failed to show the diff: {0}',
   'POL.RecordLoadedFmt': 'Polish record loaded: {0}',
   'POL.HistoryShowFailFmt': 'Failed to show the history: {0}',
@@ -5719,7 +5935,8 @@ const Map<String, String> enStrings = <String, String>{
   'POL.ReplSummaryFmt': '{0} replacement suggestions, {1} selected',
   'POL.RecordFileNameFmt': 'PolishRecord_{0:yyyyMMdd_HHmmss}',
   'POL.DiffDescFmt': 'Polish: {0}... → {1}...',
-  'POL.DeleteRecordConfirmFmt': 'Are you sure you want to delete the record "{0}"?',
+  'POL.DeleteRecordConfirmFmt':
+      'Are you sure you want to delete the record "{0}"?',
   'POL.RecordReadFailFmt': 'Failed to read the record: {0}',
   'OG.AIServiceNotReg': 'The AI assistant service is not registered',
   'OG.PlotServiceNotReg': 'The plot service is not registered',
@@ -5733,8 +5950,10 @@ const Map<String, String> enStrings = <String, String>{
   'PG.CheckStatusFailFmt': 'Failed to check the status: {0}',
   'PG.StageWorldActiveFmt': 'In progress/Completed\n{0} world settings',
   'PG.StageOutlineActiveFmt': 'In progress/Completed\n{0} outline items',
-  'PG.StageSupportActiveFmt': 'In progress/Completed\n{0} characters / {1} factions',
-  'PG.StageWritingActiveFmt': 'In progress/Completed\n{0} volumes / {1} chapters',
+  'PG.StageSupportActiveFmt':
+      'In progress/Completed\n{0} characters / {1} factions',
+  'PG.StageWritingActiveFmt':
+      'In progress/Completed\n{0} volumes / {1} chapters',
   'PG.DoneMsgFmt': 'Prerequisite generation completed!\n\n{0}',
   'PG.GenerateFailFmt': 'Prerequisite generation failed: {0}',
   'CC.ExportFailFmt': 'Failed to export the report: {0}',
@@ -5744,9 +5963,11 @@ const Map<String, String> enStrings = <String, String>{
   'CC.AutoFixInvalidFmt': 'Auto-fix produced no valid result: {0}',
   'CC.AutoFixFailFmt': 'Auto-fix failed: {0}',
   'CW.InitFailedFmt': 'Failed to initialize the AI service: {0}',
-  'CW.CheckRwkvFailedFmt': 'Failed to check the RWKV inference service status: {0}',
+  'CW.CheckRwkvFailedFmt':
+      'Failed to check the RWKV inference service status: {0}',
   'CW.PreviewMergeSuffix': '(Merge Preview)',
-  'CW.ExtractErrorRetry': 'An error occurred while extracting the continuation. Please try again.',
+  'CW.ExtractErrorRetry':
+      'An error occurred while extracting the continuation. Please try again.',
   'CW.PreviewFailFmt': 'Preview failed: {0}',
   'CW.AIFailFmt': 'AI continuation failed: {0}',
   'POL.FullContent': 'Full text',
@@ -5754,7 +5975,8 @@ const Map<String, String> enStrings = <String, String>{
   'POL.WordReplFmt': 'Optimized "{0}" to "{1}"',
   'PG.AIGenerating': 'Generating with AI...',
   'POL.FullPolishNote': 'The AI polished and refined the full text',
-  'POL.DiffFallback': 'Diff analysis failed; fell back to full-text replacement items',
+  'POL.DiffFallback':
+      'Diff analysis failed; fell back to full-text replacement items',
   'DG.QualityChipFmt': 'Quality score: {0:F1}/10',
   'VM.Title': 'Volumes & Chapters',
   'PM.Subtitle': 'Manage your book-writing projects',
@@ -5787,18 +6009,21 @@ const Map<String, String> enStrings = <String, String>{
   'PM.UpdateSuccess': 'Project \'{0}\' updated successfully!',
   'PM.EditFailed': 'Failed to edit project: {0}',
   'PM.MoveToRecycleBin': 'Move to Recycle Bin',
-  'PM.MoveToRecycleBinConfirm': 'Move project \'{0}\' to the recycle bin?\nYou can restore it from the recycle bin later.',
+  'PM.MoveToRecycleBinConfirm':
+      'Move project \'{0}\' to the recycle bin?\nYou can restore it from the recycle bin later.',
   'PM.MovedToRecycleBin': 'Project \'{0}\' has been moved to the recycle bin',
   'PM.MoveToRecycleBinFailed': 'Failed to move project to recycle bin: {0}',
   'PM.PermanentDelete': 'Permanently Delete',
-  'PM.PermanentDeleteConfirm': 'Permanently delete project \'{0}\'?\nThis action cannot be undone!',
+  'PM.PermanentDeleteConfirm':
+      'Permanently delete project \'{0}\'?\nThis action cannot be undone!',
   'PM.PermanentlyDeleted': 'Project \'{0}\' has been permanently deleted',
   'PM.PermanentDeleteFailed': 'Failed to permanently delete project: {0}',
   'PM.RestoreConfirm': 'Restore project \'{0}\'?',
   'PM.Restored': 'Project \'{0}\' has been restored',
   'PM.RestoreFailed': 'Failed to restore project: {0}',
   'PM.RecycleBinEmpty': 'The recycle bin is already empty',
-  'PM.EmptyRecycleBinConfirm': 'Empty the recycle bin?\nThis will permanently delete {0} project(s). This action cannot be undone!',
+  'PM.EmptyRecycleBinConfirm':
+      'Empty the recycle bin?\nThis will permanently delete {0} project(s). This action cannot be undone!',
   'PM.EmptyRecycleBinFailed': 'Failed to empty the recycle bin: {0}',
   'PM.PermanentlyDeletedCount': '{0} project(s) permanently deleted',
   'PM.AddFailed': 'Failed to add project: {0}',
@@ -5820,7 +6045,8 @@ const Map<String, String> enStrings = <String, String>{
   'PO.CountZero': '0 items',
   'PO.SettingCompletion': 'Setting Completion',
   'PO.ProcessFlowTitle': 'Workflow & Closed Loop',
-  'PO.ProcessFlowIntro': 'Recommended order: project basics → worldview → outline → supporting settings → volume/chapter writing. Once in supporting settings, characters, factions and sub-systems can be completed in parallel; after writing, return to plot/settings for consistency corrections to form a closed loop.',
+  'PO.ProcessFlowIntro':
+      'Recommended order: project basics → worldview → outline → supporting settings → volume/chapter writing. Once in supporting settings, characters, factions and sub-systems can be completed in parallel; after writing, return to plot/settings for consistency corrections to form a closed loop.',
   'PO.Stage1': '1. Project Basics',
   'PO.Stage2': '2. Worldbuilding',
   'PO.Stage3': '3. Outline',
@@ -5830,10 +6056,14 @@ const Map<String, String> enStrings = <String, String>{
   'PO.ProjectSettings': 'Project Settings',
   'PO.CharactersAndFactions': 'Characters & Factions',
   'PO.VolumeChapterManagement': 'Volume & Chapter Management',
-  'PO.ParallelHint': 'Parallel tip: during the supporting settings stage, characters, factions and sub-systems can be completed in sync, but all should follow the current project basics, worldview and outline.',
-  'PO.ClosedLoopHint': 'Closed-loop tip: after writing progresses, return to plot, characters, factions, world settings and consistency check entries for corrections before the next round of writing.',
-  'PO.AutoUpdateHint': 'Update process: after a chapter is saved, plot, settings, history, relationships and the timeline should be synced automatically.',
-  'PO.ReviewHint': 'Review process: after automatic updates complete, check timeline management, the relationship network, character history, faction history and consistency results.',
+  'PO.ParallelHint':
+      'Parallel tip: during the supporting settings stage, characters, factions and sub-systems can be completed in sync, but all should follow the current project basics, worldview and outline.',
+  'PO.ClosedLoopHint':
+      'Closed-loop tip: after writing progresses, return to plot, characters, factions, world settings and consistency check entries for corrections before the next round of writing.',
+  'PO.AutoUpdateHint':
+      'Update process: after a chapter is saved, plot, settings, history, relationships and the timeline should be synced automatically.',
+  'PO.ReviewHint':
+      'Review process: after automatic updates complete, check timeline management, the relationship network, character history, faction history and consistency results.',
   'PO.TimelineReview': 'Timeline Review',
   'PO.RelationshipReview': 'Relationship Review',
   'PO.ConsistencyCheck': 'Consistency Check',
@@ -5852,41 +6082,62 @@ const Map<String, String> enStrings = <String, String>{
   'PO.WordsSuffixFmt': '{0} words',
   'PO.PercentDoneFmt': '{0}% done',
   'PO.CountSuffixFmt': '{0}',
-  'PO.NoCharacters': 'No character information yet. Go to Character Management to create characters.',
+  'PO.NoCharacters':
+      'No character information yet. Go to Character Management to create characters.',
   'PO.GenerateOutlineAI': 'AI Generate Outline',
   'PO.EditOutline': 'Edit Outline',
-  'PO.NoOutline': 'No outline yet. Click "AI Generate Outline" to create one, or click "Edit Outline" to write it manually.',
+  'PO.NoOutline':
+      'No outline yet. Click "AI Generate Outline" to create one, or click "Edit Outline" to write it manually.',
   'PO.CannotGetMainWindow': 'Cannot access the main window',
-  'PO.GuardServiceNotInitialized': 'Project validation service is not initialized',
+  'PO.GuardServiceNotInitialized':
+      'Project validation service is not initialized',
   'PO.FeatureNewChapter': 'New Chapter',
   'PO.FeatureProjectHome': 'Project Home',
   'PO.AIOutlineGeneration': 'AI Outline Generation',
   'PO.ProjectBackup': 'Project Backup',
   'PO.StageReadyType': 'Ready\nType: {0}',
-  'PO.StagePendingProject': 'To be completed\nPlease set the project name and type first',
+  'PO.StagePendingProject':
+      'To be completed\nPlease set the project name and type first',
   'PO.StageWorldDone': 'In progress/Completed\n{0} setting(s) now',
   'PO.StageWorldPending': 'Not started\nComplete the worldview first',
   'PO.StageOutlineDone': 'In progress/Completed\n{0} plot item(s) now',
   'PO.StageOutlinePending': 'Not started\nShould be based on the worldview',
-  'PO.StageSupportDone': 'Can proceed in parallel\nCharacters {0} / Factions {1}',
+  'PO.StageSupportDone':
+      'Can proceed in parallel\nCharacters {0} / Factions {1}',
   'PO.StageSupportPending': 'Not started\nBest added after the outline',
   'PO.StageWritingDone': 'In progress/Completed\nVolumes {0} / Chapters {1}',
-  'PO.StageWritingPending': 'Not started\nStart writing after the basic settings',
-  'PO.ParallelHintWithOutline': 'Parallel tip: you are now in the supporting settings stage. Characters, factions, cultivation systems, political systems and more can be completed in sync, but all should follow the project basics, worldview and outline.',
-  'PO.ParallelHintNoOutline': 'Parallel tip: finish the project basics, worldview and outline first, then complete characters, factions and other supporting settings in parallel.',
-  'PO.ClosedLoopHintWriting': 'Closed-loop tip: once writing progresses, return to the plot, characters, factions, world settings and consistency check entries for corrections before the next round of volume/chapter writing.',
-  'PO.ClosedLoopHintNoWriting': 'Closed-loop tip: once volume/chapter progress begins, the system should enter the loop of "write → sync context → check consistency → backfill settings/outline".',
-  'PO.AutoUpdateHintWriting': 'Update process: after a chapter is saved, the system first syncs plot, settings, character history, faction history, character relationships, faction relationships and the timeline automatically.',
-  'PO.AutoUpdateHintNoWriting': 'Update process: once in volume/chapter writing, every chapter save should trigger automatic updates of plot, settings, history, relationships and the timeline.',
-  'PO.ReviewHintWriting': 'Review process: after automatic updates complete, check the timeline management, relationship network, character management, faction management, consistency check and quality check pages to confirm the results.',
-  'PO.ReviewHintNoWriting': 'Review note: writing has not started yet. Once chapter progress begins, enter the loop of "auto-update → manual review → backfill settings/plot".',
-  'PO.Next.ProjectBase': 'Next step: complete the project basics first, then move on to world settings and AI generation.',
-  'PO.Next.WorldSettings': 'Next step: complete the world settings first. Go to "World Settings" or the "Process Workbench" to generate prerequisite settings.',
-  'PO.Next.Outline': 'Next step: generate the plot outline from the current worldview, then continue completing characters and factions.',
-  'PO.Next.Support': 'Next step: with the basic worldview and outline in place, you can complete characters, factions and other sub-settings in parallel.',
-  'PO.Next.Writing': 'Next step: go to volume & chapter management to start writing, and keep feeding back plot and settings as you write.',
-  'PO.Next.ClosedLoop': 'Next step: the project has entered the creation loop. Keep advancing at the rhythm of "write → auto-update timeline/relationships/history → review timeline & relationship network → consistency check → backfill settings/outline".',
-  'PO.OpenVolumeChapterFailed': 'Failed to open volume & chapter management: {0}',
+  'PO.StageWritingPending':
+      'Not started\nStart writing after the basic settings',
+  'PO.ParallelHintWithOutline':
+      'Parallel tip: you are now in the supporting settings stage. Characters, factions, cultivation systems, political systems and more can be completed in sync, but all should follow the project basics, worldview and outline.',
+  'PO.ParallelHintNoOutline':
+      'Parallel tip: finish the project basics, worldview and outline first, then complete characters, factions and other supporting settings in parallel.',
+  'PO.ClosedLoopHintWriting':
+      'Closed-loop tip: once writing progresses, return to the plot, characters, factions, world settings and consistency check entries for corrections before the next round of volume/chapter writing.',
+  'PO.ClosedLoopHintNoWriting':
+      'Closed-loop tip: once volume/chapter progress begins, the system should enter the loop of "write → sync context → check consistency → backfill settings/outline".',
+  'PO.AutoUpdateHintWriting':
+      'Update process: after a chapter is saved, the system first syncs plot, settings, character history, faction history, character relationships, faction relationships and the timeline automatically.',
+  'PO.AutoUpdateHintNoWriting':
+      'Update process: once in volume/chapter writing, every chapter save should trigger automatic updates of plot, settings, history, relationships and the timeline.',
+  'PO.ReviewHintWriting':
+      'Review process: after automatic updates complete, check the timeline management, relationship network, character management, faction management, consistency check and quality check pages to confirm the results.',
+  'PO.ReviewHintNoWriting':
+      'Review note: writing has not started yet. Once chapter progress begins, enter the loop of "auto-update → manual review → backfill settings/plot".',
+  'PO.Next.ProjectBase':
+      'Next step: complete the project basics first, then move on to world settings and AI generation.',
+  'PO.Next.WorldSettings':
+      'Next step: complete the world settings first. Go to "World Settings" or the "Process Workbench" to generate prerequisite settings.',
+  'PO.Next.Outline':
+      'Next step: generate the plot outline from the current worldview, then continue completing characters and factions.',
+  'PO.Next.Support':
+      'Next step: with the basic worldview and outline in place, you can complete characters, factions and other sub-settings in parallel.',
+  'PO.Next.Writing':
+      'Next step: go to volume & chapter management to start writing, and keep feeding back plot and settings as you write.',
+  'PO.Next.ClosedLoop':
+      'Next step: the project has entered the creation loop. Keep advancing at the rhythm of "write → auto-update timeline/relationships/history → review timeline & relationship network → consistency check → backfill settings/outline".',
+  'PO.OpenVolumeChapterFailed':
+      'Failed to open volume & chapter management: {0}',
   'PO.OpenCharacterFailed': 'Failed to open character management: {0}',
   'PO.OpenFactionFailed': 'Failed to open faction management: {0}',
   'PO.OpenTimelineFailed': 'Failed to open timeline management: {0}',
@@ -5901,16 +6152,21 @@ const Map<String, String> enStrings = <String, String>{
   'PO.OutlineGenerated': 'Outline generated and saved',
   'PO.OpenAIOutlineFailed': 'Failed to open AI outline generator: {0}',
   'PO.OpenImportExportFailed': 'Failed to open import & export: {0}',
-  'PO.ReadModelServiceNotInitialized': 'Project read-model service is not initialized',
-  'PO.ProjectNotFound': 'Current project not found. Please select a project again.',
+  'PO.ReadModelServiceNotInitialized':
+      'Project read-model service is not initialized',
+  'PO.ProjectNotFound':
+      'Current project not found. Please select a project again.',
   'PO.SettingsUpdated': 'Project settings updated',
   'PO.OpenSettingsFailed': 'Failed to open project settings: {0}',
-  'PO.StatisticsServiceNotInitialized': 'Project statistics service is not initialized',
+  'PO.StatisticsServiceNotInitialized':
+      'Project statistics service is not initialized',
   'PO.OpenStatisticsFailed': 'Failed to open statistics: {0}',
   'PO.ProjectServiceNotInitialized': 'Project service is not initialized',
-  'PO.BackupConfirm': 'Back up the current project "{0}"?\n\nThe backup will include:\n• All text content\n• Character settings\n• Plot outline\n• World settings\n• Project configuration',
+  'PO.BackupConfirm':
+      'Back up the current project "{0}"?\n\nThe backup will include:\n• All text content\n• Character settings\n• Plot outline\n• World settings\n• Project configuration',
   'PO.BackupConfirmTitle': 'Backup Confirmation',
-  'PO.BackupNotImplemented': 'Current project: {0}\n\nThe real backup pipeline is not connected yet; this entry has completed project context consolidation.\nA unified export/backup service will be integrated later to avoid demo data.',
+  'PO.BackupNotImplemented':
+      'Current project: {0}\n\nThe real backup pipeline is not connected yet; this entry has completed project context consolidation.\nA unified export/backup service will be integrated later to avoid demo data.',
   'PO.FeaturePending': 'Feature Pending',
   'PO.BackupFailed': 'Failed to back up project: {0}',
   'VM.Subtitle': 'Manage the volume and chapter structure of the project',
@@ -5939,15 +6195,19 @@ const Map<String, String> enStrings = <String, String>{
   'VM.ShowVolumeDetailsFailed': 'Failed to show volume details: {0}',
   'VM.ShowChapterDetailsFailed': 'Failed to show chapter details: {0}',
   'VM.SwitchViewFailed': 'Failed to switch view mode: {0}',
-  'VM.SelectProjectFirstVolume': 'Please select a valid project before creating a volume.',
+  'VM.SelectProjectFirstVolume':
+      'Please select a valid project before creating a volume.',
   'VM.VolumeCreated': 'Volume \'{0}\' created successfully!',
   'VM.NewVolumeFailed': 'Failed to create volume: {0}',
-  'VM.SelectProjectFirstChapter': 'Please select a valid project before creating a chapter.',
+  'VM.SelectProjectFirstChapter':
+      'Please select a valid project before creating a chapter.',
   'VM.ChapterCreated': 'Chapter \'{0}\' created successfully!',
   'VM.VolumeNotFound': 'Target volume not found',
   'VM.NewChapterFailed': 'Failed to create chapter: {0}',
-  'VM.SelectToExport': 'Please select a project, volume or chapter to export first',
-  'VM.CannotOpenImportExport': 'Cannot access the main window; the import & export page cannot be opened.',
+  'VM.SelectToExport':
+      'Please select a project, volume or chapter to export first',
+  'VM.CannotOpenImportExport':
+      'Cannot access the main window; the import & export page cannot be opened.',
   'VM.ExportNotSupported': 'The current selection cannot be exported.',
   'VM.ExportFailed': 'Failed to export volume: {0}',
   'VM.NoVolumeDescription': 'No volume description',
@@ -5968,22 +6228,26 @@ const Map<String, String> enStrings = <String, String>{
   'VM.ChapterSummary': 'Chapter Summary',
   'VM.EditChapter': 'Edit Chapter',
   'VM.DeleteChapter': 'Delete Chapter',
-  'VM.DefaultChapterSummary': 'This is an exciting chapter. Click Edit to view the details.',
+  'VM.DefaultChapterSummary':
+      'This is an exciting chapter. Click Edit to view the details.',
   'VM.ChapterServiceNotInitialized': 'Chapter service is not initialized',
   'VM.ChapterNotFoundForEdit': 'Chapter to edit not found',
   'VM.ChapterEditComplete': 'Chapter editing completed!',
   'VM.EditChapterFailed': 'Failed to edit chapter: {0}',
   'VM.DeleteChapterConfirm': 'Delete the chapter "Chapter {0}: {1}"?',
   'VM.ConfirmDelete': 'Confirm Delete',
-  'VM.DeleteChapterFailedOrMissing': 'Failed to delete the chapter, or the chapter does not exist.',
+  'VM.DeleteChapterFailedOrMissing':
+      'Failed to delete the chapter, or the chapter does not exist.',
   'VM.DeleteChapterFailed': 'Failed to delete chapter: {0}',
   'VM.ToBeFilled': 'To be filled',
   'VM.PreviewChapterFailed': 'Failed to preview chapter: {0}',
   'VM.VolumeServiceNotInitialized': 'Volume service is not initialized',
   'VM.VolumeNotFoundForEdit': 'Volume to edit not found.',
   'VM.EditVolumeFailed': 'Failed to edit volume: {0}',
-  'VM.DeleteVolumeConfirm': 'Delete the volume "{0}"? Its chapters will also be removed.',
-  'VM.DeleteVolumeFailedOrMissing': 'Failed to delete the volume, or the volume does not exist.',
+  'VM.DeleteVolumeConfirm':
+      'Delete the volume "{0}"? Its chapters will also be removed.',
+  'VM.DeleteVolumeFailedOrMissing':
+      'Failed to delete the volume, or the volume does not exist.',
   'VM.DeleteVolumeFailed': 'Failed to delete volume: {0}',
   'VM.ExportVolumeContentTitle': 'Export Volume Content',
   'VM.FileType.Text': 'Text Files (*.txt)',
@@ -5991,7 +6255,8 @@ const Map<String, String> enStrings = <String, String>{
   'VM.ContentExported': 'Volume content exported to: {0}',
   'VM.ExportComplete': 'Export Successful',
   'VM.ExportContentFailed': 'Failed to export volume content: {0}',
-  'VM.ServicesNotInitialized': 'Volume service or chapter service is not initialized.',
+  'VM.ServicesNotInitialized':
+      'Volume service or chapter service is not initialized.',
   'VM.VolumeNotFoundForExport': 'Volume to export not found.',
   'VM.ExportChapterCount': 'Chapters: {0}',
   'VM.ExportWordCount': 'Current words: {0:N0}',
@@ -6010,7 +6275,8 @@ const Map<String, String> enStrings = <String, String>{
   'NPD.EnableVersionControl': 'Enable version control',
   'NPD.TemplateSection': 'Project Templates',
   'NPD.BuiltInTemplates': 'Built-in Templates',
-  'NPD.TemplateNote': 'Project management currently provides one built-in standard template for quickly creating a formal project skeleton',
+  'NPD.TemplateNote':
+      'Project management currently provides one built-in standard template for quickly creating a formal project skeleton',
   'NPD.CreateProject': 'Create Project',
   'NPD.NameRequired': 'Please enter the project name',
   'NPD.TypeRequired': 'Please select the project type',
@@ -6038,8 +6304,10 @@ const Map<String, String> enStrings = <String, String>{
   'NVD.DescriptionRequired': 'Please enter the volume description',
   'NVD.TypeRequired': 'Please select the volume type',
   'NVD.OrderInvalid': 'Please enter a valid volume order (positive integer)',
-  'NVD.TargetChaptersInvalid': 'Please enter a valid target chapter count (positive integer)',
-  'NVD.EstimatedWordsInvalid': 'Please enter a valid estimated word count (positive integer)',
+  'NVD.TargetChaptersInvalid':
+      'Please enter a valid target chapter count (positive integer)',
+  'NVD.EstimatedWordsInvalid':
+      'Please enter a valid estimated word count (positive integer)',
   'NVD.ValidateFailed': 'An error occurred while validating input: {0}',
   'NVD.CreateFailed': 'An error occurred while creating the volume: {0}',
   'NCD.Title': 'New Chapter',
@@ -6072,7 +6340,8 @@ const Map<String, String> enStrings = <String, String>{
   'NCD.TitleRequired': 'Please enter the chapter title',
   'NCD.NumberInvalid': 'Please enter a valid chapter number (positive integer)',
   'NCD.TypeRequired': 'Please select the chapter type',
-  'NCD.TargetWordsInvalid': 'Please enter a valid target word count (positive integer)',
+  'NCD.TargetWordsInvalid':
+      'Please enter a valid target word count (positive integer)',
   'NCD.ChapterCreated': 'Chapter \'{0}\' created successfully!',
   'NCD.CreateFailed': 'An error occurred while creating the chapter: {0}',
   'CHM.Title': 'Chapter Management',
@@ -6129,7 +6398,8 @@ const Map<String, String> enStrings = <String, String>{
   'CDD.C3': '• Remove the character from all related plots',
   'CDD.C4': '• This action cannot be undone',
   'CDD.ConfirmInputHint': 'Type the character name to confirm deletion:',
-  'CDD.ConfirmOptionalHint': 'You can confirm directly, or type the character name to double-confirm',
+  'CDD.ConfirmOptionalHint':
+      'You can confirm directly, or type the character name to double-confirm',
   'CDD.ConfirmDelete': 'Delete',
   'CM.ServiceInitFailed': 'Service initialization failed: {0}',
   'CM.LoadDataFailed': 'Failed to load character data: {0}',
@@ -6144,37 +6414,44 @@ const Map<String, String> enStrings = <String, String>{
   'CM.NoKeyEvents': 'No key events yet',
   'CM.ShowDetailFailed': 'Failed to show character details: {0}',
   'CM.EnsureCreateTitle': 'Create Character',
-  'CM.DuplicateReused': 'A character named \'{0}\' with an identical description already exists in the project and has been reused. Adjust the personality or backstory to distinguish them.',
+  'CM.DuplicateReused':
+      'A character named \'{0}\' with an identical description already exists in the project and has been reused. Adjust the personality or backstory to distinguish them.',
   'CM.CreateSuccess': 'Character \'{0}\' created successfully!',
   'CM.CreateSuccessLocal': 'Character \'{0}\' created (local only)!',
   'CM.CreateFailed': 'Failed to create character: {0}',
-  'CM.NoMainWindow': 'Cannot get the main window; the import/export page cannot be opened.',
+  'CM.NoMainWindow':
+      'Cannot get the main window; the import/export page cannot be opened.',
   'CM.SelectToEdit': 'Select a character to edit first',
   'CM.UpdateSuccess': 'Character information updated successfully!',
   'CM.UpdateFailedInner': 'Failed to update character: {0}',
   'CM.UpdateSuccessLocal': 'Character information updated (local only)!',
   'CM.EditFailed': 'Failed to edit character: {0}',
   'CM.SelectToDelete': 'Select a character to delete first',
-  'CM.ReferencedBody': 'Character \'{0}\' is referenced by:/n/n{1}/n/nReferenced characters can only be edited, not deleted. Edit this character instead?',
+  'CM.ReferencedBody':
+      'Character \'{0}\' is referenced by:/n/n{1}/n/nReferenced characters can only be edited, not deleted. Edit this character instead?',
   'CM.ReferencedTitle': 'Character Is Referenced',
   'CM.DeleteSuccess': 'Character \'{0}\' deleted successfully!',
   'CM.DeleteFailedMsg': 'Delete failed: {0}',
   'CM.DeleteSuccessLocal': 'Character \'{0}\' deleted (local only)!',
   'CM.DeleteFailed': 'Failed to delete character: {0}',
-  'CM.ServiceNotInitSave': 'Character service is not initialized; cannot save AI-generated characters.',
-  'CM.AIDuplicateReused': 'A character named \'{0}\' with an identical description already exists; the existing character was reused',
+  'CM.ServiceNotInitSave':
+      'Character service is not initialized; cannot save AI-generated characters.',
+  'CM.AIDuplicateReused':
+      'A character named \'{0}\' with an identical description already exists; the existing character was reused',
   'CM.AIGenerateSuccess': 'Character generated successfully: {0}',
   'CM.AIBadFormat': 'The generated character data is malformed',
   'CM.AIGenerateFailed': 'AI character generation failed',
   'CM.AIServiceNotInit': 'AI assistant service is not initialized',
   'CM.AIGenerateFailedEx': 'AI character generation failed: {0}',
   'CM.SelectToOptimize': 'Select a character to optimize first',
-  'CM.ServiceNotInitSaveOpt': 'Character service is not initialized; cannot save optimization results.',
+  'CM.ServiceNotInitSaveOpt':
+      'Character service is not initialized; cannot save optimization results.',
   'CM.AIOptimizeSuccess': 'Character optimized successfully: {0}',
   'CM.AIOptimizeBadFormat': 'The optimized character data is malformed',
   'CM.AIOptimizeFailed': 'AI character optimization failed',
   'CM.AIOptimizeFailedEx': 'AI character optimization failed: {0}',
-  'CM.NeedTwoChars': 'At least 2 characters are required for relationship analysis',
+  'CM.NeedTwoChars':
+      'At least 2 characters are required for relationship analysis',
   'CM.RelationDone': 'Character relationship analysis completed',
   'CM.RelationFailed': 'AI relationship analysis failed',
   'CM.RelationFailedEx': 'AI relationship analysis failed: {0}',
@@ -6185,9 +6462,11 @@ const Map<String, String> enStrings = <String, String>{
   'CM.OptimizeTitle': 'Character Optimization',
   'CM.UseDefaultGoals': 'Use default optimization goals?',
   'CM.RelationResultTitle': 'Character Relationship Analysis Result',
-  'CM.RelationResultDone': 'The character relationship analysis result has been generated',
+  'CM.RelationResultDone':
+      'The character relationship analysis result has been generated',
   'CDD.LoadFailed': 'Failed to load character information: {0}',
-  'CDD.FinalConfirm': 'Are you sure you want to delete character \'{0}\'?\n\nThis action cannot be undone!',
+  'CDD.FinalConfirm':
+      'Are you sure you want to delete character \'{0}\'?\n\nThis action cannot be undone!',
   'CDD.FinalConfirmTitle': 'Final Confirmation',
   'CDD.DeleteOpFailed': 'Delete operation failed: {0}',
   'CED.Title': 'Edit Character',
@@ -6223,8 +6502,10 @@ const Map<String, String> enStrings = <String, String>{
   'CED.PersonalityHint': 'Describe the character\'s personality...',
   'CED.BackstoryHint': 'Describe the character\'s backstory...',
   'CED.AbilitiesHint': 'Describe the character\'s abilities and skills...',
-  'CED.ExperienceHint': 'Summary of the character\'s history and key experiences...',
-  'CED.KeyEventsHint': 'Summary of the character\'s key experiences and events...',
+  'CED.ExperienceHint':
+      'Summary of the character\'s history and key experiences...',
+  'CED.KeyEventsHint':
+      'Summary of the character\'s key experiences and events...',
   'CED.AIAutoFill': 'AI Auto-Fill',
   'CED.Reset': 'Reset Content',
   'CED.NewTitle': 'New Character',
@@ -6237,7 +6518,8 @@ const Map<String, String> enStrings = <String, String>{
   'CED.NameEmpty': 'Character name cannot be empty',
   'CED.SaveErrorInner': 'An error occurred while saving character data: {0}',
   'CED.SaveFailed': 'Failed to save character: {0}',
-  'CED.ResetConfirm': 'Restore the content to its initial state when the window was opened?',
+  'CED.ResetConfirm':
+      'Restore the content to its initial state when the window was opened?',
   'CED.ResetTitle': 'Reset Content',
   'CED.AIFillFailed': 'AI auto-fill failed',
   'CED.AIFillDone': 'Character information auto-fill completed.',
@@ -6280,7 +6562,8 @@ const Map<String, String> enStrings = <String, String>{
   'PLM.StatusDistribution': 'Plot Status Distribution',
   'PLM.RecentUpdate': 'Recently Updated',
   'PLM.SampleMain': 'Main: The Heavenly Tribulation Descends',
-  'PLM.SampleMainDesc': 'A key plot where Lin Xuan faces the trial of the heavenly tribulation',
+  'PLM.SampleMainDesc':
+      'A key plot where Lin Xuan faces the trial of the heavenly tribulation',
   'PLM.HoursAgo2': '2 hours ago',
   'PLM.SampleSub': 'Sub: Su Yuwei\'s Secret',
   'PLM.SampleSubDesc': 'A subplot revealing the mystery of Su Yuwei\'s origin',
@@ -6297,13 +6580,15 @@ const Map<String, String> enStrings = <String, String>{
   'PLM.NewFailed': 'Failed to create plot: {0}',
   'PLM.NoPlots': 'No plots in the current project.',
   'PLM.TimelineReportTitle': 'Plot Timeline',
-  'PLM.CannotSaveAI': 'The current project or plot service is unavailable; cannot save AI-generated results.',
+  'PLM.CannotSaveAI':
+      'The current project or plot service is unavailable; cannot save AI-generated results.',
   'PLM.AIGenerateSuccess': 'Plot generated successfully: {0}',
   'PLM.AIBadFormat': 'The generated plot data is malformed',
   'PLM.AIGenerateFailed': 'AI plot generation failed',
   'PLM.AIGenerateFailedEx': 'AI plot generation failed: {0}',
   'PLM.SelectToOptimize': 'Select a plot to optimize first',
-  'PLM.ServiceNotInitSaveOpt': 'Plot service is not initialized; cannot save optimization results.',
+  'PLM.ServiceNotInitSaveOpt':
+      'Plot service is not initialized; cannot save optimization results.',
   'PLM.OptimizeNotFound': 'The plot to optimize was not found.',
   'PLM.AIOptimizeSuccess': 'Plot optimized successfully: {0}',
   'PLM.AIOptimizeBadFormat': 'The optimized plot data is malformed',
@@ -6322,7 +6607,8 @@ const Map<String, String> enStrings = <String, String>{
   'PLM.EditNotFound': 'The plot to edit was not found.',
   'PLM.DeleteConfirm': 'Are you sure you want to delete plot “{0}”?',
   'PLM.DeleteConfirmTitle': 'Confirm Deletion',
-  'PLM.DeleteFailedOrMissing': 'Plot deletion failed or the plot no longer exists.',
+  'PLM.DeleteFailedOrMissing':
+      'Plot deletion failed or the plot no longer exists.',
   'PLM.AnalysisOverview': 'Plot Analysis Overview',
   'PLM.NoRecentUpdates': '• No recent plot updates',
   'PLM.StatTotalPlots': 'Total plots',
@@ -6440,7 +6726,8 @@ const Map<String, String> enStrings = <String, String>{
   'RN.ShowAll': 'Show All',
   'RN.LayoutModeTooltip': 'Switch layout mode',
   'RN.ZeroChars': '(0 characters)',
-  'RN.NoCharacters': 'No characters in this project yet. Create some in Character Management first.',
+  'RN.NoCharacters':
+      'No characters in this project yet. Create some in Character Management first.',
   'SV.CharFemaleLead': 'Female Lead',
   'SV.CharSupporting': 'Supporting Character',
   'SV.CharMentor': 'Mentor',
@@ -6537,7 +6824,8 @@ const Map<String, String> enStrings = <String, String>{
   'FM.NewFailedFmt': 'Failed to create the faction: {0}',
   'FM.ImportFailedFmt': 'Failed to import factions: {0}',
   'FM.ExportFailedFmt': 'Failed to export factions: {0}',
-  'FM.MainWindowNotFound': 'Main window not found; cannot open the relationship network.',
+  'FM.MainWindowNotFound':
+      'Main window not found; cannot open the relationship network.',
   'FM.OpenNetworkFailedFmt': 'Failed to open the relationship network: {0}',
   'FM.NetworkAnalysisTitle': 'Faction Network Analysis',
   'FM.ReportFactionFmt': 'Faction: {0}',
@@ -6566,11 +6854,15 @@ const Map<String, String> enStrings = <String, String>{
   'RN.EditTitle': 'Edit Relationship',
   'RN.NotFoundForEdit': 'The relationship to edit was not found.',
   'RN.EditFailedFmt': 'Failed to edit the relationship: {0}',
-  'RN.DeleteFailedOrMissing': 'Failed to delete the relationship, or it does not exist.',
+  'RN.DeleteFailedOrMissing':
+      'Failed to delete the relationship, or it does not exist.',
   'RN.SelectProjectFirst': 'Select a project to view the relationship network',
-  'RN.CharacterServiceUnavailable': 'The character service is unavailable; the real relationship network cannot be loaded',
-  'RN.LoadFailedRetry': 'Loading failed. Check the project data or try again later',
-  'RN.NoFilteredResults': 'No characters or relationships match the current filters',
+  'RN.CharacterServiceUnavailable':
+      'The character service is unavailable; the real relationship network cannot be loaded',
+  'RN.LoadFailedRetry':
+      'Loading failed. Check the project data or try again later',
+  'RN.NoFilteredResults':
+      'No characters or relationships match the current filters',
   'RN.LoadCharactersFailedFmt': 'Failed to load character data: {0}',
   'SV.StatusStable': 'Stable',
   'SV.StatusFriendly': 'Friendly',
@@ -6583,7 +6875,8 @@ const Map<String, String> enStrings = <String, String>{
   'VM.DefaultVolumeName': 'Volume 1',
   'VM.DefaultVolumeDesc': 'Default volume created automatically',
   'CE.PrereqGeneratedTitle': 'Prerequisite Data Generated',
-  'CE.PrereqGeneratedBody': 'To power the AI editing features, the system generated the required prerequisite data://n//n{0}//n//nIt helps the AI better understand your book\'s worldview and characters.',
+  'CE.PrereqGeneratedBody':
+      'To power the AI editing features, the system generated the required prerequisite data://n//n{0}//n//nIt helps the AI better understand your book\'s worldview and characters.',
   'CW.ChapterLocationFmt': 'Chapter {0} ({1})',
   'CW.UntitledChapter': 'Untitled chapter',
   'CE.Title': 'Chapter Editor',
@@ -6625,7 +6918,8 @@ const Map<String, String> enStrings = <String, String>{
   'CE.TagsHint': 'Tags',
   'CE.TagSuggestions': 'Tag Suggestions',
   'CE.MatchBtn': 'Match characters and tags from content',
-  'CE.MatchDesc': 'Match existing characters and historical tags in the current project from the chapter title, summary, and body',
+  'CE.MatchDesc':
+      'Match existing characters and historical tags in the current project from the chapter title, summary, and body',
   'CE.WritingStats': 'Writing Statistics',
   'CE.WordsLabel': 'Words:',
   'CE.ParagraphsLabel': 'Paragraphs:',
@@ -6673,16 +6967,20 @@ const Map<String, String> enStrings = <String, String>{
   'CE.PreviewFailed': 'Failed to open the preview: {0}',
   'CE.UnsavedConfirm': 'There are unsaved changes. Save them?',
   'CE.AIWriteFailed': 'AI writing failed: {0}',
-  'CE.NeedContentForContinue': 'Enter some content first; the AI will continue from the existing text',
+  'CE.NeedContentForContinue':
+      'Enter some content first; the AI will continue from the existing text',
   'CE.AIContinueFailed': 'AI continuation failed: {0}',
   'CE.NeedContentForPolish': 'Enter some content before polishing',
   'CE.AIPolishFailed': 'AI polishing failed: {0}',
-  'CE.NeedContentForCheck': 'Enter some content before running the consistency check',
-  'CE.AutoFixDone': 'The automatic consistency fixes have been written back to the chapter body.',
+  'CE.NeedContentForCheck':
+      'Enter some content before running the consistency check',
+  'CE.AutoFixDone':
+      'The automatic consistency fixes have been written back to the chapter body.',
   'CE.AutoFixTitle': 'Automatic Fix Completed',
   'CE.ConsistencyFailed': 'Consistency check failed: {0}',
   'CE.AICheckFailed': 'Failed to check the AI service status: {0}',
-  'CE.ProjectValidationNotInit': 'The project validation service is not initialized',
+  'CE.ProjectValidationNotInit':
+      'The project validation service is not initialized',
   'CE.AIEditFeature': 'AI Editing',
   'CE.CheckProjectFailed': 'Failed to check the project context: {0}',
   'CE.SaveFailed': 'Failed to save the chapter: {0}',
@@ -6699,7 +6997,8 @@ const Map<String, String> enStrings = <String, String>{
   'CPV.UpdateStatsFailed': 'Failed to update statistics: {0}',
   'CPV.FontSizeFailed': 'Failed to change the font size: {0}',
   'CPV.ExportTitle': 'Export Chapter',
-  'CPV.ExportFilter': 'Text Files (*.txt)|*.txt|Word Documents (*.docx)|*.docx|All Files (*.*)|*.*',
+  'CPV.ExportFilter':
+      'Text Files (*.txt)|*.txt|Word Documents (*.docx)|*.docx|All Files (*.*)|*.*',
   'CPV.ExportSuccess': 'The chapter has been exported to: {0}',
   'CPV.ExportDoneTitle': 'Export Successful',
   'CPV.ExportFailed': 'Failed to export the chapter: {0}',
@@ -6710,12 +7009,15 @@ const Map<String, String> enStrings = <String, String>{
   'PLM.EditTitleFmt': 'Edit Plot - {0}',
   'App.Name': 'NovelCraft',
   'App.TitleBar.Page': 'NovelCraft - {0}',
-  'App.Tagline': 'An intelligent book-writing platform powered by AI Agent collaboration',
+  'App.Tagline':
+      'An intelligent book-writing platform powered by AI Agent collaboration',
   'App.StartupFailed': 'Application startup failed: {0}',
   'App.GateCrashTitle': 'Launch Verification',
-  'App.GateCrash': 'The launch verification component failed and the application has stopped. See logs for details.',
+  'App.GateCrash':
+      'The launch verification component failed and the application has stopped. See logs for details.',
   'App.UnhandledErrorTitle': 'Application Error',
-  'App.UnhandledError': 'The application encountered an unhandled error. Details have been written to the log directory. Please retry or contact technical support.',
+  'App.UnhandledError':
+      'The application encountered an unhandled error. Details have been written to the log directory. Please retry or contact technical support.',
   'Common.CurrentPosition': 'Current: {0}',
   'Common.CurrentPosition.Source': 'Current: {0} · Source: {1}',
   'Common.NoProjectSelected': 'No project selected',
@@ -6783,8 +7085,10 @@ const Map<String, String> enStrings = <String, String>{
   'STAT.WordsFmt': '{0} words',
   'STAT.TitleFmt': 'Project Statistics - {0}',
   'STAT.Notes': 'Notes:',
-  'STAT.Note1': 'Statistics are aggregated by the unified project statistics service',
-  'STAT.Note2': 'More reports (writing trends, AI usage, structure quality) are planned',
+  'STAT.Note1':
+      'Statistics are aggregated by the unified project statistics service',
+  'STAT.Note2':
+      'More reports (writing trends, AI usage, structure quality) are planned',
   'Dash.ProjectOverview': 'Project Overview',
   'Dash.OpenProject': 'Open Project',
   'Dash.TitleBar': 'NovelCraft - Dashboard',
@@ -6813,39 +7117,54 @@ const Map<String, String> enStrings = <String, String>{
   'Side.Btn.Publish': 'Publishing Management',
   'Side.Btn.Timeline': 'Timeline',
   'Side.Btn.Population': 'Population System',
-  'TT.OneClick': 'RWKV dual-Agent auto-names a new book and generates the synopsis and first chapter',
-  'TT.BatchGenerate': 'RWKV official creative parameters + sliced writing: 3 volumes x 30 chapters x >=3000 words each. Runs in background with resumable progress',
-  'TT.GenerateProgress': 'View current progress and scores of the long-form batch generation',
+  'TT.OneClick':
+      'RWKV dual-Agent auto-names a new book and generates the synopsis and first chapter',
+  'TT.BatchGenerate':
+      'RWKV official creative parameters + sliced writing: 3 volumes x 30 chapters x >=3000 words each. Runs in background with resumable progress',
+  'TT.GenerateProgress':
+      'View current progress and scores of the long-form batch generation',
   'TT.Prerequisite': 'Generate prerequisite data for AI editing features',
   'MW.OpenFailed': 'Failed to open {0}: {1}',
   'MW.LoadViewFailed': 'Failed to load the {0} view: {1}',
-  'MW.LoadAIViewFailed': 'Failed to load the AI collaboration view: {0}\n\nDetails: {1}',
+  'MW.LoadAIViewFailed':
+      'Failed to load the AI collaboration view: {0}\n\nDetails: {1}',
   'MW.CreateProjectFailed': 'Failed to create project: {0}',
   'MW.ImportFailed': 'Failed to import project: {0}',
   'MW.ImportedFrom': 'Project imported from file {0}',
-  'MW.ImportFilter': 'Project files|*.npj;*.json|JSON files|*.json|All files|*.*',
+  'MW.ImportFilter':
+      'Project files|*.npj;*.json|JSON files|*.json|All files|*.*',
   'MW.OpenPageFailed': 'Failed to open project page: {0}',
   'MW.ErrorDetail': 'Details: {0}',
   'MW.OpsWindowNotInit': 'The operations management window is not initialized',
   'MW.OpenOpsFailed': 'Failed to open publishing & operations management: {0}',
-  'MW.StatisticsServiceNotInit': 'The project statistics service is not initialized',
-  'MW.ProjectNotFound': 'Current project not found. Please select a project again.',
-  'MW.ProjectGuardNotInit': 'The current-project guard service is not initialized',
+  'MW.StatisticsServiceNotInit':
+      'The project statistics service is not initialized',
+  'MW.ProjectNotFound':
+      'Current project not found. Please select a project again.',
+  'MW.ProjectGuardNotInit':
+      'The current-project guard service is not initialized',
   'MW.HelpTitle': 'Help',
-  'MW.HelpText': 'Quick reference:\n1. Use the left navigation to switch between projects, characters, worldbuilding, AI collaboration, and more.\n2. The gear icon at the top right opens the AI model configuration center.\n3. AI model configuration is saved to the current user\'s local config directory and does not overwrite the publish directory.\n4. After changing the model configuration, some options require an app restart to take full effect.\n\nIf a page fails to open, send me the full dialog content so I can keep fixing it.',
+  'MW.HelpText':
+      'Quick reference:\n1. Use the left navigation to switch between projects, characters, worldbuilding, AI collaboration, and more.\n2. The gear icon at the top right opens the AI model configuration center.\n3. AI model configuration is saved to the current user\'s local config directory and does not overwrite the publish directory.\n4. After changing the model configuration, some options require an app restart to take full effect.\n\nIf a page fails to open, send me the full dialog content so I can keep fixing it.',
   'MW.AIGenFileTitle': 'AI Content Generation',
-  'MW.ShowPrereqDialogFailed': 'Failed to show the prerequisite generation dialog: {0}',
-  'MW.OneClickServiceMissing': 'The one-click generation service is not registered',
+  'MW.ShowPrereqDialogFailed':
+      'Failed to show the prerequisite generation dialog: {0}',
+  'MW.OneClickServiceMissing':
+      'The one-click generation service is not registered',
   'MW.OneClickFailed': 'One-click generation failed: {0}',
   'MW.OneClickDone': 'One-click generation completed',
   'MW.Preparing': 'Preparing...',
-  'MW.BatchServiceMissing': 'The long-form batch generation service is not registered',
-  'MW.BatchAlreadyRunning': 'A batch generation task is already running; use the "Generation Progress" button to view it.',
+  'MW.BatchServiceMissing':
+      'The long-form batch generation service is not registered',
+  'MW.BatchAlreadyRunning':
+      'A batch generation task is already running; use the "Generation Progress" button to view it.',
   'MW.BatchModeUnlimited': 'Unlimited continuation mode',
-  'MW.BatchModeQuickSwitch': 'Quick volume switch (new volume after every 3 chapters)',
+  'MW.BatchModeQuickSwitch':
+      'Quick volume switch (new volume after every 3 chapters)',
   'MW.BatchModeStandard': 'Standard mode',
   'MW.BatchModeSuffix': ', {0} chapters per volume',
-  'MW.BatchConfirm': 'Starting long-form batch generation: {0} × ≥{1} characters per chapter.\nSampling uses RWKV official creative parameters + DRY anti-repetition sampling.\nChapter text uses the "slice-writing + stitching" pipeline (16K context limit).\n\nThe task runs in the background; other features remain usable meanwhile.\nIf an unfinished batch task exists, it will automatically resume from the breakpoint.\n\nStart now?',
+  'MW.BatchConfirm':
+      'Starting long-form batch generation: {0} × ≥{1} characters per chapter.\nSampling uses RWKV official creative parameters + DRY anti-repetition sampling.\nChapter text uses the "slice-writing + stitching" pipeline (16K context limit).\n\nThe task runs in the background; other features remain usable meanwhile.\nIf an unfinished batch task exists, it will automatically resume from the breakpoint.\n\nStart now?',
   'MW.Started': 'Started',
   'MW.BatchStartFailed': 'Failed to start batch generation: {0}',
   'MW.BatchProgressTitle': 'Long-Form Batch Generation Progress',
@@ -6884,7 +7203,8 @@ const Map<String, String> enStrings = <String, String>{
   'MW.DirData': 'Data directory',
   'MW.DirLogs': 'Logs directory',
   'MW.DirBackups': 'Backups directory',
-  'MW.HealthSummary': 'System status: {0}    Generated at: {1:yyyy-MM-dd HH:mm:ss}',
+  'MW.HealthSummary':
+      'System status: {0}    Generated at: {1:yyyy-MM-dd HH:mm:ss}',
   'MW.HealthFailedSummary': 'System status: health check failed',
   'MW.HealthFailedDetail': 'Health check failed:{0}{1}',
   'MW.BackupFailed': 'Database backup failed',
@@ -6894,13 +7214,15 @@ const Map<String, String> enStrings = <String, String>{
   'MW.BackupDoneTitle': 'Backup Completed',
   'MW.RestoreDialogTitle': 'Select a database backup to restore',
   'MW.FilterSQLite': 'SQLite database|*.db|All files|*.*',
-  'MW.RestoreConfirm': 'Restoring the database will overwrite the current database file. The system will first automatically create a pre-restore backup of the current database. After the restore completes, it is recommended to restart the app immediately.\n\nContinue?',
+  'MW.RestoreConfirm':
+      'Restoring the database will overwrite the current database file. The system will first automatically create a pre-restore backup of the current database. After the restore completes, it is recommended to restart the app immediately.\n\nContinue?',
   'MW.RestoreConfirmTitle': 'Confirm Restore',
   'MW.PreRestoreFailed': 'Pre-restore backup failed',
   'MW.RestoreFailedTitle': 'Restore Failed',
   'MW.RestoreFailed': 'Database restore failed',
   'MW.RestoreFailedWithReason': 'Database restore failed: {0}',
-  'MW.RestoreDone': 'Database restored successfully:{0}{1}{2}{2}Pre-restore backup:{3}{2}{2}Please restart the app to reload the database.',
+  'MW.RestoreDone':
+      'Database restored successfully:{0}{1}{2}{2}Pre-restore backup:{3}{2}{2}Please restart the app to reload the database.',
   'MW.RestoreDoneTitle': 'Restore Completed',
   'MW.FilterZip': 'ZIP files|*.zip',
   'MW.ExportFailed': 'Failed to export diagnostic bundle',
@@ -7021,7 +7343,8 @@ const Map<String, String> enStrings = <String, String>{
   'PGate.Cancel': 'Cancel',
   'PGate.WrongPassword': 'Incorrect password. Please try again',
   'IE.PageTitle': 'Import & Export Management',
-  'IE.PageSubtitle': 'Manage import and export of project data, with multiple formats and batch operations',
+  'IE.PageSubtitle':
+      'Manage import and export of project data, with multiple formats and batch operations',
   'IE.ExportTab': 'Export',
   'IE.ExportConfig': 'Export Settings',
   'IE.ExportFormat': 'Export Format',
@@ -7182,11 +7505,13 @@ const Map<String, String> enStrings = <String, String>{
   'HC.Val.ZhipuCfg': 'Zhipu AI configuration',
   'HC.Val.ZhipuName': 'Zhipu AI',
   'HC.Val.OpenAiCfg': 'OpenAI-compatible configuration',
-  'HC.Val.MsgDirMissing': 'Directory missing; will attempt to create at runtime: {0}',
+  'HC.Val.MsgDirMissing':
+      'Directory missing; will attempt to create at runtime: {0}',
   'HC.Val.MsgUserConfigFound': 'User override config found: {0}',
   'HC.Val.MsgUserConfigMissing': 'User override config not found: {0}',
   'HC.Val.MsgEnvProd': 'Current environment: {0}',
-  'HC.Val.MsgEnvNonProd': 'Current environment: {0}; use Production for production deployment',
+  'HC.Val.MsgEnvNonProd':
+      'Current environment: {0}; use Production for production deployment',
   'HC.Val.MsgRetentionOk': 'Backup retention days: {0}',
   'HC.Val.MsgRetentionInvalid': 'Backup retention days must be greater than 0',
   'HC.Val.MsgAiDisabled': 'AI features are currently disabled',
@@ -7232,7 +7557,8 @@ const Map<String, String> enStrings = <String, String>{
   'HC.TargetLabel': 'Target:',
   'HC.DetailLabel': 'Details & suggestions:',
   'HC.JumpTitle': 'Jump to Target',
-  'HC.JumpSuccess': 'Jumped to "{0}".\nTarget: {1} · {2} (name copied to clipboard for easy searching)',
+  'HC.JumpSuccess':
+      'Jumped to "{0}".\nTarget: {1} · {2} (name copied to clipboard for easy searching)',
   'HC.JumpFailed': 'Jump failed: {0}',
   'HC.TargetCharacter': 'Character Management',
   'HC.TargetRelationship': 'Relationship Network',
@@ -7243,19 +7569,24 @@ const Map<String, String> enStrings = <String, String>{
   'HC.TargetVolume': 'Volume & Chapter Management',
   'TS.WindowTitle': 'Theme & Skin Settings',
   'TS.Title': 'Theme & Skin Settings',
-  'TS.Subtitle': 'Three built-in skins, with custom skins and window frame colors; switches to the pink blossom style automatically when a female-oriented novel is detected',
+  'TS.Subtitle':
+      'Three built-in skins, with custom skins and window frame colors; switches to the pink blossom style automatically when a female-oriented novel is detected',
   'TS.SkinList': 'Skin List',
   'TS.SelectSkin': 'Select a skin',
   'TS.ColorPreview': 'Color Preview',
   'TS.ApplySkin': 'Apply Skin',
   'TS.AutoByTime': 'Auto-Switch by Time',
-  'TS.AutoTimeTooltip': 'Auto-switches to night from 19:00 to 07:00; light theme at other times',
+  'TS.AutoTimeTooltip':
+      'Auto-switches to night from 19:00 to 07:00; light theme at other times',
   'TS.AddCustom': 'Add Custom Skin',
   'TS.AddCustomTooltip': 'Create a custom skin based on the selected skin',
-  'TS.EditTooltip': 'Edit all colors of the custom skin (including window frame)',
-  'TS.Hint': 'Tip: built-in skins cannot be edited or deleted; duplicate one as a custom skin to modify it. When switching projects or during batch generation for female-oriented novels, the pink blossom style is applied temporarily and restored afterwards.',
+  'TS.EditTooltip':
+      'Edit all colors of the custom skin (including window frame)',
+  'TS.Hint':
+      'Tip: built-in skins cannot be edited or deleted; duplicate one as a custom skin to modify it. When switching projects or during batch generation for female-oriented novels, the pink blossom style is applied temporarily and restored afterwards.',
   'TS.SkinNameHint': 'Skin name *',
-  'TS.IsDark': 'Dark base (uses MaterialDesign Dark / HandyControl SkinDark resources)',
+  'TS.IsDark':
+      'Dark base (uses MaterialDesign Dark / HandyControl SkinDark resources)',
   'TS.SaveSkin': 'Save Skin',
   'TS.CurrentlyActive': 'In use',
   'TS.SkinLight': 'Daylight (Light)',
@@ -7292,14 +7623,17 @@ const Map<String, String> enStrings = <String, String>{
   'TS.FemaleModeActive': 'Female-oriented mode active',
   'TS.CurrentSkinFmt': 'Current skin: {0}',
   'TS.FemaleSkinName': 'Pink Blossom (female-oriented, auto)',
-  'TS.AutoTimeRestored': 'Auto-switch by time restored: night theme from 19:00 to 07:00, light theme at other times.',
+  'TS.AutoTimeRestored':
+      'Auto-switch by time restored: night theme from 19:00 to 07:00, light theme at other times.',
   'TS.CustomSuffix': '{0} (Custom)',
   'TS.DeleteCustomConfirm': 'Delete the custom theme "{0}"?',
   'TS.NameRequired': 'Please enter a skin name',
   'TS.ValidationFailed': 'Validation Failed',
-  'TS.InvalidColor': 'Invalid color value for "{0}": {1}\nUse the #RRGGBB or #AARRGGBB format.',
+  'TS.InvalidColor':
+      'Invalid color value for "{0}": {1}\nUse the #RRGGBB or #AARRGGBB format.',
   'CPW.Title': 'Change Launch Password',
-  'CPW.EffectNotice': 'The new password takes effect the next time the app starts',
+  'CPW.EffectNotice':
+      'The new password takes effect the next time the app starts',
   'CPW.CurrentPassword': 'Current password:',
   'CPW.NewPassword': 'New password:',
   'CPW.ConfirmNewPassword': 'Confirm new password:',
@@ -7309,15 +7643,18 @@ const Map<String, String> enStrings = <String, String>{
   'CPW.MinLength': 'The new password must be at least {0} characters',
   'CPW.PasswordMismatch': 'The two new passwords do not match',
   'CPW.WrongCurrentPassword': 'The current password is incorrect',
-  'CPW.ChangeSuccess': 'Launch password updated. It takes effect the next time the app starts.',
+  'CPW.ChangeSuccess':
+      'Launch password updated. It takes effect the next time the app starts.',
   'CPW.SuccessTitle': 'Changed Successfully',
   'CPW.SaveFailed': 'Failed to save the new password: {0}',
   'FO.WindowTitle': 'First-Run Wizard',
   'FO.OpenConfigDir': 'Open Configuration Folder',
   'FO.CreateTemplate': 'Create User Config Template',
   'FO.Finish': 'Finish and Enter',
-  'FO.Intro': 'This is the first-run guide. Before getting started, please confirm the following:',
-  'FO.StatusHint': 'Create or check the user configuration first, then click "Finish and Enter".',
+  'FO.Intro':
+      'This is the first-run guide. Before getting started, please confirm the following:',
+  'FO.StatusHint':
+      'Create or check the user configuration first, then click "Finish and Enter".',
   'FO.ConfigOpened': 'Configuration folder opened: {0}',
   'FO.ConfigOpenFailed': 'Failed to open the configuration folder: {0}',
   'FO.TemplateNotFound': 'Template file not found: {0}',
@@ -7327,12 +7664,14 @@ const Map<String, String> enStrings = <String, String>{
   'FO.SaveStateFailed': 'Failed to save the first-run state. Please try again.',
   'AHW.WindowTitle': 'AI Model Configuration',
   'AHW.ErrorTitle': 'AI Model Configuration Standalone Test Failed',
-  'AHW.ErrorDescription': 'An exception occurred while initializing the page in the standalone window. Please send back the full error details below to continue troubleshooting.',
+  'AHW.ErrorDescription':
+      'An exception occurred while initializing the page in the standalone window. Please send back the full error details below to continue troubleshooting.',
   'AHW.CopyError': 'Copy Error Details',
   'AHW.Copied': 'Error details copied to the clipboard.',
   'CRP.Title': 'Link Chapter',
   'CRP.Heading': 'Link Target Chapter',
-  'CRP.Description': 'Select the book, volume and chapter in turn. Once linked, the copilot\'s subsequent input applies directly to that chapter: enter a request to process it (polish/rewrite/expand/continue, etc.), or ask questions about the chapter; enter "Unlink" to remove the link.',
+  'CRP.Description':
+      'Select the book, volume and chapter in turn. Once linked, the copilot\'s subsequent input applies directly to that chapter: enter a request to process it (polish/rewrite/expand/continue, etc.), or ask questions about the chapter; enter "Unlink" to remove the link.',
   'CRP.Book': 'Book',
   'CRP.Volume': 'Volume',
   'CRP.Chapter': 'Chapter',
@@ -7389,23 +7728,30 @@ const Map<String, String> enStrings = <String, String>{
   'WS.SelectHint': 'Select a world setting to view details',
   'WS.AllTypes': 'All types',
   'WS.AllCategories': 'All categories',
-  'WS.SelectProjectFirst': 'Please select a project before creating world settings.',
+  'WS.SelectProjectFirst':
+      'Please select a project before creating world settings.',
   'WS.ServiceNotInit': 'World setting service is not initialized.',
-  'WS.MainWindowUnavailable': 'Cannot access the main window; unable to open the import/export page.',
+  'WS.MainWindowUnavailable':
+      'Cannot access the main window; unable to open the import/export page.',
   'WS.OpenImportFailed': 'Failed to open the settings import page: {0}',
   'WS.OpenExportFailed': 'Failed to open the settings export page: {0}',
   'WS.SelectForAnalysis': 'Select a world setting to analyze first',
   'WS.AIAnalyzing': 'AI Analyzing',
-  'WS.AnalyzingProgress': 'Analyzing consistency and completeness of the world setting...',
+  'WS.AnalyzingProgress':
+      'Analyzing consistency and completeness of the world setting...',
   'WS.AIAnalysisFailed': 'AI analysis failed: {0}',
   'WS.AnalysisError': 'An error occurred during analysis: {0}',
   'WS.DataRefreshed': 'Data refreshed',
-  'WS.SelectProjectForAI': 'Please select a project before using the AI assistant.',
-  'WS.AIChoiceWithSetting': 'Yes: optimize the current setting with AI and save\nNo: generate a new child setting from it and save\nCancel: open the original AI assistant',
-  'WS.AIChoiceNoSetting': 'Yes: generate a new setting with AI and save\nNo: open the original AI assistant',
+  'WS.SelectProjectForAI':
+      'Please select a project before using the AI assistant.',
+  'WS.AIChoiceWithSetting':
+      'Yes: optimize the current setting with AI and save\nNo: generate a new child setting from it and save\nCancel: open the original AI assistant',
+  'WS.AIChoiceNoSetting':
+      'Yes: generate a new setting with AI and save\nNo: open the original AI assistant',
   'WS.AIDialogTitle': 'AI World Settings',
   'WS.StartAIFailed': 'Failed to start the AI assistant: {0}',
-  'WS.AIInitFailed': 'Failed to initialize the AI analysis service, using default: {0}',
+  'WS.AIInitFailed':
+      'Failed to initialize the AI analysis service, using default: {0}',
   'WS.LoadFailed': 'Failed to load world settings: {0}',
   'WS.Importance': 'Importance',
   'WS.CreatedAt': 'Created',
@@ -7417,7 +7763,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.AIGenerateFailed': 'AI generation failed.',
   'WS.AIOptimizedSaved': 'Optimized and saved the setting with AI: {0}',
   'WS.AIGeneratedSaved': 'Generated and saved the setting with AI: {0}',
-  'WS.AIGeneratedChildSaved': 'Generated and saved the child setting with AI: {0}',
+  'WS.AIGeneratedChildSaved':
+      'Generated and saved the child setting with AI: {0}',
   'WS.NewSettingTitle': 'New World Setting',
   'WS.NewChildTitle': 'New Child Setting - {0}',
   'WS.FieldName': 'Setting Name',
@@ -7465,7 +7812,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Cult.ExportDoneTitle': 'Export Complete',
   'WS.Cult.ExportFailed': 'Export failed: {0}',
   'WS.Cult.AIServiceNotInit': 'AI assistant service is not initialized.',
-  'WS.Cult.SelectForAI': 'Select a cultivation system before running AI analysis.',
+  'WS.Cult.SelectForAI':
+      'Select a cultivation system before running AI analysis.',
   'WS.Cult.AIAnalysisFailed': 'AI analysis failed.',
   'WS.Cult.AIAnalysisError': 'AI analysis failed: {0}',
   'WS.Cult.AIAnalysisTitle': 'AI Analysis - {0}',
@@ -7487,7 +7835,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Cult.NoLevelDesc': 'No description',
   'WS.Cult.EditFeature': 'Edit Cultivation System',
   'WS.Cult.NotFoundForEdit': 'The cultivation system to edit was not found.',
-  'WS.Cult.DeleteConfirm': 'Are you sure you want to delete the cultivation system "{0}"?',
+  'WS.Cult.DeleteConfirm':
+      'Are you sure you want to delete the cultivation system "{0}"?',
   'WS.Cult.CopyResult': 'Copy Result',
   'WS.Cult.CopiedToClipboard': 'Result copied to clipboard.',
   'WS.Cult.NewTitle': 'New Cultivation System',
@@ -7529,7 +7878,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Prof.SkillCountLabel': '| Skills:',
   'WS.Prof.Stats': 'Profession System Statistics',
   'WS.Prof.NoSelection': 'Select a profession system to view details',
-  'WS.Prof.NoSelectionHint': 'Or click the + button above to create a new profession system',
+  'WS.Prof.NoSelectionHint':
+      'Or click the + button above to create a new profession system',
   'WS.Prof.NameHint': 'Profession System Name',
   'WS.Prof.DescHint': 'Profession System Description',
   'WS.Prof.LevelsTitle': 'Profession Levels',
@@ -7548,7 +7898,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Jud.CourtCountLabel': '| Courts:',
   'WS.Jud.Stats': 'Judicial System Statistics',
   'WS.Jud.NoSelection': 'Select a judicial system to view details',
-  'WS.Jud.NoSelectionHint': 'Or click the + button above to create a new judicial system',
+  'WS.Jud.NoSelectionHint':
+      'Or click the + button above to create a new judicial system',
   'WS.Jud.NameHint': 'Judicial System Name',
   'WS.Jud.JurisdictionHint': 'Jurisdiction',
   'WS.Common.DimensionId': 'Dimension ID',
@@ -7581,7 +7932,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Pop.Stats': 'Population System Statistics',
   'WS.Pop.OtherLabel': 'Other realms:',
   'WS.Pop.NoSelection': 'Select a population system to view details',
-  'WS.Pop.NoSelectionHint': 'Or click the + button above to create a new population system',
+  'WS.Pop.NoSelectionHint':
+      'Or click the + button above to create a new population system',
   'WS.Pop.NameHint': 'Population System Name',
   'WS.Pop.RegionNameHint': 'Region Name',
   'WS.Pop.TotalHint': 'Total Population',
@@ -7630,7 +7982,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Trea.SpiritLabel': '| Spirituality:',
   'WS.Trea.Stats': 'Treasure Statistics',
   'WS.Trea.NoSelection': 'Select a treasure to view details',
-  'WS.Trea.NoSelectionHint': 'Or click the + button above to create a new treasure',
+  'WS.Trea.NoSelectionHint':
+      'Or click the + button above to create a new treasure',
   'WS.Trea.NameHint': 'Treasure Name',
   'WS.Trea.SpiritLevelHint': 'Spirituality Level',
   'WS.Trea.Data.无灵性': 'No Spirituality',
@@ -7676,7 +8029,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Dim.Stats': 'Dimension Statistics',
   'WS.Dim.StableCountLabel': 'Stable dimensions:',
   'WS.Dim.NoSelection': 'Select a dimension to view details',
-  'WS.Dim.NoSelectionHint': 'Or click the + button above to create a new dimension',
+  'WS.Dim.NoSelectionHint':
+      'Or click the + button above to create a new dimension',
   'WS.Dim.NameHint': 'Dimension Name',
   'WS.Dim.AccessHint': 'Access Level',
   'WS.Dim.Data.公开': 'Public',
@@ -7836,7 +8190,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Equ.AttrCountLabel': '| Attributes:',
   'WS.Equ.Stats': 'Equipment System Statistics',
   'WS.Equ.NoSelection': 'Select an equipment type to view details',
-  'WS.Equ.NoSelectionHint': 'Or click the + button above to create a new equipment type',
+  'WS.Equ.NoSelectionHint':
+      'Or click the + button above to create a new equipment type',
   'WS.Equ.NameHint': 'Equipment Type Name',
   'WS.Equ.DescHint': 'Equipment Type Description',
   'WS.Equ.LevelsTitle': 'Equipment Levels',
@@ -7863,7 +8218,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Tec.MoveCountLabel': '| Moves:',
   'WS.Tec.Stats': 'Technique System Statistics',
   'WS.Tec.NoSelection': 'Select a technique to view details',
-  'WS.Tec.NoSelectionHint': 'Or click the + button above to create a new technique',
+  'WS.Tec.NoSelectionHint':
+      'Or click the + button above to create a new technique',
   'WS.Tec.NameHint': 'Technique Name',
   'WS.Tec.GradeHint': 'Technique Grade',
   'WS.Tec.Data.凡级': 'Mortal',
@@ -7901,7 +8257,8 @@ const Map<String, String> enStrings = <String, String>{
   'WS.Bus.ServiceCountLabel': '| Services:',
   'WS.Bus.Stats': 'Business System Statistics',
   'WS.Bus.NoSelection': 'Select a business model to view details',
-  'WS.Bus.NoSelectionHint': 'Or click the + button above to create a new business model',
+  'WS.Bus.NoSelectionHint':
+      'Or click the + button above to create a new business model',
   'WS.Bus.NameHint': 'Business Model Name',
   'WS.Bus.LocationHint': 'Business Location',
   'WS.Common.AllTypes': 'All Types',
@@ -8162,17 +8519,20 @@ const Map<String, String> enStrings = <String, String>{
       'No default AI provider found. Please go to AI Configuration to register one and set it as default.',
   'AC.StreamFailed': 'Streaming request failed: {0}',
   'AC.Preset.Init.Title': 'Project Initialization',
-  'AC.Preset.Init.Subtitle': 'Analyze Theme → Generate Outline → Create World Settings',
+  'AC.Preset.Init.Subtitle':
+      'Analyze Theme → Generate Outline → Create World Settings',
   'AC.Preset.Init.Param.ProjectName': 'Project Name',
   'AC.Preset.Init.Param.ThemeDesc': 'Theme Description',
   'AC.Preset.Init.Param.TargetAudience': 'Target Audience',
   'AC.Preset.Chapter.Title': 'Chapter Creation',
-  'AC.Preset.Chapter.Subtitle': 'Generate Draft → Chapter Summary → Reader Feedback',
+  'AC.Preset.Chapter.Subtitle':
+      'Generate Draft → Chapter Summary → Reader Feedback',
   'AC.Preset.Chapter.Param.Volume': 'Volume',
   'AC.Preset.Chapter.Param.Title': 'Chapter Title',
   'AC.Preset.Chapter.Param.Summary': 'Chapter Summary',
   'AC.Preset.Review.Title': 'Content Review',
-  'AC.Preset.Review.Subtitle': 'Overall quality review based on the editor agent',
+  'AC.Preset.Review.Subtitle':
+      'Overall quality review based on the editor agent',
   'AC.Preset.Review.Param.Content': 'Content to Review',
   'AC.Preset.Consistency.Title': 'Consistency Check',
   'AC.Preset.Consistency.Subtitle':
@@ -8242,8 +8602,7 @@ const Map<String, String> enStrings = <String, String>{
       'Failed to answer: the model returned nothing. Check the model service in AI Configuration and retry.',
 
   // --- DG (Dialog Generation) ---
-  'DG.NoProjectHint':
-      'No project selected. Save-to-chapter is unavailable.',
+  'DG.NoProjectHint': 'No project selected. Save-to-chapter is unavailable.',
   'DG.ParamSection': 'Parameter Settings',
   'DG.CharactersLabel': 'Characters (comma-separated)',
   'DG.CharactersHint': 'e.g. Alice, Bob',
@@ -8305,10 +8664,8 @@ const Map<String, String> enStrings = <String, String>{
   'DG.GeneratedAt': 'Generated at',
   'DG.ThinkId': 'Chain ID',
   'DG.GeneratingHint': 'Generating...',
-  'DG.ResultHint':
-      'Generated dialogue will appear here. Editable.',
-  'DG.StreamingTip':
-      'Streaming finished; content auto-filled into result box.',
+  'DG.ResultHint': 'Generated dialogue will appear here. Editable.',
+  'DG.StreamingTip': 'Streaming finished; content auto-filled into result box.',
   'DG.NoDefaultModel':
       'No default AI model configured. Please register and set default in AI Configuration.',
   'DG.GenerateFailed': 'Generation failed: {0}',
@@ -8354,8 +8711,7 @@ const Map<String, String> enStrings = <String, String>{
   'HC.AiCheckSkipped': 'AI consistency check skipped: {error}',
   'HC.NoPageForCategory': 'Cannot find page for category "{cat}"',
   'HC.NavigatedTo': 'Navigated to "{page}": {target}',
-  'HC.SelectProjectInMgrHint':
-      'Please select a project in Projects first',
+  'HC.SelectProjectInMgrHint': 'Please select a project in Projects first',
   'HC.Unknown': 'Unknown',
   'HC.CategoryTargetSep': ' · {type}: {name}',
 
@@ -8386,27 +8742,46 @@ const Map<String, String> enStrings = <String, String>{
   'AIC.LlamaServerInstalled': '✅ llama-server.exe installed',
   'AIC.BuiltIn.Title': 'Built-in engine · rwkv_lightning_cuda',
   'AIC.BuiltIn.Badge': 'Recommended · no build',
-  'AIC.BuiltIn.Desc': 'Official prebuilt CUDA bundle; SHA-256 verified and auto-extracted. Only .pth / .rwkvq weights, and the external vocab file is mandatory (the engine does not embed a vocab).',
+  'AIC.BuiltIn.Desc':
+      'Official prebuilt CUDA bundle; SHA-256 verified and auto-extracted. Only .pth / .rwkvq weights, and the external vocab file is mandatory (the engine does not embed a vocab).',
   'AIC.BuiltIn.Variant': 'CUDA variant',
   'AIC.BuiltIn.InstallBtn': '⚡ Install engine + vocab',
   'AIC.BuiltIn.DownloadModelBtn': '📥 Download .pth weights',
   'AIC.BuiltIn.LaunchBtn': '🚀 Launch built-in engine',
-  'AIC.BuiltIn.NoGpuProbe': 'No GPU VRAM detected — only weight sizes are shown; please verify it can be loaded',
+  'AIC.BuiltIn.NoGpuProbe':
+      'No GPU VRAM detected — only weight sizes are shown; please verify it can be loaded',
   'AIC.BuiltIn.Recommended': 'Recommended',
   'AIC.BuiltIn.PickModel': 'Pick official .pth weights',
-  'AIC.BuiltIn.NoModel': 'No .pth weights found. Retry later or download manually into rwkv_models/.',
+  'AIC.BuiltIn.NoModel':
+      'No .pth weights found. Retry later or download manually into rwkv_models/.',
   'AIC.BuiltIn.StatefulRoute': 'Session state continuation (send delta only)',
-  'AIC.BuiltIn.StatefulRouteHint': 'Uses /state/chat/completions so the server keeps state per session_id. Verified working; turn it off for engines without /state/*.',
+  'AIC.BuiltIn.StatefulRouteHint':
+      'Uses /state/chat/completions so the server keeps state per session_id. Verified working; turn it off for engines without /state/*.',
   'AIC.BuiltIn.ThinkType': 'Think prefix',
-  'AIC.BuiltIn.ThinkHint': 'Controls the assistant think prefix. Sampling params (top_k/top_p/alpha_*) and stop_tokens are passed through with official defaults.',
+  'AIC.BuiltIn.ThinkHint':
+      'Controls the assistant think prefix. Sampling params (top_k/top_p/alpha_*) and stop_tokens are passed through with official defaults.',
   'AIC.Cloud.CfTitle': 'Cloudflare Access credentials (Service Token)',
-  'AIC.Cloud.CfHint': 'Header names are matched byte-exactly: CF-Access-Client-Id / CF-Access-Client-Secret. A typo does not return 401; it silently returns an HTML login page.',
+  'AIC.Cloud.CfHint':
+      'Header names are matched byte-exactly: CF-Access-Client-Id / CF-Access-Client-Secret. A typo does not return 401; it silently returns an HTML login page.',
+  'AIC.Cloud.EndpointProfile': 'Cloud endpoint profile',
+  'AIC.Cloud.AddProfile': 'Add cloud profile',
+  'AIC.Cloud.ProfileName': 'Profile name',
+  'AIC.Cloud.RemoveProfile': 'Remove this profile',
+  'AIC.Cloud.ApiKeyOptional': 'API Key (optional)',
+  'AIC.Cloud.ModelsFromEndpoint': 'Fetch models from this API URL',
+  'AIC.Cloud.FetchModelsHint': 'Fetch models to choose one',
+  'AIC.Cloud.SelectModel': 'Select a model',
+  'AIC.Cloud.FetchModels': 'Fetch models from API URL',
+  'AIC.Cloud.ModelsUnavailable':
+      'Could not load models from this API URL. Check the address and Cloudflare Access credentials.',
   'AIC.Cloud.FetchStatus': '🩺 Fetch engine status (verify real connectivity)',
-  'AIC.Cloud.StatusUnavailable': 'Engine status unavailable: endpoint not responding or not rwkv_lightning_cuda.',
+  'AIC.Cloud.StatusUnavailable':
+      'Engine status unavailable: endpoint not responding or not rwkv_lightning_cuda.',
   'AIH.Kind.Bsz': 'Concurrency overflow (should split the batch and retry)',
   'AIH.Kind.Auth': 'Cloudflare auth failed (check the Service Token)',
   'AIH.Kind.Server': 'Server 5xx (should back off and retry)',
-  'AIH.Kind.Runtime': 'HTTP 200 but body reports an error (SSE runtime failure)',
+  'AIH.Kind.Runtime':
+      'HTTP 200 but body reports an error (SSE runtime failure)',
   'AIH.Kind.Trunc': 'Response truncated (should retry the subset)',
   'AIH.Kind.Stateful': 'Stateful continuation failed',
   'AIH.Kind.Unknown': 'Unexpected error',
@@ -8422,22 +8797,30 @@ const Map<String, String> enStrings = <String, String>{
       'No active team groups yet (start "Multi-Agent Book Studio" to see groups here)',
   'Set.Diagnostics': 'Diagnostics',
   'Set.AgentBatch': 'Agent batching',
-  'Set.AgentBatchDesc': 'Choose which agents take part in batching and which group each belongs to (give long prompts their own group)',
+  'Set.AgentBatchDesc':
+      'Choose which agents take part in batching and which group each belongs to (give long prompts their own group)',
   'ABatch.Title': 'Agent batching',
   'ABatch.Intro': 'Batching & grouping',
-  'ABatch.IntroBody': 'Only agents in the same group are merged into one batch request. A batch runs in lockstep — mixing a long prompt with short ones drags the whole batch to the long one\'s first-token latency, so give long tasks their own group.',
+  'ABatch.IntroBody':
+      'Only agents in the same group are merged into one batch request. A batch runs in lockstep — mixing a long prompt with short ones drags the whole batch to the long one\'s first-token latency, so give long tasks their own group.',
   'ABatch.Groups': 'Current groups',
   'ABatch.NoGroups': '(no agent enabled)',
   'ABatch.DefaultGroup': 'default',
-  'ABatch.NoCapable': '⚠ No agent implements buildPromptForBatch, so batching will not take effect. This is intentional: the batch route is stateless and prompts must be self-contained, otherwise quality degrades silently.',
-  'ABatch.Misconfigured': '⚠ These agents have batching enabled but do not implement a batch prompt, so it will not take effect',
-  'ABatch.AllDefaultGroup': 'Note: every enabled agent is in the "default" group, which is the same as no grouping. If one of them has a much longer prompt, give it its own group.',
+  'ABatch.NoCapable':
+      '⚠ No agent implements buildPromptForBatch, so batching will not take effect. This is intentional: the batch route is stateless and prompts must be self-contained, otherwise quality degrades silently.',
+  'ABatch.Misconfigured':
+      '⚠ These agents have batching enabled but do not implement a batch prompt, so it will not take effect',
+  'ABatch.AllDefaultGroup':
+      'Note: every enabled agent is in the "default" group, which is the same as no grouping. If one of them has a much longer prompt, give it its own group.',
   'ABatch.Capable': 'Implements a batch prompt; can be batched',
-  'ABatch.NotCapable': 'Does not implement buildPromptForBatch — batching will not take effect (falls back to single requests)',
+  'ABatch.NotCapable':
+      'Does not implement buildPromptForBatch — batching will not take effect (falls back to single requests)',
   'ABatch.Group': 'Group',
-  'ABatch.GroupHint': 'Empty = default group; long prompts deserve their own group',
+  'ABatch.GroupHint':
+      'Empty = default group; long prompts deserve their own group',
   'Set.AiHealth': 'AI Health Check',
-  'Set.AiHealthDesc': 'Concurrency/queueing, QPS and p95 tail, failure classes, state hit rate',
+  'Set.AiHealthDesc':
+      'Concurrency/queueing, QPS and p95 tail, failure classes, state hit rate',
   'AIH.Title': 'AI Health Check',
   'AIH.Refresh': 'Refresh server status',
   'AIH.ServerUnavailable':
@@ -8454,8 +8837,7 @@ const Map<String, String> enStrings = <String, String>{
   'AIC.Phase.Cancelled': 'Cancelled',
   // ---- RWKV install/download status lines ----
   'AIC.StatusCancelled': 'Cancelled',
-  'AIC.BuiltIn.EngineReadyFmt':
-      'Engine ready: {0}\nVocabulary ready: {1}',
+  'AIC.BuiltIn.EngineReadyFmt': 'Engine ready: {0}\nVocabulary ready: {1}',
   'AIC.ModelDownloadedPathFmt': 'Model downloaded: {0}',
   'AIC.EtaRemainingFmt': '{0}s remaining',
   // ---- Manual stop of the local server ----
@@ -8471,35 +8853,43 @@ const Map<String, String> enStrings = <String, String>{
   'AIH.Server.Engine': 'Engine',
   'AIH.Server.Unknown': 'Unknown (not fetched)',
   'AIH.Server.AvailableBsz': 'Server available slots (available_bsz)',
-  'AIH.Server.AvailableBszHint': 'Computed by the engine from current free VRAM; may differ per call on multi-node and must not be cached as a constant',
+  'AIH.Server.AvailableBszHint':
+      'Computed by the engine from current free VRAM; may differ per call on multi-node and must not be cached as a constant',
   'AIH.Server.Queued': 'Server queued requests',
-  'AIH.Server.QueuedWarn': '> 0 means queuing already started — lower concurrency instead of pushing harder',
+  'AIH.Server.QueuedWarn':
+      '> 0 means queuing already started — lower concurrency instead of pushing harder',
   'AIH.Server.ClientCap': 'Client throttle limit (Semaphore)',
   'AIH.Server.ClientCapServerSide': '(server currently available=',
-  'AIH.Server.ClientCapHint': 'Our conservative cap, not an engine capability. Real queueing is decided by the server FIFO queue',
+  'AIH.Server.ClientCapHint':
+      'Our conservative cap, not an engine capability. Real queueing is decided by the server FIFO queue',
   'AIH.Server.Vram': 'VRAM',
   'AIH.Server.Speed': 'Engine live speed',
   'AIH.Server.Caps': 'Engine capabilities',
-  'AIH.Throughput.SeriesHint': 'Requests per second over the last 60s (1s sampling)',
+  'AIH.Throughput.SeriesHint':
+      'Requests per second over the last 60s (1s sampling)',
   'AIH.Throughput.Qps': 'Rolling QPS',
   'AIH.Throughput.Items': 'Item throughput',
   'AIH.Throughput.Success': 'Success / failure',
   'AIH.Throughput.Latency': 'Latency p50 / p95 / p99 / max',
   'AIH.Throughput.Tail': 'Tail ratio p95/p50 = ',
-  'AIH.Throughput.TailWarn': '  → severe tail; batch workflows get dragged by the slowest call',
+  'AIH.Throughput.TailWarn':
+      '  → severe tail; batch workflows get dragged by the slowest call',
   'AIH.Batch.Logical': 'Logical calls / actual POSTs',
   'AIH.Batch.ItemsPerPost': 'Items per POST',
   'AIH.Batch.Saving': 'Batching active: saved ',
   'AIH.Batch.SavingUnit': ' HTTP round trips',
-  'AIH.Batch.NoSaving': '≈1 means no batching (one request each). If you expect batching, check whether the task sets useBatch: true',
+  'AIH.Batch.NoSaving':
+      '≈1 means no batching (one request each). If you expect batching, check whether the task sets useBatch: true',
   'AIH.Batch.TotalItems': 'Total items',
   'AIH.Batch.Failures': 'Failure classes (determines the fix)',
   'AIH.State.Client': 'Client (in-process state cache)',
   'AIH.State.ClientHit': 'Hits / misses',
-  'AIH.State.ClientHitWarn': 'Low hit rate → history is re-encoded every turn; check whether sessions get closed or evicted by TTL',
+  'AIH.State.ClientHitWarn':
+      'Low hit rate → history is re-encoded every turn; check whether sessions get closed or evicted by TTL',
   'AIH.State.ClientBytes': 'Size',
   'AIH.State.Server': 'Server (engine three-tier cache)',
-  'AIH.State.ServerNote': 'Server L1 VRAM / L2 RAM / SQLite belong to another process, and on multi-node deployments /state/status may hit a different node (showing all zeros), so the two hit rates must not be merged into one number.',
+  'AIH.State.ServerNote':
+      'Server L1 VRAM / L2 RAM / SQLite belong to another process, and on multi-node deployments /state/status may hit a different node (showing all zeros), so the two hit rates must not be merged into one number.',
   'AIC.DownloadOfficialModelBtn': '📥 Download Official RWKV Model',
   'AIC.LatestModelDownloadedBtn': '✅ Latest model downloaded',
   'AIC.OfficialModelDownloaded': '✅ Official model downloaded',
@@ -8620,15 +9010,19 @@ const Map<String, String> enStrings = <String, String>{
   'MAG.Craft.Solo': 'Single pass',
   'MAG.Craft.Duo': 'Serial lead writer (recommended)',
   'MAG.Craft.Team': 'Lead + 9 writers (legacy)',
-  'MAG.Craft.SoloHint': 'One call writes the whole chapter: fastest and cheapest, best for short chapters (measured natural convergence ~2000-2800 chars).',
-  'MAG.Craft.DuoHint': 'Lead writer continues in ~2200-char segments with only the previous tail (300 chars): most stable in tests — recommended.',
-  'MAG.Craft.TeamHint': '1 lead + 9 writers in parallel + lead assembly: 12+ calls per chapter, ~8x cost — only for special needs.',
+  'MAG.Craft.SoloHint':
+      'One call writes the whole chapter: fastest and cheapest, best for short chapters (measured natural convergence ~2000-2800 chars).',
+  'MAG.Craft.DuoHint':
+      'Lead writer continues in ~2200-char segments with only the previous tail (300 chars): most stable in tests — recommended.',
+  'MAG.Craft.TeamHint':
+      '1 lead + 9 writers in parallel + lead assembly: 12+ calls per chapter, ~8x cost — only for special needs.',
   'AICfg.HintAgentProviderHelper':
       'Only configured & registered platforms are listed; for a new platform fill its API key and click Save / Test first',
   'AICfg.HintAgentModelHint': 'Leave empty to use the platform default model',
   'AICfg.AgentModelList': 'Model list',
   'AICfg.AgentModelListTitle': 'Available models ({0})',
-  'AICfg.AgentModelEmpty': 'Could not fetch the model list (the platform may be unconfigured or lack /models). You can type a model id above.',
+  'AICfg.AgentModelEmpty':
+      'Could not fetch the model list (the platform may be unconfigured or lack /models). You can type a model id above.',
 
   // --- PH (Placeholder) ---
   'PH.PageTitle': '{0} Page',
@@ -8676,9 +9070,11 @@ const Map<String, String> enStrings = <String, String>{
   // --- Common / Dlg (cross-page) ---
   'Common.Close': 'Close',
   'Common.Cancel': 'Cancel',
+  'Common.Add': 'Add',
   // --- GLM added: AI collaboration chat (not in source CSV; generator-style) ---
   'AC.ClearChat': 'Clear chat',
-  'AC.ClearChatConfirm': 'Clear the current chat history and start over (persisted history will be deleted; this cannot be undone).',
+  'AC.ClearChatConfirm':
+      'Clear the current chat history and start over (persisted history will be deleted; this cannot be undone).',
   'Common.Save': 'Save',
   'Common.Create': 'Create',
   'Common.Delete': 'Delete',
@@ -8839,7 +9235,7 @@ const Map<String, String> enStrings = <String, String>{
   // ---- Multi-agent book generation (MAG.*) ----
   'MAG.Title': 'Multi-Agent Book Studio',
   'MAG.FormIntro':
-      'Fill in the details before starting. The MainAgent first drafts the main outline, then dispatches sub-agents to plan volume and chapter outlines in parallel. Each chapter is written by a team (with a team lead) that splits sections, sets boundaries, and finally merges, polishes, and formats the chapter.',
+      'Set up your book. With the G1K relay craft, 7.2B plans and edits while 2.9B writes prose. Other models use the selected craft.',
   'MAG.BookTitle': 'Book title',
   'MAG.Author': 'Author name',
   'MAG.TargetVolumes': 'Target volumes',
@@ -8856,7 +9252,9 @@ const Map<String, String> enStrings = <String, String>{
   'MAG.ConcurrencyPlus': 'Plus 1',
   'MAG.Background': 'Minimize, keep running in background',
   'MAG.Mode.Normal': 'Normal mode (<=100 teams)',
+  'MAG.Mode.NormalShort': 'Normal',
   'MAG.Mode.Turbo': 'Turbo mode (all chapters at once)',
+  'MAG.Mode.TurboShort': 'Fast',
   'MAG.ReservedTeams': 'Target reserved teams',
   'MAG.ReservedHelper': 'Normal-mode cap (<=100); 0 = unlimited',
   'MAG.ComputedTitle': 'Concurrency auto-calculation',
@@ -8887,4 +9285,3 @@ const Map<String, String> enStrings = <String, String>{
   'PO.ContinuePreview': 'Preview',
   'PO.ContinueDoneFmt': 'Continued: "{0}" · "{1}" ({2} chars)',
 };
-

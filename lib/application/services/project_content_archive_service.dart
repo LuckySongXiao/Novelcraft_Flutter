@@ -239,6 +239,55 @@ class ProjectContentArchiveService {
     }
   }
 
+  /// Reconcile archive metadata with the live project after a rename, import,
+  /// or deletion. Returns the number of records changed or removed.
+  Future<int> reconcileProject(
+    String projectId, {
+    required String projectName,
+    Set<String>? validVolumeIds,
+    Set<String>? validChapterIds,
+  }) async {
+    final String pid = projectId.trim();
+    if (pid.isEmpty) return 0;
+    try {
+      final KeyValueStore kv = await _store();
+      final List<ProjectArchiveEntry> old = await _read(kv, pid);
+      int changed = 0;
+      final List<ProjectArchiveEntry> next = <ProjectArchiveEntry>[];
+      for (final ProjectArchiveEntry entry in old) {
+        if (entry.projectId != pid) {
+          changed++;
+          continue;
+        }
+        final String volumeId = entry.metadata['volumeId'] ?? '';
+        final String chapterId = entry.metadata['chapterId'] ?? '';
+        if ((volumeId.isNotEmpty &&
+                validVolumeIds != null &&
+                !validVolumeIds.contains(volumeId)) ||
+            (chapterId.isNotEmpty &&
+                validChapterIds != null &&
+                !validChapterIds.contains(chapterId))) {
+          changed++;
+          continue;
+        }
+        if (entry.projectName != projectName) changed++;
+        next.add(ProjectArchiveEntry(
+          projectId: entry.projectId,
+          projectName: projectName,
+          taskType: entry.taskType,
+          title: entry.title,
+          content: entry.content,
+          createdAtMs: entry.createdAtMs,
+          metadata: entry.metadata,
+        ));
+      }
+      if (changed > 0) await _writeAll(kv, pid, next);
+      return changed;
+    } on Object {
+      return 0;
+    }
+  }
+
   /// 整体回写某项目的归档列表（超上限裁掉最旧的）。
   Future<void> _writeAll(
     KeyValueStore kv,

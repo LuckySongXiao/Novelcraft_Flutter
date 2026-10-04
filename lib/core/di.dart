@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import '../application/services/writing_prompt_templates.dart';
+import '../application/services/writing_prompt_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 
@@ -60,12 +62,17 @@ import '../application/services/multi_agent_book_generation_service.dart';
 import '../application/services/writing_archive_service.dart';
 import '../application/services/continue_story_service.dart';
 import '../application/services/chapter_revision_service.dart';
-import '../application/services/chapter_ai_state_service.dart';
+import '../application/services/module_state_service.dart';
 import '../application/services/chapter_export_service.dart';
 import '../application/services/chapter_post_process_service.dart';
 import '../application/services/model_config_store.dart';
+import '../application/services/agent_endpoint_registry.dart';
 import '../application/services/provider_auto_restore.dart';
 import '../application/services/team_update_dispatch_service.dart';
+import '../application/services/project_archive_audit_service.dart';
+import '../application/services/agent_module_router.dart';
+import '../application/services/book_content_review_service.dart';
+import '../application/services/book_review_settings.dart';
 
 import '../l10n/l10n.dart';
 import '../core/l10n_text_source.dart';
@@ -75,12 +82,14 @@ import '../ai/utils/localized_text.dart';
 import '../ai/workflow/dual_agent_workflow.dart';
 import '../ai/models/provider.dart';
 import '../ai/providers/model_manager.dart';
+import '../ai/providers/bound_model_provider.dart';
 import '../ai/providers/deepseek_provider.dart';
 import '../ai/providers/zhipu_provider.dart';
 import '../ai/providers/openrouter_provider.dart';
 import '../ai/providers/ollama_provider.dart';
 import '../ai/providers/rwkv_provider.dart';
 import '../ai/providers/rwkv_cloud_provider.dart';
+import '../ai/rwkv/g1k_model_preset.dart';
 import '../ai/rwkv/rwkv_session_archive.dart';
 import '../ai/observability/ai_runtime_stats.dart';
 import '../ai/workflow/agent_batch_settings.dart';
@@ -224,11 +233,26 @@ final appBootstrapProvider = FutureProvider<bool>((ref) async {
   try {
     await ref.read(providerAutoRestoreProvider).restore();
   } catch (_) {}
+  await ref.read(g1kBookPresetProvider.notifier).load();
+  await ref.read(bookReviewSettingsProvider.notifier).load();
+  final profileJson = await kv.readJson('ai_config', 'rwkv.cloud_profiles');
+  if (profileJson != null) {
+    try {
+      final list = jsonDecode(profileJson) as List;
+      await ref.read(agentEndpointRegistryProvider).replace([
+        for (final item in list.whereType<Map<String, dynamic>>())
+          RwkvCloudEndpointProfile.fromJson(item),
+      ]);
+    } on Object catch (e) {
+      ref.read(aiLoggerProvider).warning('Agent 端点配置恢复失败：${e.runtimeType}');
+    }
+  }
   final seeder = ref.watch(databaseSeederProvider);
   await seeder.ensureSeeded();
   // 预热提示词模板：否则首个双 Agent 调用时 `_lazyTemplates` 读到的是 null，
   // 会静默回落代码内置提示词（资产已打包却用不上）。
   await ref.watch(promptTemplatesProvider.future);
+  await ref.watch(writingPromptTemplatesProvider.future);
   return true;
 });
 
@@ -381,8 +405,9 @@ final projectStatisticsServiceProvider = Provider<ProjectStatisticsService>(
     cultivationSystemRepository: ref.watch(cultivationSystemRepositoryProvider),
     politicalSystemRepository: ref.watch(politicalSystemRepositoryProvider),
     currencySystemRepository: ref.watch(currencySystemRepositoryProvider),
-    relationshipNetworkRepository:
-        ref.watch(relationshipNetworkRepositoryProvider),
+    relationshipNetworkRepository: ref.watch(
+      relationshipNetworkRepositoryProvider,
+    ),
     timelineEventRepository: ref.watch(timelineEventRepositoryProvider),
   ),
 );
@@ -741,9 +766,57 @@ final promptTemplatesProvider = FutureProvider<PromptTemplateRegistry>(
 );
 
 /// 惰性取模板注册表（未就绪 = 空注册表，不阻塞业务流程）。
-PromptTemplateRegistry _lazyTemplates(Ref ref) =>
-    ref.read(promptTemplatesProvider).value ??
-    const PromptTemplateRegistry.empty();
+PromptTemplateRegistry _lazyTemplates(Ref ref) {
+  final base = ref.read(promptTemplatesProvider).value ??
+      const PromptTemplateRegistry.empty();
+  return ref.read(writingPromptTemplatesProvider).value?.overlay(base) ?? base;
+}
+
+final writingPromptTemplatesProvider = AsyncNotifierProvider<WritingPromptTemplatesNotifier, WritingPromptTemplates>(WritingPromptTemplatesNotifier.new);
+
+class WritingPromptTemplatesNotifier extends AsyncNotifier<WritingPromptTemplates> {
+  bool _saving = false;
+
+  @override
+  Future<WritingPromptTemplates> build() async {
+    final base = await ref.watch(promptTemplatesProvider.future);
+    final stages = <WritingPromptStage>[...bookPromptStages];
+    const titles = {
+      'Prerequisite/Cultivation.System': '修炼体系生成 · 角色',
+      'Prerequisite/Cultivation.User': '修炼体系生成 · 任务',
+      'Workflow/MainAgent.System': '双代理 · 主编写作',
+      'Workflow/SubAgentRequirement.System': '双代理 · 需求整理',
+      'Workflow/SubAgentRefine.System': '双代理 · 草稿精修',
+    };
+    for (final id in kPromptTemplateIds) {
+      if (!id.startsWith('Workflow/') && !id.startsWith('Prerequisite/')) continue;
+      for (final lang in kPromptTemplateLangs) {
+        final body = base.getForLang(id, lang);
+        if (body == null) continue;
+        stages.add(WritingPromptStage(
+          id: 'Asset/$id/$lang', title: '${titles[id] ?? id} · ${lang == 'zh' ? '中文' : 'English'}',
+          defaultBody: body, asset: true,
+          variables: {
+            for (final match in RegExp(r'\{([A-Za-z]\w*)\}').allMatches(body)) match[1]!: '运行时填入，保留原变量名',
+          },
+        ));
+      }
+    }
+    return WritingPromptTemplates.load(await ref.watch(keyValueStoreProvider.future), stages);
+  }
+
+  Future<void> saveStage(String id, List<WritingPromptVariant> items, String active) async {
+    if (_saving) throw StateError('正在保存模板，请稍后重试');
+    _saving = true;
+    try {
+      final next = state.requireValue.withStage(id, items, active);
+      await next.save(await ref.read(keyValueStoreProvider.future));
+      state = AsyncData(next);
+    } finally {
+      _saving = false;
+    }
+  }
+}
 
 /// 项目级 AI 上下文组装（对应 C# `ProjectContextAssembler`）。
 final projectContextAssemblerProvider = Provider<ProjectContextAssembler>(
@@ -806,6 +879,66 @@ final dualAgentSettingsProvider =
       DualAgentSettingsNotifier.new,
     );
 
+/// 多智能体写书专用双模型预设，与普通双代理的三阶段写作设置隔离。
+class G1kBookPresetNotifier extends Notifier<G1kBookPreset> {
+  static const String _scope = 'ai_config';
+  static const String _key = 'book.g1k_preset';
+
+  @override
+  G1kBookPreset build() => const G1kBookPreset();
+
+  Future<void> load() async {
+    try {
+      final kv = await ref.read(keyValueStoreProvider.future);
+      final raw = await kv.readJson(_scope, _key);
+      if (raw == null || raw.isEmpty) return;
+      final parsed = jsonDecode(raw);
+      if (parsed is Map<String, dynamic>) {
+        state = G1kBookPreset.fromJson(parsed);
+      }
+    } on Object catch (e) {
+      ref.read(aiLoggerProvider).warning('读取 G1K 写书预设失败：$e');
+    }
+  }
+
+  Future<void> update(G1kBookPreset next) async {
+    final kv = await ref.read(keyValueStoreProvider.future);
+    if (next.enabled) {
+      await kv.writeJson(_scope, _key, jsonEncode(next.toJson()));
+    } else {
+      await kv.remove(_scope, _key);
+    }
+    state = next;
+  }
+}
+
+final g1kBookPresetProvider =
+    NotifierProvider<G1kBookPresetNotifier, G1kBookPreset>(
+        G1kBookPresetNotifier.new);
+
+class BookReviewSettingsNotifier extends Notifier<BookReviewSettings> {
+  @override
+  BookReviewSettings build() => const BookReviewSettings();
+
+  Future<void> load() async {
+    state = await BookReviewSettingsStore(
+      () => ref.read(keyValueStoreProvider.future),
+    ).load();
+  }
+
+  Future<void> update(BookReviewSettings next) async {
+    await BookReviewSettingsStore(
+      () => ref.read(keyValueStoreProvider.future),
+    ).save(next);
+    state = next;
+  }
+}
+
+final bookReviewSettingsProvider =
+    NotifierProvider<BookReviewSettingsNotifier, BookReviewSettings>(
+  BookReviewSettingsNotifier.new,
+);
+
 /// 双 Agent 的提供者表：先取 ModelManager 注册表，再用**全部内置单例**兜底。
 ///
 /// 兜底的必要性：`ModelManager` 只在用户进过「AI 配置」并保存/测试后才注册 provider，
@@ -816,6 +949,12 @@ final dualAgentSettingsProvider =
 /// ⚠ 仍然**不会误接管**：`resolveExactProvider` 依旧要求 `isAvailable`，
 /// 未 `initialize()` 过的单例返回 null，保持「指名精确匹配、不做首个可用者
 /// 兜底」的既有语义；用户在该供应商页保存/测试后即可正常被指名。
+final agentEndpointRegistryProvider = Provider<AgentEndpointRegistry>((ref) {
+  final registry = AgentEndpointRegistry();
+  ref.onDispose(registry.dispose);
+  return registry;
+});
+
 Map<String, IModelProvider> _dualAgentProviders(Ref ref) {
   final Map<String, IModelProvider> map = <String, IModelProvider>{};
   for (final IModelProvider p
@@ -829,12 +968,16 @@ Map<String, IModelProvider> _dualAgentProviders(Ref ref) {
     () => ref.read(openRouterProviderInstanceProvider),
   );
   map.putIfAbsent('Ollama', () => ref.read(ollamaProviderInstanceProvider));
-  map.putIfAbsent('Custom', () => ref.read(customOAICompatibleProviderInstanceProvider));
+  map.putIfAbsent(
+    'Custom',
+    () => ref.read(customOAICompatibleProviderInstanceProvider),
+  );
   map.putIfAbsent('RWKV', () => ref.read(rwkvProviderInstanceProvider));
   map.putIfAbsent(
     'RWKV Cloud',
     () => ref.read(rwkvCloudProviderInstanceProvider),
   );
+  map.addAll(ref.read(agentEndpointRegistryProvider).providers);
   return map;
 }
 
@@ -854,6 +997,16 @@ IModelProvider? resolveExactProvider(Ref ref, String name) {
   }
   return null;
 }
+
+IModelProvider? resolveAgentProvider(Ref ref, {bool main = false}) {
+  final s = ref.read(dualAgentSettingsProvider);
+  final p = resolveExactProvider(ref, main ? s.mainAgentProvider : s.subAgentProvider);
+  return p == null ? null : BoundModelProvider(p, main ? s.mainAgentModel : s.subAgentModel);
+}
+
+final agentProviderResolverProvider = Provider<IModelProvider? Function(String)>((ref) {
+  return (name) => resolveExactProvider(ref, name);
+});
 
 /// MainAgent / SubAgent 双 Agent 写作流单例。
 final dualAgentWorkflowProvider = Provider<DualAgentWorkflowService>((ref) {
@@ -930,10 +1083,7 @@ final oneClickNovelGenerationServiceProvider =
         rwkv: () => ref.read(rwkvProviderInstanceProvider),
         // 写作 provider = 双代理配置里的 SubAgent provider（本地或云端都行）。
         // 这样"只用云端、不开本地 server"也能一键成书。
-        writingProvider: () => resolveExactProvider(
-          ref,
-          ref.read(dualAgentSettingsProvider).subAgentProvider,
-        ),
+        writingProvider: () => resolveAgentProvider(ref),
         texts: ref.watch(aiTextSourceProvider),
         // 功能 C：首章落库后联动同步世界观（可关闭；失败如实汇报）
         postProcess: ref.watch(chapterPostProcessServiceProvider),
@@ -945,10 +1095,11 @@ final oneClickNovelGenerationServiceProvider =
 /// 多智能体协同写书（向导式：书名/作者/分卷数/每卷章数/子智能体数；
 /// 主线→分卷→章节三级大纲 + 每章「组长 + 写手」团队协作）。
 /// 验收后更新分派（组长罗列待更新项 → 9 写手按固定模板产出 → 防幻觉应用）。
-final teamUpdateDispatchServiceProvider =
-    Provider<TeamUpdateDispatchService>((ref) {
-      return TeamUpdateDispatchService(db: ref.watch(databaseProvider));
-    });
+final teamUpdateDispatchServiceProvider = Provider<TeamUpdateDispatchService>((
+  ref,
+) {
+  return TeamUpdateDispatchService(db: ref.watch(databaseProvider));
+});
 
 /// 写作档案（项目/分卷/章节三档 + 四段描述格式）。
 final writingArchiveServiceProvider = Provider<WritingArchiveService>((ref) {
@@ -957,29 +1108,118 @@ final writingArchiveServiceProvider = Provider<WritingArchiveService>((ref) {
   );
 });
 
+final projectArchiveAuditServiceProvider = Provider<ProjectArchiveAuditService>((ref) {
+  return ProjectArchiveAuditService(
+    projects: ref.watch(projectRepositoryProvider),
+    volumes: ref.watch(volumeRepositoryProvider),
+    chapters: ref.watch(chapterRepositoryProvider),
+    archive: ref.watch(projectContentArchiveProvider),
+  );
+});
+
+/// Every database module uses the same structured Agent contract. The model
+/// binding is role-local and never mutates a provider's global default model.
+final agentModuleRouterProvider = Provider<AgentModuleRouter>((ref) {
+  return AgentModuleRouter(
+    provider: (String name, String model) {
+      final IModelProvider? base = resolveExactProvider(ref, name);
+      if (base == null || model.trim().isEmpty) return base;
+      return BoundModelProvider(base, model.trim());
+    },
+  );
+});
+
+final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref) {
+  final BookReviewSettings settings = ref.watch(bookReviewSettingsProvider);
+  IModelProvider? reviewProvider() {
+    final G1kBookPreset preset = ref.read(g1kBookPresetProvider);
+    final IModelProvider? base = preset.enabled
+        ? resolveExactProvider(ref, 'RWKV Cloud')
+        : resolveAgentProvider(ref, main: true);
+    if (base == null || !preset.enabled) return base;
+    return BoundModelProvider(base, preset.mainModel);
+  }
+
+  IModelProvider? writingProvider() {
+    final G1kBookPreset preset = ref.read(g1kBookPresetProvider);
+    if (!preset.enabled) return resolveAgentProvider(ref, main: false);
+    final IModelProvider? base = resolveExactProvider(
+      ref,
+      AgentEndpointRegistry.key(preset.writerEndpointId),
+    ) ?? resolveAgentProvider(ref, main: false);
+    return base == null ? null : BoundModelProvider(base, preset.writerModel);
+  }
+  IModelProvider? seniorProvider() {
+    final IModelProvider? base = resolveExactProvider(ref, settings.seniorProvider);
+    if (base == null || settings.seniorModel.trim().isEmpty) return base;
+    return BoundModelProvider(base, settings.seniorModel);
+  }
+  return BookContentReviewService(
+    promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
+    chapters: ref.watch(chapterRepositoryProvider),
+    store: () => ref.read(keyValueStoreProvider.future),
+    reviewer: reviewProvider,
+    seniorReviewer: seniorProvider,
+    writer: writingProvider,
+    guestReaders: () => settings.guestReaders,
+    guestProvider: (GuestReaderProfile profile) {
+      final IModelProvider? base = resolveExactProvider(ref, profile.provider);
+      if (base == null || profile.model.trim().isEmpty) return base;
+      return BoundModelProvider(base, profile.model);
+    },
+    outline: (String projectId, ChapterRow chapter) async {
+      final ProjectContextData context = await ref
+          .read(projectContextAssemblerProvider)
+          .build(projectId);
+      return context.promptSummary.isEmpty ? chapter.summary ?? '' : context.promptSummary;
+    },
+  );
+});
+
 final multiAgentBookGenerationServiceProvider =
     Provider<MultiAgentBookGenerationService>((ref) {
+      final G1kBookPreset g1k = ref.watch(g1kBookPresetProvider);
+      final agentSettings = ref.watch(dualAgentSettingsProvider);
       return MultiAgentBookGenerationService(
+        promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
         projects: ref.watch(projectRepositoryProvider),
         plots: ref.watch(plotRepositoryProvider),
         volumes: ref.watch(volumeRepositoryProvider),
         chapters: ref.watch(chapterRepositoryProvider),
-        // 写作 provider 与一键生成同源：双代理配置的 SubAgent provider。
+        // G1K 专属写书预设只作用于本服务，其余入口维持原双代理设置。
         writingProvider: () => resolveExactProvider(
           ref,
-          ref.read(dualAgentSettingsProvider).subAgentProvider,
+          g1k.enabled
+              ? AgentEndpointRegistry.key(g1k.writerEndpointId)
+              : agentSettings.subAgentProvider,
+        ) ?? (g1k.enabled
+            ? resolveExactProvider(ref, 'RWKV Cloud')
+            : null),
+        planningProvider: () => resolveExactProvider(
+          ref,
+          g1k.enabled
+              ? 'RWKV Cloud'
+              : agentSettings.mainAgentProvider,
         ),
+        mainModel: g1k.enabled
+            ? g1k.mainModel
+            : agentSettings.mainAgentModel,
+        subModel: g1k.enabled
+            ? g1k.writerModel
+            : agentSettings.subAgentModel,
         postProcess: ref.watch(chapterPostProcessServiceProvider),
         // 团队 state 分组与健康页快照共享同一实例 → 运行期可见。
         stateManager: ref.watch(agentStateManagerProvider),
         // 验收后更新分派（人物/世界观各子项）。
-        updateDispatch: ({
-          required String projectId,
-          required List<Map<String, Object?>> items,
-          required Future<String> Function(int writerSlot, String prompt)
+        updateDispatch:
+            ({
+              required String projectId,
+              required List<Map<String, Object?>> items,
+              required Future<String> Function(int writerSlot, String prompt)
               writerChat,
-        }) =>
-            ref.read(teamUpdateDispatchServiceProvider).dispatchUpdates(
+            }) => ref
+                .read(teamUpdateDispatchServiceProvider)
+                .dispatchUpdates(
                   projectId: projectId,
                   items: items,
                   writerChat: writerChat,
@@ -987,25 +1227,27 @@ final multiAgentBookGenerationServiceProvider =
         // 章节结构化导出（Markdown + JSON 落盘，便于离线分析写作问题）。
         exportService: ref.watch(chapterExportServiceProvider),
         // 写作档案：项目建档 / 分卷建档 / 验收通过章节建档（四段描述）。
-        archiveHook: ({
-          required String level,
-          required String? projectId,
-          required String title,
-          required String content,
-          required Map<String, String> metadata,
-        }) async {
-          final WritingArchiveService svc =
-              ref.read(writingArchiveServiceProvider);
-          await svc.write(
-            level: level,
-            projectId: projectId,
-            title: title,
-            content: content,
-            desc: ArchiveDescription.fromMetadata(metadata),
-            volumeId: metadata['volumeId'],
-            chapterId: metadata['chapterId'],
-          );
-        },
+        archiveHook:
+            ({
+              required String level,
+              required String? projectId,
+              required String title,
+              required String content,
+              required Map<String, String> metadata,
+            }) async {
+              final WritingArchiveService svc = ref.read(
+                writingArchiveServiceProvider,
+              );
+              await svc.write(
+                level: level,
+                projectId: projectId,
+                title: title,
+                content: content,
+                desc: ArchiveDescription.fromMetadata(metadata),
+                volumeId: metadata['volumeId'],
+                chapterId: metadata['chapterId'],
+              );
+            },
       );
     });
 
@@ -1017,10 +1259,7 @@ final continueStoryServiceProvider = Provider<ContinueStoryService>((ref) {
     volumes: ref.watch(volumeRepositoryProvider),
     chapters: ref.watch(chapterRepositoryProvider),
     dualAgent: ref.watch(dualAgentWorkflowProvider),
-    writingProvider: () => resolveExactProvider(
-      ref,
-      ref.read(dualAgentSettingsProvider).subAgentProvider,
-    ),
+    writingProvider: () => resolveAgentProvider(ref),
     postProcess: ref.watch(chapterPostProcessServiceProvider),
     // 写作档案：续写章节落库即生成章节档案
     writingArchive: ref.watch(writingArchiveServiceProvider),
@@ -1039,14 +1278,10 @@ final chapterPostProcessServiceProvider = Provider<ChapterPostProcessService>((
     texts: ref.watch(aiTextSourceProvider),
   );
   // 功能 C 二级：AI 状态抽取（默认关，开关见上方卡片）
-  final ChapterAiStateService aiState = ChapterAiStateService(
+  final ModuleStateService aiState = ModuleStateService(
+    promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
     db: ref.watch(databaseProvider),
-    texts: ref.watch(aiTextSourceProvider),
-    writingProvider: () => resolveExactProvider(
-      ref,
-      ref.read(dualAgentSettingsProvider).subAgentProvider,
-    ),
-    rwkv: () => ref.read(rwkvProviderInstanceProvider),
+    provider: () => resolveAgentProvider(ref, main: true),
   );
   post.aiStage = aiState.extractAndApply;
   return post;
@@ -1067,10 +1302,7 @@ final chapterRevisionServiceProvider = Provider<ChapterRevisionService>((ref) {
     postProcess: ref.watch(chapterPostProcessServiceProvider),
     // 分段改写的单段通道 = 双代理的写作 provider（本地或云端都行）；
     // 没配则回落到本地 RWKV 的 raw prompt。
-    sliceProvider: () => resolveExactProvider(
-      ref,
-      ref.read(dualAgentSettingsProvider).subAgentProvider,
-    ),
+    sliceProvider: () => resolveAgentProvider(ref),
     rwkv: () => ref.read(rwkvProviderInstanceProvider),
     hasWriter: () {
       final AgentRoleWorkflowSettings s = ref.read(dualAgentSettingsProvider);

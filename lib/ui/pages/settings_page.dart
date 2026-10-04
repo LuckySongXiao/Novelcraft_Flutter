@@ -5,6 +5,7 @@ import '../../l10n/l10n.dart';
 import '../../theme/app_theme.dart';
 import 'ai_health_page.dart';
 import 'agent_batch_config_page.dart';
+import 'writing_prompt_settings_page.dart';
 
 /// 设置页 —— 对应 C# 的「选项 / 设置」对话框
 ///
@@ -33,6 +34,15 @@ class SettingsPage extends ConsumerWidget {
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: 20),
+        Card(child: ListTile(
+          leading: const Icon(Icons.edit_note),
+          title: const Text('写作工艺 Prompt 模板'),
+          subtitle: const Text('编辑各节点提示词、保存多套模板并选择生效模板'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const WritingPromptSettingsPage(),
+          )),
+        )),
 
         // ---- 皮肤 ----
         _SectionCard(

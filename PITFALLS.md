@@ -1931,3 +1931,36 @@ final state = RwkvState(
 - **根因**：`writeTree()` 直接把相对键传给 `path.join`。
 - **修复**：写盘前拒绝绝对路径、盘符和 `..` 段，仅允许安全相对路径。
 - **验收**：新增路径穿越测试，确认非法键抛出 `ArgumentError` 且外部文件未生成。
+
+---
+
+## 41. Android Release 打包环境与测试插件（2026-10-04）
+
+- **沙箱权限**：Gradle 的 `:jni:configureCMakeRelWithDebInfo` 会在默认 Pub 缓存 `jni-1.0.3/android/.cxx` 写中间文件，SDK 也可能写 `.knownPackages`；本环境沙箱报 `拒绝访问`。使用英文 `subst S:` 只能解决路径编码，不能解决这两处写入权限。可在普通、允许写入 SDK/Pub 缓存的环境构建；本次在工作区外 `F:\30_Novelcraft_Flutter\android-build-toolchain` 复制 SDK 36/35、NDK 28.2、CMake 3.22.1、build-tools 和 Pub 缓存，构建进程显式设置 `PUB_CACHE`、`ANDROID_HOME`、`ANDROID_SDK_ROOT`，并用临时 `android/local.properties` 指向可写 SDK。不要将临时工具链加入仓库或打包进 APK。
+- **Release 注册表引用测试插件**：`integration_test` 位于 `dev_dependencies`，但 Flutter 3.38.5 生成的 `GeneratedPluginRegistrant.java` 仍引用 `IntegrationTestPlugin`；Gradle Release 未编译测试插件时，`:app:compileReleaseJavaWithJavac` 报包不存在。本次仅在打包期间临时排除该开发依赖，`flutter pub get --offline` 重生成插件注册表后成功构建；随后恢复 `pubspec.yaml` 中的 `integration_test` 并重新 `flutter pub get`，测试能力未永久移除。后续发布时要复核当前 Flutter 工具链的插件过滤行为，不要直接修改自动生成的 Java 注册表。
+- **验包路径**：旧版 Windows `aapt` 对 APK 的中文绝对路径报 `Illegal byte sequence`，通过 `S:\build\app\outputs\flutter-apk\app-release.apk` 查询版本即可；`apksigner verify --verbose` 同样要独立确认签名。旧 APK 可能留在 `build/`，以新包时间戳及 `versionCode` 为准。
+- **构建命令退出码与产物不一致**：在当前沙箱中即使 Gradle 输出 `Built ... app-release.apk`，命令也可能因尾随 `D:\Android\Sdk\.knownPackages` 权限拒绝返回非零；不能仅看 `Built` 或仅看退出码。须同时核对本次 APK 时间戳、`aapt` 版本码和 `apksigner verify`，并在交接中如实注明沙箱报错。
+
+---
+
+## 42. G1K T≤1.0 晨间报告修订（2026-10-04）
+
+- 旧双模型工艺按早期报告固定 `T=1.2`；新补丁对循环炸弹用 T1.0/T0.88 + P0.7 + pp2 连续 4/4 无复读，因此写书预设温度钳到 0.88-1.0。不要把 `T=1.2` 补遗误认为最新定稿，也不要把此阈值强加给用户其他 provider。
+- 7B `max_tokens=3500` 长单发尽管字数达标，报告 6/6 在后半段出现复读环；`max_tokens≈1200` 的分段样本更干净。2.9B 有 56% 短停风险，不能仅凭 `finish=stop`、字数/耗时判成功；必须明确「至少写满 N 字」并做短稿、同句三次、章末质量闸。**token 限制并非字数保证**，按模型返回实际字数验收。
+- 本次保留既定 7B 规划/润色、2.9B 正文的用户分工；报告另外推荐 7B 正文、2.9B 幕卡，属于尚未实施的工艺变更，不能在交接中混写为已落地。报告的 N=8 优势来自凌晨窗口，不能不顾白天拥堵直接设为全天默认并发。
+
+## 43. RWKV Cloud 多端点 profile
+
+- 官方 1.5B / 3B / 7B / 13B 模板不预置 API Key、模型 ID 或 CF Access 凭据。模型列表必须从当前端点的 `/v1/models` 动态读取；RWKV Cloud 请求失败时返回空列表，不可回退到假模型。
+- 每个 endpoint profile 独立保存 API Key、默认模型、CF Access 凭据及请求参数。新增或切换端点时，先保存当前 profile，再应用新 profile；不要把全局单例误当成多 provider，每次请求前都应使用当前活动配置初始化。
+- 旧版本 `rwkv.cloud_configuration` / `provider_cfg.rwkvCloud` 是单配置格式。仅在尚无 `rwkv.cloud_profiles` 时迁移它，迁移必须保留原 URL、API Key、模型、CF 凭据和请求参数；不要让官方空模板覆盖旧值。
+- 模型列表有多个候选时让用户选择，不要猜默认模型。单候选可辅助填入，但若用户需要跨重启保留，仍应经配置保存流程持久化。
+- 聊天中曾暴露的 CF Service Token 不可复制进源码、测试 fixture、默认值或发布包；建议轮换后由用户重新填写。
+
+## 44. 1.0.0+33 双端重新封装与源码备份（2026-10-04）
+
+- Windows 便携 ZIP 必须包含完整 `Release/` 目录，不要只分发 `novelcraft.exe`。本轮通过英文 junction 构建；ZIP 共 40 项，且已核对 exe、Flutter DLL 和 `data/` 资源齐全。
+- Windows 插件目录生成在当前环境可能无法创建 `jni` 链接。若 Flutter 生成 `.plugin_symlinks` 失败，先确认目标插件目录存在，再按本机权限修复生成目录链接后构建；链接缓存不要同步进源码备份。
+- Android Release 构建期间临时移除 `integration_test` 后，生成的 `GeneratedPluginRegistrant.java` 也会暂时缺少其注册。构建完成恢复依赖后，必须把原始注册表一并恢复并确认文件包含 `IntegrationTestPlugin`，再备份源码；不要提交/同步临时生成状态。
+- 便携源码备份使用无删除增量复制，不使用 `/MIR`。排除 `.git`、构建与工具缓存、模型、日志、环境文件、`local.properties`、`key.properties`、JKS/keystore 等；保留目标独有文件。同步后检查复制失败数、待复制数及签名材料未被覆盖。
+- 产物文件存在并不等于验收完成：对 Windows ZIP、APK 分别核对哈希；APK 另核对包名/版本码和正式签名。无设备时应注明未做安装实测。

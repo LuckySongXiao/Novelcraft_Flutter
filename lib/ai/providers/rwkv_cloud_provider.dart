@@ -39,8 +39,130 @@ const String kHeaderCfAccessClientSecret = 'CF-Access-Client-Secret';
 /// `/openai/v1/chat/completions` 实测 404（PITFALLS §31.5）。
 const String kRwkvCloudDefaultBaseUrl = 'https://api-7b.rwkvos.com/v1';
 
-/// 云端默认模型 ID（与 `/v1/models` 实测返回值一致）。
-const String kRwkvCloudDefaultModel = 'rwkv7-g1j-7.2b-20260831-ctx16384';
+/// 模型由当前端点的 `/v1/models` 自动发现，不预填模型 ID。
+const String kRwkvCloudDefaultModel = '';
+
+/// 官方云端端点模板。凭据和模型选择均由用户配置，不在源码中预置。
+const List<RwkvCloudEndpointProfile> kRwkvOfficialEndpointProfiles =
+    <RwkvCloudEndpointProfile>[
+      RwkvCloudEndpointProfile(
+        id: 'official-1b5',
+        name: 'RWKV 官方 1.5B',
+        baseUrl: 'https://api-1b5.rwkvos.com/v1',
+      ),
+      RwkvCloudEndpointProfile(
+        id: 'official-3b',
+        name: 'RWKV 官方 3B',
+        baseUrl: 'https://api-3b.rwkvos.com/v1',
+      ),
+      RwkvCloudEndpointProfile(
+        id: 'official-7b',
+        name: 'RWKV 官方 7B',
+        baseUrl: 'https://api-7b.rwkvos.com/v1',
+      ),
+      RwkvCloudEndpointProfile(
+        id: 'official-13b',
+        name: 'RWKV 官方 13B',
+        baseUrl: 'https://api-13b.rwkvos.com/v1',
+      ),
+    ];
+
+/// 按 endpoint 分开的云端配置，切换地址不会覆盖各自的 Key/模型选择。
+class RwkvCloudEndpointProfile {
+  const RwkvCloudEndpointProfile({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    this.apiKey = '',
+    this.defaultModel = '',
+    this.cfAccessClientId = '',
+    this.cfAccessClientSecret = '',
+    this.timeoutSeconds = 180,
+    this.defaultMaxTokens = 4000,
+    this.defaultTemperature = 1.0,
+    this.enableStreaming = true,
+  });
+
+  final String id;
+  final String name;
+  final String baseUrl;
+  final String apiKey;
+  final String defaultModel;
+  final String cfAccessClientId;
+  final String cfAccessClientSecret;
+  final int timeoutSeconds;
+  final int defaultMaxTokens;
+  final double defaultTemperature;
+  final bool enableStreaming;
+
+  RwkvCloudEndpointProfile copyWith({
+    String? id,
+    String? name,
+    String? baseUrl,
+    String? apiKey,
+    String? defaultModel,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
+    int? timeoutSeconds,
+    int? defaultMaxTokens,
+    double? defaultTemperature,
+    bool? enableStreaming,
+  }) => RwkvCloudEndpointProfile(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    baseUrl: baseUrl ?? this.baseUrl,
+    apiKey: apiKey ?? this.apiKey,
+    defaultModel: defaultModel ?? this.defaultModel,
+    cfAccessClientId: cfAccessClientId ?? this.cfAccessClientId,
+    cfAccessClientSecret: cfAccessClientSecret ?? this.cfAccessClientSecret,
+    timeoutSeconds: timeoutSeconds ?? this.timeoutSeconds,
+    defaultMaxTokens: defaultMaxTokens ?? this.defaultMaxTokens,
+    defaultTemperature: defaultTemperature ?? this.defaultTemperature,
+    enableStreaming: enableStreaming ?? this.enableStreaming,
+  );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'id': id,
+    'name': name,
+    'baseUrl': baseUrl,
+    'apiKey': apiKey,
+    'defaultModel': defaultModel,
+    'cfAccessClientId': cfAccessClientId,
+    'cfAccessClientSecret': cfAccessClientSecret,
+    'timeoutSeconds': timeoutSeconds,
+    'defaultMaxTokens': defaultMaxTokens,
+    'defaultTemperature': defaultTemperature,
+    'enableStreaming': enableStreaming,
+  };
+
+  factory RwkvCloudEndpointProfile.fromJson(Map<String, Object?> json) =>
+      RwkvCloudEndpointProfile(
+        id: (json['id'] as String?) ?? '',
+        name: (json['name'] as String?) ?? '',
+        baseUrl: (json['baseUrl'] as String?) ?? '',
+        apiKey: (json['apiKey'] as String?) ?? '',
+        defaultModel: (json['defaultModel'] as String?) ?? '',
+        cfAccessClientId: (json['cfAccessClientId'] as String?) ?? '',
+        cfAccessClientSecret: (json['cfAccessClientSecret'] as String?) ?? '',
+        timeoutSeconds: (json['timeoutSeconds'] as num?)?.toInt() ?? 180,
+        defaultMaxTokens: (json['defaultMaxTokens'] as num?)?.toInt() ?? 4000,
+        defaultTemperature:
+            (json['defaultTemperature'] as num?)?.toDouble() ?? 1.0,
+        enableStreaming: (json['enableStreaming'] as bool?) ?? true,
+      );
+
+  RwkvCloudConfiguration toConfiguration() => RwkvCloudConfiguration(
+    baseUrl: baseUrl,
+    apiKey: apiKey,
+    defaultModel: defaultModel,
+    cfAccessClientId: cfAccessClientId,
+    cfAccessClientSecret: cfAccessClientSecret,
+    timeoutSeconds: timeoutSeconds,
+    defaultMaxTokens: defaultMaxTokens,
+    defaultTemperature: defaultTemperature,
+    enableStreaming: enableStreaming,
+  );
+}
 
 /// Cloudflare Access 认证失败（拿到的是 HTML 而不是 JSON）。
 class RwkvCloudAuthException implements Exception {
@@ -75,23 +197,27 @@ class RwkvCloudConfiguration extends OpenAICompatibleConfiguration {
     super.enableStreaming = true,
     Map<String, String>? extraHeaders,
   }) : super(
-          providerName: 'RWKV Cloud',
-          providerKind: 'RwkvCloud',
-          customHeaders: _mergeHeaders(
-            cfAccessClientId,
-            cfAccessClientSecret,
-            extraHeaders,
-          ),
-        );
+         providerName: 'RWKV Cloud',
+         providerKind: 'RwkvCloud',
+         customHeaders: _mergeHeaders(
+           cfAccessClientId,
+           cfAccessClientSecret,
+           extraHeaders,
+         ),
+       );
+
+  @override
+  List<String> getValidationErrors() =>
+      baseUrl.trim().isEmpty ? <String>['API 基础地址不能为空'] : <String>[];
 
   /// 组出应当随每个请求发出的头（CF 两个 + 用户自定义）。
   ///
   /// **每次 initialize 都要重新调用**：用户可能在界面上改了 Token。
   Map<String, String> effectiveHeaders() => _mergeHeaders(
-        cfAccessClientId,
-        cfAccessClientSecret,
-        customHeaders.isEmpty ? null : customHeaders,
-      );
+    cfAccessClientId,
+    cfAccessClientSecret,
+    customHeaders.isEmpty ? null : customHeaders,
+  );
 
   static Map<String, String> _mergeHeaders(
     String id,
@@ -100,7 +226,9 @@ class RwkvCloudConfiguration extends OpenAICompatibleConfiguration {
   ) {
     final Map<String, String> h = <String, String>{};
     if (id.trim().isNotEmpty) h[kHeaderCfAccessClientId] = id.trim();
-    if (secret.trim().isNotEmpty) h[kHeaderCfAccessClientSecret] = secret.trim();
+    if (secret.trim().isNotEmpty) {
+      h[kHeaderCfAccessClientSecret] = secret.trim();
+    }
     if (extra != null) {
       for (final MapEntry<String, String> e in extra.entries) {
         h[e.key] = e.value;
@@ -111,34 +239,35 @@ class RwkvCloudConfiguration extends OpenAICompatibleConfiguration {
 
   /// 是否已填写了完整的 CF 凭证。
   bool get hasCfCredentials =>
-      cfAccessClientId.trim().isNotEmpty && cfAccessClientSecret.trim().isNotEmpty;
+      cfAccessClientId.trim().isNotEmpty &&
+      cfAccessClientSecret.trim().isNotEmpty;
 
   /// 供 KVStore 持久化。
   Map<String, Object?> toCloudMap() => <String, Object?>{
-        'cfAccessClientId': cfAccessClientId,
-        'cfAccessClientSecret': cfAccessClientSecret,
-        'baseUrl': baseUrl,
-        'apiKey': apiKey,
-        'defaultModel': defaultModel,
-        'timeoutSeconds': timeoutSeconds,
-        'defaultMaxTokens': defaultMaxTokens,
-        'defaultTemperature': defaultTemperature,
-        'enableStreaming': enableStreaming,
-      };
+    'cfAccessClientId': cfAccessClientId,
+    'cfAccessClientSecret': cfAccessClientSecret,
+    'baseUrl': baseUrl,
+    'apiKey': apiKey,
+    'defaultModel': defaultModel,
+    'timeoutSeconds': timeoutSeconds,
+    'defaultMaxTokens': defaultMaxTokens,
+    'defaultTemperature': defaultTemperature,
+    'enableStreaming': enableStreaming,
+  };
 
-  factory RwkvCloudConfiguration.fromCloudMap(Map<String, Object?> map) =>
-      RwkvCloudConfiguration(
-        cfAccessClientId: (map['cfAccessClientId'] as String?) ?? '',
-        cfAccessClientSecret: (map['cfAccessClientSecret'] as String?) ?? '',
-        baseUrl: (map['baseUrl'] as String?) ?? kRwkvCloudDefaultBaseUrl,
-        apiKey: (map['apiKey'] as String?) ?? '',
-        defaultModel: (map['defaultModel'] as String?) ?? kRwkvCloudDefaultModel,
-        timeoutSeconds: (map['timeoutSeconds'] as num?)?.toInt() ?? 180,
-        defaultMaxTokens: (map['defaultMaxTokens'] as num?)?.toInt() ?? 4000,
-        defaultTemperature:
-            (map['defaultTemperature'] as num?)?.toDouble() ?? 1.0,
-        enableStreaming: (map['enableStreaming'] as bool?) ?? true,
-      );
+  factory RwkvCloudConfiguration.fromCloudMap(
+    Map<String, Object?> map,
+  ) => RwkvCloudConfiguration(
+    cfAccessClientId: (map['cfAccessClientId'] as String?) ?? '',
+    cfAccessClientSecret: (map['cfAccessClientSecret'] as String?) ?? '',
+    baseUrl: (map['baseUrl'] as String?) ?? kRwkvCloudDefaultBaseUrl,
+    apiKey: (map['apiKey'] as String?) ?? '',
+    defaultModel: (map['defaultModel'] as String?) ?? kRwkvCloudDefaultModel,
+    timeoutSeconds: (map['timeoutSeconds'] as num?)?.toInt() ?? 180,
+    defaultMaxTokens: (map['defaultMaxTokens'] as num?)?.toInt() ?? 4000,
+    defaultTemperature: (map['defaultTemperature'] as num?)?.toDouble() ?? 1.0,
+    enableStreaming: (map['enableStreaming'] as bool?) ?? true,
+  );
 }
 
 /// 云端 RWKV Provider。
@@ -211,9 +340,11 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
   /// `contents` 请求打到 OpenAI 上**，拿到一个 400 然后让人一头雾水。
   void _requireInitialized() {
     if (_cloudConfig == null) {
-      throw StateError('RwkvCloudProvider 尚未 initialize()，'
-          '当前 baseUrl=${configuration.baseUrl}（不是 RWKV 云端端点）。'
-          '请先调用 initialize(RwkvCloudConfiguration(...))。');
+      throw StateError(
+        'RwkvCloudProvider 尚未 initialize()，'
+        '当前 baseUrl=${configuration.baseUrl}（不是 RWKV 云端端点）。'
+        '请先调用 initialize(RwkvCloudConfiguration(...))。',
+      );
     }
   }
 
@@ -245,35 +376,39 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     _requireInitialized();
     final Stopwatch sw = Stopwatch()..start();
     try {
-    final Map<String, dynamic> json = await _batch.postJson(
-      kRouteRwkvStateChat,
-      <String, dynamic>{
-        'session_id': sessionId,
-        // ⚠ 必须**恰好 1 条**，传 2 条服务端 400
-        // `Request must contain exactly one prompt`（PITFALLS §31.6）
-        'contents': <String>[prompt],
-        'stream': false,
-        'max_tokens': maxTokens ?? 1024,
-        'stop_tokens': kRwkvDefaultStopTokens,
-      },
-    );
-    sw.stop();
-    _stats?.record(AiRequestSample(
-      provider: registeredProviderName,
-      operation: 'stateful',
-      success: true,
-      latency: sw.elapsed,
-    ));
-    return _extractFirstContent(json);
+      final Map<String, dynamic> json = await _batch.postJson(
+        kRouteRwkvStateChat,
+        <String, dynamic>{
+          'session_id': sessionId,
+          // ⚠ 必须**恰好 1 条**，传 2 条服务端 400
+          // `Request must contain exactly one prompt`（PITFALLS §31.6）
+          'contents': <String>[prompt],
+          'stream': false,
+          'max_tokens': maxTokens ?? 1024,
+          'stop_tokens': kRwkvDefaultStopTokens,
+        },
+      );
+      sw.stop();
+      _stats?.record(
+        AiRequestSample(
+          provider: registeredProviderName,
+          operation: 'stateful',
+          success: true,
+          latency: sw.elapsed,
+        ),
+      );
+      return _extractFirstContent(json);
     } on Object {
       sw.stop();
-      _stats?.record(AiRequestSample(
-        provider: registeredProviderName,
-        operation: 'stateful',
-        success: false,
-        latency: sw.elapsed,
-        failureKind: 'statefulError',
-      ));
+      _stats?.record(
+        AiRequestSample(
+          provider: registeredProviderName,
+          operation: 'stateful',
+          success: false,
+          latency: sw.elapsed,
+          failureKind: 'statefulError',
+        ),
+      );
       rethrow;
     }
   }
@@ -300,7 +435,10 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
         'stop_tokens': kRwkvDefaultStopTokens,
       },
     );
-    return (_extractFirstContent(json), (json['dialogue_idx'] as num?)?.toInt());
+    return (
+      _extractFirstContent(json),
+      (json['dialogue_idx'] as num?)?.toInt(),
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -322,8 +460,10 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     } else if (await _batch.routeExists(kRouteRwkvStateChat)) {
       cap = BranchCapability.sessionSeed;
     }
-    _cloudLogger.info('分叉能力探测：${cap.label}'
-        '（multi_state=${cap == BranchCapability.multiState}）');
+    _cloudLogger.info(
+      '分叉能力探测：${cap.label}'
+      '（multi_state=${cap == BranchCapability.multiState}）',
+    );
     _capability = cap;
     return cap;
   }
@@ -350,18 +490,19 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
   ModelProviderType get providerType => ModelProviderType.cloudApi;
 
   @override
-  Future<bool> initialize(IModelConfiguration configuration) async {
+  Future<bool> configure(IModelConfiguration configuration, {bool probe = true}) async {
     // ⚠ 每次初始化都要把 CF 头重新灌进 customHeaders：
     // 用户可能在界面上改过 Token，而 _normalize() 只做浅拷贝。
     if (configuration is RwkvCloudConfiguration) {
       configuration.customHeaders = configuration.effectiveHeaders();
       if (!configuration.hasCfCredentials) {
         _cloudLogger.warning(
-            'RWKV Cloud 未配置 Cloudflare Access Service Token，'
-            '请求会拿到 HTML 登录页而不是 JSON（PITFALLS §27.2）。');
+          'RWKV Cloud 未配置 Cloudflare Access Service Token，'
+          '请求会拿到 HTML 登录页而不是 JSON（PITFALLS §27.2）。',
+        );
       }
     }
-    return super.initialize(configuration);
+    return super.configure(configuration, probe: probe);
   }
 
   /// 取引擎状态：能力 / 显存 / 队列 / 实时吞吐（文档 §11）。
@@ -373,7 +514,8 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     if (cfg == null) return null;
     try {
       final uri = Uri.parse(
-          '${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/server/status');
+        '${cfg.baseUrl.replaceAll(RegExp(r'/$'), '')}/server/status',
+      );
       final resp = await httpClient.get(uri, headers: cfg.effectiveHeaders());
       if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
       final body = resp.body;
@@ -400,7 +542,8 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     if (result.isSuccess) return result;
 
     final msg = result.errorMessage ?? '';
-    final looksHtml = msg.contains('<html') ||
+    final looksHtml =
+        msg.contains('<html') ||
         msg.contains('<!DOCTYPE') ||
         msg.contains('cloudflareaccess.com') ||
         msg.contains('Access login');
@@ -408,7 +551,8 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
       return ConnectionTestResult(
         isSuccess: false,
         responseTime: result.responseTime,
-        errorMessage: 'Cloudflare Access 认证失败：服务器返回的是 HTML 登录页而不是 JSON。'
+        errorMessage:
+            'Cloudflare Access 认证失败：服务器返回的是 HTML 登录页而不是 JSON。'
             '请检查 $kHeaderCfAccessClientId / $kHeaderCfAccessClientSecret 的拼写'
             '（精确大小写）、Service Token 是否过期、出口 IP 是否被 CF WAF 拦截。'
             '（PITFALLS §27.2）原始响应前 200 字：'
@@ -504,10 +648,9 @@ class RwkvCloudServerSummary {
       queuedRequests: q is Map ? asInt(q['queued_requests']) : null,
       freeVramGb: q is Map ? gb(q['free_vram_bytes']) : null,
       totalVramGb: q is Map ? gb(q['total_vram_bytes']) : null,
-      lastPrefillSpeed:
-          last is Map && last['prefill_speed'] is num
-              ? (last['prefill_speed'] as num).toDouble()
-              : null,
+      lastPrefillSpeed: last is Map && last['prefill_speed'] is num
+          ? (last['prefill_speed'] as num).toDouble()
+          : null,
       lastDecodeSpeed: last is Map && last['decode_speed'] is num
           ? (last['decode_speed'] as num).toDouble()
           : null,

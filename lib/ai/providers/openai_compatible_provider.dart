@@ -76,8 +76,7 @@ class OpenAICompatibleConfiguration implements IModelConfiguration {
   }
 
   /// 创建智谱 AI 配置。
-  factory OpenAICompatibleConfiguration.zhipuAI(
-          String apiKey, String model) =>
+  factory OpenAICompatibleConfiguration.zhipuAI(String apiKey, String model) =>
       OpenAICompatibleConfiguration(
         providerName: 'ZhipuAI',
         providerKind: 'ZhipuAI',
@@ -87,8 +86,7 @@ class OpenAICompatibleConfiguration implements IModelConfiguration {
       );
 
   /// 创建 Ollama（OpenAI 兼容 /v1 模式）配置。
-  factory OpenAICompatibleConfiguration.ollama(
-          String baseUrl, String model) =>
+  factory OpenAICompatibleConfiguration.ollama(String baseUrl, String model) =>
       OpenAICompatibleConfiguration(
         providerName: 'Ollama',
         providerKind: 'Ollama',
@@ -128,10 +126,10 @@ class OpenAICompatibleProvider implements IModelProvider {
   ProviderStatistics _statistics = const ProviderStatistics();
 
   final StreamController<ModelConfigurationChangedEventArgs>
-      _configChangedController =
+  _configChangedController =
       StreamController<ModelConfigurationChangedEventArgs>.broadcast();
   final StreamController<ConnectionStatusChangedEventArgs>
-      _connectionChangedController =
+  _connectionChangedController =
       StreamController<ConnectionStatusChangedEventArgs>.broadcast();
 
   /// 构造通用 OpenAI 兼容提供者。
@@ -139,8 +137,8 @@ class OpenAICompatibleProvider implements IModelProvider {
     required this.registeredProviderName,
     http.Client? client,
     Logger? logger,
-  })  : _client = client ?? http.Client(),
-        _logger = logger ?? Logger('OpenAICompatible.$registeredProviderName');
+  }) : _client = client ?? http.Client(),
+       _logger = logger ?? Logger('OpenAICompatible.$registeredProviderName');
 
   @override
   String get providerName {
@@ -168,7 +166,10 @@ class OpenAICompatibleProvider implements IModelProvider {
       _connectionChangedController.stream;
 
   @override
-  Future<bool> initialize(IModelConfiguration configuration) async {
+  Future<bool> initialize(IModelConfiguration configuration) => configure(configuration);
+
+  /// Load a saved endpoint without performing network I/O when probe is false.
+  Future<bool> configure(IModelConfiguration configuration, {bool probe = true}) async {
     if (_disposed) return false;
     if (configuration is! OpenAICompatibleConfiguration) {
       _logger.severe('配置类型不匹配，期望 OpenAICompatibleConfiguration');
@@ -178,12 +179,15 @@ class OpenAICompatibleProvider implements IModelProvider {
     try {
       final old = _configuration;
       _configuration = _normalize(config);
-      _configChangedController
-          .add(ModelConfigurationChangedEventArgs(_configuration, old));
+      _configChangedController.add(
+        ModelConfigurationChangedEventArgs(_configuration, old),
+      );
 
-      _isAvailable = (await testConnection()).isSuccess;
-      _logger.info('OpenAI 兼容提供者初始化: $providerName '
-          '(${_configuration.providerKind}), 可用: $_isAvailable');
+      _isAvailable = probe ? (await testConnection()).isSuccess : config.isValid();
+      _logger.info(
+        'OpenAI 兼容提供者初始化: $providerName '
+        '(${_configuration.providerKind}), 可用: $_isAvailable',
+      );
       return _isAvailable;
     } catch (e, st) {
       _logger.severe('OpenAI 兼容提供者初始化失败', e, st);
@@ -205,8 +209,7 @@ class OpenAICompatibleProvider implements IModelProvider {
       if (modelsResp.statusCode >= 200 && modelsResp.statusCode < 300) {
         List<dynamic>? dataList;
         try {
-          final parsed =
-              jsonDecode(modelsResp.body) as Map<String, dynamic>;
+          final parsed = jsonDecode(modelsResp.body) as Map<String, dynamic>;
           dataList = parsed['data'] as List<dynamic>?;
         } catch (_) {
           dataList = null;
@@ -250,22 +253,43 @@ class OpenAICompatibleProvider implements IModelProvider {
         headers: _defaultHeaders(),
       );
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        if (_configuration.providerKind.toLowerCase() == 'rwkvcloud') {
+          return const <ModelInfo>[];
+        }
+        return _fallbackModels();
+      }
+      final String contentType =
+          resp.headers['content-type']?.toLowerCase() ?? '';
+      if (contentType.isNotEmpty && !contentType.contains('json')) {
+        if (_configuration.providerKind.toLowerCase() == 'rwkvcloud') {
+          return const <ModelInfo>[];
+        }
         return _fallbackModels();
       }
       final parsed = jsonDecode(resp.body) as Map<String, dynamic>;
       final data = parsed['data'] as List<dynamic>?;
-      if (data == null || data.isEmpty) return _fallbackModels();
+      if (data == null || data.isEmpty) {
+        if (_configuration.providerKind.toLowerCase() == 'rwkvcloud') {
+          return const <ModelInfo>[];
+        }
+        return _fallbackModels();
+      }
       return data
           .whereType<Map<String, dynamic>>()
-          .map((m) => ModelInfo(
-                id: (m['id'] as String?) ?? '',
-                name: (m['id'] as String?) ?? '',
-                description: (m['owned_by'] as String?) ?? '',
-                isDownloaded: true,
-              ))
+          .map(
+            (m) => ModelInfo(
+              id: (m['id'] as String?) ?? '',
+              name: (m['id'] as String?) ?? '',
+              description: (m['owned_by'] as String?) ?? '',
+              isDownloaded: true,
+            ),
+          )
           .toList();
     } catch (e, st) {
       _logger.warning('获取模型列表失败', e, st);
+      if (_configuration.providerKind.toLowerCase() == 'rwkvcloud') {
+        return const <ModelInfo>[];
+      }
       return _fallbackModels();
     }
   }
@@ -277,10 +301,7 @@ class OpenAICompatibleProvider implements IModelProvider {
       final openAiReq = _convertRequest(request, stream: false);
       final resp = await _client.post(
         Uri.parse(_endpoint('chat/completions')),
-        headers: {
-          ..._defaultHeaders(),
-          'Content-Type': 'application/json',
-        },
+        headers: {..._defaultHeaders(), 'Content-Type': 'application/json'},
         body: jsonEncode(openAiReq.toJson()),
       );
       final elapsed = DateTime.now().difference(startTime);
@@ -295,7 +316,9 @@ class OpenAICompatibleProvider implements IModelProvider {
       }
       final parsed = jsonDecode(resp.body) as Map<String, dynamic>;
       final openAiResp = OpenAIChatResponse.fromJson(parsed);
-      final choice = openAiResp.choices.isNotEmpty ? openAiResp.choices.first : null;
+      final choice = openAiResp.choices.isNotEmpty
+          ? openAiResp.choices.first
+          : null;
       final visible = AIOutputSanitizer.extractVisibleContent(
         choice?.message?.content,
         choice?.message?.reasoningContent,
@@ -358,16 +381,18 @@ class OpenAICompatibleProvider implements IModelProvider {
 
       String? finishReason;
       await for (final line
-          in response.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+          in response.stream
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())) {
         if (line.trim().isEmpty) continue;
         if (!line.startsWith('data:')) continue;
         final data = line.substring(5).trim();
         if (data == '[DONE]') break;
         try {
           final chunk = OpenAIStreamChunk.fromJson(
-              jsonDecode(data) as Map<String, dynamic>);
-          final choice =
-              chunk.choices.isNotEmpty ? chunk.choices.first : null;
+            jsonDecode(data) as Map<String, dynamic>,
+          );
+          final choice = chunk.choices.isNotEmpty ? chunk.choices.first : null;
           final delta = choice?.delta;
           final visible = AIOutputSanitizer.extractVisibleContent(
             delta?.content,
@@ -375,21 +400,20 @@ class OpenAICompatibleProvider implements IModelProvider {
           );
           if (visible.isNotEmpty) {
             fullContent.write(visible);
-            onChunkReceived(ChatChunk(
-              id: chunk.id ?? '',
-              content: visible,
-              isComplete: false,
-            ));
+            onChunkReceived(
+              ChatChunk(
+                id: chunk.id ?? '',
+                content: visible,
+                isComplete: false,
+              ),
+            );
           }
           finishReason ??= choice?.finishReason;
         } catch (_) {
           // 忽略单行解析失败，继续读取后续流。
         }
       }
-      onChunkReceived(ChatChunk(
-        isComplete: true,
-        finishReason: finishReason,
-      ));
+      onChunkReceived(ChatChunk(isComplete: true, finishReason: finishReason));
       final success = ChatResponse(
         content: fullContent.toString(),
         model: request.model,
@@ -460,10 +484,7 @@ class OpenAICompatibleProvider implements IModelProvider {
       );
       final resp = await _client.post(
         Uri.parse(_endpoint('chat/completions')),
-        headers: {
-          ..._defaultHeaders(),
-          'Content-Type': 'application/json',
-        },
+        headers: {..._defaultHeaders(), 'Content-Type': 'application/json'},
         body: jsonEncode(probe.toJson()),
       );
       final elapsed = DateTime.now().difference(startTime);
@@ -490,13 +511,21 @@ class OpenAICompatibleProvider implements IModelProvider {
   }
 
   OpenAICompatibleConfiguration _normalize(OpenAICompatibleConfiguration c) {
-    final kind = c.providerKind.trim().isEmpty ? 'Custom' : c.providerKind.trim();
+    final kind = c.providerKind.trim().isEmpty
+        ? 'Custom'
+        : c.providerKind.trim();
     return OpenAICompatibleConfiguration(
-      providerName: c.providerName.trim().isEmpty ? 'OpenAICompatible' : c.providerName.trim(),
+      providerName: c.providerName.trim().isEmpty
+          ? 'OpenAICompatible'
+          : c.providerName.trim(),
       providerKind: kind,
-      baseUrl: c.baseUrl.trim().isEmpty ? 'https://api.openai.com/v1' : c.baseUrl.trim().replaceAll(RegExp(r'/$'), ''),
+      baseUrl: c.baseUrl.trim().isEmpty
+          ? 'https://api.openai.com/v1'
+          : c.baseUrl.trim().replaceAll(RegExp(r'/$'), ''),
       apiKey: c.apiKey.trim(),
-      defaultModel: c.defaultModel.trim().isEmpty ? 'gpt-3.5-turbo' : c.defaultModel.trim(),
+      defaultModel: c.defaultModel.trim().isEmpty
+          ? 'gpt-3.5-turbo'
+          : c.defaultModel.trim(),
       timeoutSeconds: c.timeoutSeconds > 0 ? c.timeoutSeconds : 120,
       maxRetries: max(0, c.maxRetries),
       defaultTemperature: c.defaultTemperature,
@@ -506,10 +535,15 @@ class OpenAICompatibleProvider implements IModelProvider {
     );
   }
 
-  OpenAIChatRequest _convertRequest(ChatRequest request, {required bool stream}) {
+  OpenAIChatRequest _convertRequest(
+    ChatRequest request, {
+    required bool stream,
+  }) {
     final messages = <OpenAIMessage>[];
     if (request.systemPrompt != null && request.systemPrompt!.isNotEmpty) {
-      messages.add(OpenAIMessage(role: 'system', content: request.systemPrompt!));
+      messages.add(
+        OpenAIMessage(role: 'system', content: request.systemPrompt!),
+      );
     }
     for (final m in request.messages) {
       messages.add(OpenAIMessage(role: m.role.name, content: m.content));
@@ -517,14 +551,20 @@ class OpenAICompatibleProvider implements IModelProvider {
     final usesMaxCompletionTokens =
         _configuration.providerKind.toLowerCase() == 'xiaomimimo';
     return OpenAIChatRequest(
-      model: request.model.isEmpty ? _configuration.defaultModel : request.model,
+      model: request.model.isEmpty
+          ? _configuration.defaultModel
+          : request.model,
       messages: messages,
       temperature: _normalizeTemperature(request.temperature),
       maxTokens: usesMaxCompletionTokens
           ? null
-          : (request.maxTokens > 0 ? request.maxTokens : _configuration.defaultMaxTokens),
+          : (request.maxTokens > 0
+                ? request.maxTokens
+                : _configuration.defaultMaxTokens),
       maxCompletionTokens: usesMaxCompletionTokens
-          ? (request.maxTokens > 0 ? request.maxTokens : _configuration.defaultMaxTokens)
+          ? (request.maxTokens > 0
+                ? request.maxTokens
+                : _configuration.defaultMaxTokens)
           : _tryInt(request.parameters['max_completion_tokens']),
       stream: stream,
       topP: _tryDouble(request.parameters['top_p']),
@@ -580,8 +620,9 @@ class OpenAICompatibleProvider implements IModelProvider {
   void _setConnected(bool connected, [String? errorMessage]) {
     if (_isAvailable != connected) {
       _isAvailable = connected;
-      _connectionChangedController
-          .add(ConnectionStatusChangedEventArgs(connected, errorMessage));
+      _connectionChangedController.add(
+        ConnectionStatusChangedEventArgs(connected, errorMessage),
+      );
     } else {
       _isAvailable = connected;
     }
@@ -589,17 +630,18 @@ class OpenAICompatibleProvider implements IModelProvider {
 
   void _updateStats(ChatResponse response, Duration elapsed) {
     final total = _statistics.totalRequests + 1;
-    final success = _statistics.successfulRequests + (response.isSuccess ? 1 : 0);
+    final success =
+        _statistics.successfulRequests + (response.isSuccess ? 1 : 0);
     final failed = _statistics.failedRequests + (response.isSuccess ? 0 : 1);
     final avgMs = _statistics.totalRequests == 0
         ? elapsed.inMilliseconds
         : ((_statistics.averageResponseTime.inMilliseconds *
-                    _statistics.totalRequests +
-                elapsed.inMilliseconds) /
-                total)
-            .round();
-    final tokens = _statistics.totalTokensUsed +
-        (response.usage?.totalTokens ?? 0);
+                          _statistics.totalRequests +
+                      elapsed.inMilliseconds) /
+                  total)
+              .round();
+    final tokens =
+        _statistics.totalTokensUsed + (response.usage?.totalTokens ?? 0);
     _statistics = ProviderStatistics(
       totalRequests: total,
       successfulRequests: success,
@@ -635,12 +677,14 @@ class OpenAICompatibleProvider implements IModelProvider {
         models.addAll(const ['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-flash']);
     }
     return models
-        .map((m) => ModelInfo(
-              id: m,
-              name: m,
-              description: '${_configuration.providerName} 兼容接口模型',
-              isDownloaded: true,
-            ))
+        .map(
+          (m) => ModelInfo(
+            id: m,
+            name: m,
+            description: '${_configuration.providerName} 兼容接口模型',
+            isDownloaded: true,
+          ),
+        )
         .toList();
   }
 
@@ -730,16 +774,16 @@ class OpenAIMessage {
   });
 
   Map<String, dynamic> toJson() => {
-        'role': role,
-        'content': content,
-        if (reasoningContent != null) 'reasoning_content': reasoningContent,
-      };
+    'role': role,
+    'content': content,
+    if (reasoningContent != null) 'reasoning_content': reasoningContent,
+  };
 
   factory OpenAIMessage.fromJson(Map<String, dynamic> json) => OpenAIMessage(
-        role: json['role'] as String? ?? 'user',
-        content: json['content'] as String? ?? '',
-        reasoningContent: json['reasoning_content'] as String?,
-      );
+    role: json['role'] as String? ?? 'user',
+    content: json['content'] as String? ?? '',
+    reasoningContent: json['reasoning_content'] as String?,
+  );
 }
 
 /// OpenAI 聊天响应（内部数据模型，对应 C# `OpenAIChatResponse`）。
@@ -760,7 +804,8 @@ class OpenAIChatResponse {
       OpenAIChatResponse(
         id: json['id'] as String?,
         model: json['model'] as String?,
-        choices: (json['choices'] as List<dynamic>?)
+        choices:
+            (json['choices'] as List<dynamic>?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(OpenAIChoice.fromJson)
                 .toList() ??
@@ -780,14 +825,14 @@ class OpenAIChoice {
   OpenAIChoice({this.message, this.finishReason, this.delta});
 
   factory OpenAIChoice.fromJson(Map<String, dynamic> json) => OpenAIChoice(
-        message: json['message'] == null
-            ? null
-            : OpenAIMessage.fromJson(json['message'] as Map<String, dynamic>),
-        finishReason: json['finish_reason'] as String?,
-        delta: json['delta'] == null
-            ? null
-            : OpenAIMessage.fromJson(json['delta'] as Map<String, dynamic>),
-      );
+    message: json['message'] == null
+        ? null
+        : OpenAIMessage.fromJson(json['message'] as Map<String, dynamic>),
+    finishReason: json['finish_reason'] as String?,
+    delta: json['delta'] == null
+        ? null
+        : OpenAIMessage.fromJson(json['delta'] as Map<String, dynamic>),
+  );
 }
 
 /// OpenAI 使用量（内部数据模型，对应 C# `OpenAIUsage`）。
@@ -803,16 +848,16 @@ class OpenAIUsage {
   });
 
   factory OpenAIUsage.fromJson(Map<String, dynamic> json) => OpenAIUsage(
-        promptTokens: json['prompt_tokens'] as int? ?? 0,
-        completionTokens: json['completion_tokens'] as int? ?? 0,
-        totalTokens: json['total_tokens'] as int? ?? 0,
-      );
+    promptTokens: json['prompt_tokens'] as int? ?? 0,
+    completionTokens: json['completion_tokens'] as int? ?? 0,
+    totalTokens: json['total_tokens'] as int? ?? 0,
+  );
 
   TokenUsage toTokenUsage() => TokenUsage(
-        promptTokens: promptTokens,
-        completionTokens: completionTokens,
-        totalTokens: totalTokens,
-      );
+    promptTokens: promptTokens,
+    completionTokens: completionTokens,
+    totalTokens: totalTokens,
+  );
 }
 
 /// OpenAI 流式分块（内部数据模型，对应 C# `OpenAIStreamChunk`）。
@@ -825,7 +870,8 @@ class OpenAIStreamChunk {
   factory OpenAIStreamChunk.fromJson(Map<String, dynamic> json) =>
       OpenAIStreamChunk(
         id: json['id'] as String?,
-        choices: (json['choices'] as List<dynamic>?)
+        choices:
+            (json['choices'] as List<dynamic>?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(OpenAIChoice.fromJson)
                 .toList() ??
@@ -840,7 +886,8 @@ class OpenAIModelsResponse {
 
   factory OpenAIModelsResponse.fromJson(Map<String, dynamic> json) =>
       OpenAIModelsResponse(
-        data: (json['data'] as List<dynamic>?)
+        data:
+            (json['data'] as List<dynamic>?)
                 ?.whereType<Map<String, dynamic>>()
                 .map(OpenAIModelItem.fromJson)
                 .toList() ??

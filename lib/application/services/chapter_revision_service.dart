@@ -29,6 +29,7 @@ import '../../ai/rwkv/rwkv_sampling.dart';
 import '../../ai/runtime_settings.dart';
 import '../../ai/utils/localized_text.dart';
 import '../../ai/utils/output_sanitizer.dart';
+import '../../ai/utils/fiction_quality.dart';
 import '../../ai/utils/segment_rewrite.dart';
 import '../../data/database.dart';
 import '../../data/repositories/chapter_repository.dart';
@@ -577,6 +578,15 @@ class ChapterRevisionService {
     required String workflowMode,
     required int segments,
   }) async {
+    final issue = FictionQuality.issue(merged, chinese: !_texts.isEnglish);
+    if (issue != null) {
+      return ChapterRevisionResult(
+        isSuccess: false,
+        content: '',
+        message: '正文校验失败（$issue），原稿未修改。',
+        originalLength: original.length,
+      );
+    }
     try {
       await _chapters.updateById(
         chapter.id,

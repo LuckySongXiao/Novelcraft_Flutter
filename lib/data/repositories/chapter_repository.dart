@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../database.dart';
 import 'repository_base.dart';
+import '../../application/services/chapter_ordering.dart';
 
 /// 章节仓储 —— 对应 Infrastructure/Data/Repositories/ChapterRepository.cs
 ///
@@ -23,7 +24,13 @@ class ChapterRepository extends RepositoryBase {
           ..where((t) =>
               t.projectId.equals(projectId) & notDeleted(t.isDeleted))
           ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]))
-        .get();
+        .get()
+        .then((List<ChapterRow> chapters) async {
+          final List<VolumeRow> volumes = await (db.select(db.volumes)
+                ..where((t) => t.projectId.equals(projectId) & notDeleted(t.isDeleted)))
+              .get();
+          return ChapterOrdering.sort(chapters, volumes);
+        });
   }
 
   Future<ChapterRow> create(ChaptersCompanion companion) async {
@@ -56,7 +63,13 @@ class ChapterRepository extends RepositoryBase {
                   [t.title, t.summary, t.content, t.type, t.tags, t.notes],
                   lower))
           ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]))
-        .get();
+        .get()
+        .then((List<ChapterRow> chapters) async {
+          final List<VolumeRow> volumes = await (db.select(db.volumes)
+                ..where((t) => t.projectId.equals(projectId) & notDeleted(t.isDeleted)))
+              .get();
+          return ChapterOrdering.sort(chapters, volumes);
+        });
   }
 
   Future<List<ChapterRow>> search(String projectId, String keyword) =>
@@ -87,7 +100,13 @@ class ChapterRepository extends RepositoryBase {
               t.status.equals(status) &
               notDeleted(t.isDeleted))
           ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]))
-        .get();
+        .get()
+        .then((List<ChapterRow> chapters) async {
+          final List<VolumeRow> volumes = await (db.select(db.volumes)
+                ..where((t) => t.projectId.equals(projectId) & notDeleted(t.isDeleted)))
+              .get();
+          return ChapterOrdering.sort(chapters, volumes);
+        });
   }
 
   Future<int> getNextOrderIndex(String volumeId) async {

@@ -5,6 +5,8 @@
 //
 // 运行：flutter test test/gui_pages_test.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,10 +39,12 @@ class _MemKv extends KeyValueStore {
       data.remove('$scope/$key');
 
   @override
-  Future<List<String>> listKeys(String scope) => Future.value(data.keys
-      .where((k) => k.startsWith('$scope/'))
-      .map((k) => k.substring(scope.length + 1))
-      .toList());
+  Future<List<String>> listKeys(String scope) => Future.value(
+    data.keys
+        .where((k) => k.startsWith('$scope/'))
+        .map((k) => k.substring(scope.length + 1))
+        .toList(),
+  );
 }
 
 class _FakeNavigation extends NavigationService {
@@ -80,15 +84,17 @@ Future<List<String>> _pumpAndCollect(
 
 Future<ProviderContainer> _buildContainer(NavigationTarget target) async {
   // ignore: strict_raw_type
-  final container = ProviderContainer(overrides: [
-    databaseProvider.overrideWith((ref) {
-      final db = AppDatabase.forTesting(NativeDatabase.memory());
-      ref.onDispose(() => db.close());
-      return db;
-    }),
-    keyValueStoreProvider.overrideWith((ref) async => _MemKv()),
-    navigationProvider.overrideWith(() => _FakeNavigation(target)),
-  ]);
+  final container = ProviderContainer(
+    overrides: [
+      databaseProvider.overrideWith((ref) {
+        final db = AppDatabase.forTesting(NativeDatabase.memory());
+        ref.onDispose(() => db.close());
+        return db;
+      }),
+      keyValueStoreProvider.overrideWith((ref) async => _MemKv()),
+      navigationProvider.overrideWith(() => _FakeNavigation(target)),
+    ],
+  );
   return container;
 }
 
@@ -97,9 +103,7 @@ Future<void> _pumpShell(WidgetTester tester, ProviderContainer container) {
     UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
-        theme: buildTheme(
-          builtInSkins.firstWhere((s) => s.id == SkinIds.dark),
-        ),
+        theme: buildTheme(builtInSkins.firstWhere((s) => s.id == SkinIds.dark)),
         home: const AppShell(),
       ),
     ),
@@ -125,7 +129,9 @@ void main() {
         NavigationTarget.aiConfiguration,
         NavigationTarget.projectHealthCheck,
       };
-      for (final target in allTargets.where((t) => !networkActive.contains(t))) {
+      for (final target in allTargets.where(
+        (t) => !networkActive.contains(t),
+      )) {
         testWidgets('${viewport.key} · ${target.name}', (tester) async {
           SharedPreferences.setMockInitialValues({});
           tester.view.physicalSize = viewport.value;
@@ -141,7 +147,8 @@ void main() {
           expect(
             errors,
             isEmpty,
-            reason: '${viewport.key} · ${target.name} 渲染异常（疑似布局溢出）：'
+            reason:
+                '${viewport.key} · ${target.name} 渲染异常（疑似布局溢出）：'
                 '${errors.take(2).join(' | ')}',
           );
           expect(find.byType(AppShell), findsOneWidget);
@@ -151,14 +158,38 @@ void main() {
   });
 
   group('交互链路', () {
+    testWidgets('安卓竖屏保留底部主导航及更多页面', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final container = await _buildContainer(
+        NavigationTarget.projectManagement,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpShell(tester, container);
+      expect(await _pumpAndCollect(tester), isEmpty);
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byType(NavigationRail), findsNothing);
+      await tester.tap(find.byTooltip('更多页面'));
+      await tester.pumpAndSettle();
+      expect(find.text('卷宗管理'), findsWidgets);
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     testWidgets('新建项目 → 列表出现项目名', (tester) async {
       SharedPreferences.setMockInitialValues({});
       tester.view.physicalSize = const Size(1280, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final container =
-          await _buildContainer(NavigationTarget.projectManagement);
+      final container = await _buildContainer(
+        NavigationTarget.projectManagement,
+      );
       addTearDown(container.dispose);
 
       await _pumpShell(tester, container);
@@ -187,26 +218,29 @@ void main() {
     // HTTP 拦成 400 并以未处理异步错误终结用例——渲染与按钮逻辑已由
     // copilot_chat_log_test（clear 契约）与 postjson_gate_test 覆盖。
     testWidgets(
-        'AI 协作页存在「清空会话」入口',
-        // 原因见上方注释（flutter_test 对网络活跃页的硬限制）
-        skip: true, (tester) async {
-      SharedPreferences.setMockInitialValues({});
-      tester.view.physicalSize = const Size(1280, 800);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
+      'AI 协作页存在「清空会话」入口',
+      // 原因见上方注释（flutter_test 对网络活跃页的硬限制）
+      skip: true,
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
 
-      final container =
-          await _buildContainer(NavigationTarget.aiCollaboration);
-      addTearDown(container.dispose);
+        final container = await _buildContainer(
+          NavigationTarget.aiCollaboration,
+        );
+        addTearDown(container.dispose);
 
-      await _pumpShell(tester, container);
-      await _settle(tester);
+        await _pumpShell(tester, container);
+        await _settle(tester);
 
-      expect(
-        find.byTooltip('清空会话'),
-        findsOneWidget,
-        reason: '交接遗留#7：清空会话入口必须存在',
-      );
-    });
+        expect(
+          find.byTooltip('清空会话'),
+          findsOneWidget,
+          reason: '交接遗留#7：清空会话入口必须存在',
+        );
+      },
+    );
   });
 }

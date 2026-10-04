@@ -172,6 +172,11 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
     final l10n = ref.read(l10nProvider);
     final text = _promptCtrl.text.trim();
     if (text.isEmpty || _sending) return;
+    if (ref.read(modelManagerProvider).getDefaultProvider() == null) {
+      _showError(l10n.t('AC.NoDefaultProvider',
+          '未找到可用的默认模型提供商。请先到「AI 配置」注册并设置默认模型。'));
+      return;
+    }
     // 已关联目标章节 → 按意图分派（解除 / 提问 / 改稿）
     if (ref.read(chapterReferralProvider).isLinked) {
       await _handleLinkedInput(text, l10n);
@@ -252,6 +257,9 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
         });
       }
     } catch (e) {
+      if (mounted && _promptCtrl.text.trim().isEmpty) {
+        _promptCtrl.text = text;
+      }
       _pushEntry(
         ChatMessage.assistant(l10n.tf('AC.StreamFailed', '流式请求失败: {0}', [e])),
       );
@@ -731,6 +739,8 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
     final scheme = Theme.of(context).colorScheme;
     // 矮视口（手机横屏）下输入框最多 2 行，给消息区和关联面板留高度
     final bool short = MediaQuery.sizeOf(context).height < 520;
+    final bool touch = Theme.of(context).platform == TargetPlatform.android ||
+        Theme.of(context).platform == TargetPlatform.iOS;
     // 聊天记录来自全局 provider（落 KVStore）：切页面 / 重启后接着上一段对话
     final List<ChatMessage> messages = ref
         .watch(copilotChatLogProvider)
@@ -758,7 +768,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                         color: scheme.primary,
                       ),
                       const SizedBox(width: 6),
-                      Text(
+                      Expanded(child: Text(
                         l10n.tf('AC.SessionInfo', '聊天会话 · 共 {0} 个 Agent 待命', [
                           agents.length,
                         ]),
@@ -766,9 +776,10 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                           fontSize: 12,
                           color: scheme.onSurfaceVariant,
                         ),
-                      ),
-                      const Spacer(),
-                      Text(
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )),
+                      if (!short) Text(
                         l10n.tf('AC.DefaultProvider', '默认：{0}', [
                           ref
                                   .watch(modelManagerProvider)
@@ -834,7 +845,9 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
               Expanded(
                 child: TextField(
                   controller: _promptCtrl,
-                  maxLines: short ? 1 : 5,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: touch ? TextInputAction.newline : TextInputAction.send,
+                  maxLines: short ? 2 : 5,
                   minLines: 1,
                   decoration: InputDecoration(
                     hintText: ref.watch(chapterReferralProvider).isLinked
@@ -849,11 +862,23 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
                     border: InputBorder.none,
                     isDense: true,
                   ),
-                  onSubmitted: (_) => _send(),
+                  onSubmitted: touch ? null : (_) => _send(),
                 ),
               ),
               const SizedBox(width: 8),
-              FilledButton.icon(
+              if (short) IconButton.filled(
+                tooltip: _sending
+                    ? l10n.t('AC.Generating', '生成中')
+                    : l10n.t('AC.Send', '发送'),
+                onPressed: _sending ? null : _send,
+                icon: _sending
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send, size: 20),
+              ) else FilledButton.icon(
                 onPressed: _sending ? null : _send,
                 icon: _sending
                     ? const SizedBox(

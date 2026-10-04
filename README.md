@@ -1,5 +1,10 @@
 # NovelCraft
 
+当前发布：**1.0.0+35**。新增写作工艺节点 Prompt 多模板编辑、选择与持久化。
+
+- [功能使用说明](docs/功能使用说明-v1.0.0+35.md)
+- [本版项目交接与验证范围](docs/项目交接-v1.0.0+35.md)
+
 AI 小说创作管理系统 —— 从 C# WPF 桌面版整体移植到 Flutter，一套业务模型支撑 Windows / Android / Web 多端运行。
 
 ## 项目简介
@@ -52,6 +57,7 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows \
 
 - [HANDOFF.md](HANDOFF.md) — 完整交接文档：架构、进度、验收方式与已知坑
 - [PITFALLS.md](PITFALLS.md) — 踩坑记录与规避方案
+- [docs/功能使用说明-v1.0.0+34.md](docs/功能使用说明-v1.0.0+34.md) — 当前版本功能和审查团队使用说明
 
 ## License
 

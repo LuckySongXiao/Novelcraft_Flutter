@@ -239,6 +239,15 @@ class _ProjectCard extends ConsumerWidget {
                       projectName: project.name,
                     ),
                   );
+            } else if (v == 'export') {
+              ref.read(currentProjectIdProvider.notifier).select(project.id);
+              ref.read(navigationProvider.notifier).navigateTo(
+                    NavigationTarget.importExport,
+                    context: NavigationContext(
+                      projectId: project.id,
+                      projectName: project.name,
+                    ),
+                  );
             } else if (v == 'delete') {
               final ok = await showDialog<bool>(
                 context: context,
@@ -294,6 +303,10 @@ class _ProjectCard extends ConsumerWidget {
             PopupMenuItem(
               value: 'open',
               child: Text(l10n.t('PM.Open', '打开')),
+            ),
+            PopupMenuItem(
+              value: 'export',
+              child: Text(l10n.t('PM.ExportEpub', '导出电子书')),
             ),
             PopupMenuItem(
               value: 'delete',

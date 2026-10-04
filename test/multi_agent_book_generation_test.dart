@@ -30,8 +30,7 @@ class _ScriptedChat {
     required int maxTokens,
     double temperature = 0.85,
   }) async {
-    final String user =
-        messages.isEmpty ? '' : messages.last.content;
+    final String user = messages.isEmpty ? '' : messages.last.content;
     systemCalls.add(systemPrompt);
     userCalls.add(user);
 
@@ -101,8 +100,7 @@ void main() {
   late AgentStateManager states;
   final List<String> archiveLevels = <String>[];
   final List<Map<String, String>> archiveMeta = <Map<String, String>>[];
-  final List<Map<String, Object?>> dispatchedItems =
-      <Map<String, Object?>>[];
+  final List<Map<String, Object?>> dispatchedItems = <Map<String, Object?>>[];
 
   setUp(() {
     db = AppDatabase.forTesting(NativeDatabase.memory());
@@ -124,29 +122,89 @@ void main() {
         writingProvider: () => null,
         stateManager: states,
         chatExecutor: chat.call,
-        archiveHook: ({
-          required String level,
-          required String? projectId,
-          required String title,
-          required String content,
-          required Map<String, String> metadata,
-        }) async {
-          archiveLevels.add(level);
-          archiveMeta.add(metadata);
-        },
-        updateDispatch: ({
-          required String projectId,
-          required List<Map<String, Object?>> items,
-          required Future<String> Function(int writerSlot, String prompt)
+        archiveHook:
+            ({
+              required String level,
+              required String? projectId,
+              required String title,
+              required String content,
+              required Map<String, String> metadata,
+            }) async {
+              archiveLevels.add(level);
+              archiveMeta.add(metadata);
+            },
+        updateDispatch:
+            ({
+              required String projectId,
+              required List<Map<String, Object?>> items,
+              required Future<String> Function(int writerSlot, String prompt)
               writerChat,
-        }) async {
-          dispatchedItems.addAll(items);
-          for (int i = 0; i < items.length; i++) {
-            await writerChat(i + 1, '按模板产出：${items[i]['name']}');
-          }
-          return const <String>['ok'];
-        },
+            }) async {
+              dispatchedItems.addAll(items);
+              for (int i = 0; i < items.length; i++) {
+                await writerChat(i + 1, '按模板产出：${items[i]['name']}');
+              }
+              return const <String>['ok'];
+            },
       );
+
+  test('大纲由 MainAgent 执行，章节正文由 SubAgent 执行', () async {
+    final List<String> mainCalls = <String>[];
+    final List<String> subCalls = <String>[];
+    final MultiAgentBookGenerationService service =
+        MultiAgentBookGenerationService(
+          projects: ProjectRepository(db),
+          plots: PlotRepository(db),
+          volumes: VolumeRepository(db),
+          chapters: ChapterRepository(db),
+          writingProvider: () => null,
+          stateManager: states,
+          planningChatExecutor:
+              (
+                String system,
+                List<ChatMessage> messages, {
+                required int maxTokens,
+                double temperature = 0.85,
+              }) {
+                mainCalls.add(system);
+                return chat.call(
+                  system,
+                  messages,
+                  maxTokens: maxTokens,
+                  temperature: temperature,
+                );
+              },
+          chatExecutor:
+              (
+                String system,
+                List<ChatMessage> messages, {
+                required int maxTokens,
+                double temperature = 0.85,
+              }) {
+                subCalls.add(system);
+                return chat.call(
+                  system,
+                  messages,
+                  maxTokens: maxTokens,
+                  temperature: temperature,
+                );
+              },
+        );
+    await service.generate(
+      config: const MultiAgentBookConfig(
+        bookTitle: '模型分工测试',
+        authorName: '作者',
+        targetVolumes: 1,
+        chaptersPerVolume: 1,
+        craft: WritingCraft.team,
+      ),
+    );
+    expect(mainCalls.any((s) => s.contains('MainAgent')), isTrue);
+    expect(mainCalls.any((s) => s.contains('大纲规划智能体')), isTrue);
+    expect(mainCalls.any((s) => s.contains('SubAgent Writer')), isFalse);
+    expect(subCalls.any((s) => s.contains('SubAgent Writer')), isTrue);
+    expect(subCalls.any((s) => s.contains('大纲规划智能体')), isFalse);
+  });
 
   test('全链路：固定编制 / 偏向派活 / 验收返工 / 落库 / 档案 / 更新分派', () async {
     final MultiAgentBookResult r = await buildService().generate(
@@ -175,21 +233,24 @@ void main() {
     expect(states.activeGroupCount, 0, reason: '组用完必须关闭释放 state');
 
     // 组长验收 → 打回返工链路真实发生（验收 JSON 标记段落2不合格 + 写手短稿）
-    final int reworkCalls =
-        chat.userCalls.where((String u) => u.contains('未通过组长验收')).length;
+    final int reworkCalls = chat.userCalls
+        .where((String u) => u.contains('未通过组长验收'))
+        .length;
     expect(reworkCalls, 1, reason: '不合格段必须打回对应写手返工一轮');
 
     // 偏向派活：段落计划必须带 persona，且提示词列出 9 位写手偏向
-    final String planCall = chat.userCalls
-        .firstWhere((String u) => u.contains('输出 JSON 数组'));
+    final String planCall = chat.userCalls.firstWhere(
+      (String u) => u.contains('输出 JSON 数组'),
+    );
     expect(planCall, contains('persona'));
 
     // 章节落库：验收后的终稿写入
     final ChapterRepository chapters = ChapterRepository(db);
     final ProjectRepository projects = ProjectRepository(db);
     final List<ProjectRow> projectRows = await projects.getAll();
-    final List<ChapterRow> chapterRows =
-        await chapters.getByProjectId(projectRows.first.id);
+    final List<ChapterRow> chapterRows = await chapters.getByProjectId(
+      projectRows.first.id,
+    );
     expect(chapterRows, hasLength(1));
     expect(chapterRows.single.content!, contains('【终稿】'));
     expect(chapterRows.single.status, 'Completed');
@@ -197,13 +258,20 @@ void main() {
 
     // 写作档案：项目（大纲）/ 分卷 / 章节 三档齐全
     // + 写作结束时的**收尾全书档案**（第二档 project）
-    expect(archiveLevels,
-        <String>['project', 'volume', 'chapter', 'project']);
-    expect(archiveMeta.last['themeTask'], contains('全书成稿'),
-        reason: '最后一条必须是书籍（项目）成稿总账');
+    expect(archiveLevels, <String>['project', 'volume', 'chapter', 'project']);
+    expect(
+      archiveMeta.last['themeTask'],
+      contains('全书成稿'),
+      reason: '最后一条必须是书籍（项目）成稿总账',
+    );
     // 档案顺序：project(主线大纲) / volume / chapter / project(收尾全书档案)
     final Map<String, String> chapterMeta = archiveMeta[2];
-    for (final String k in <String>['timeRange', 'themeTask', 'gainsLosses', 'safeguards']) {
+    for (final String k in <String>[
+      'timeRange',
+      'themeTask',
+      'gainsLosses',
+      'safeguards',
+    ]) {
       expect(chapterMeta.containsKey(k), isTrue, reason: '章节档案缺 $k');
     }
     expect(chapterMeta['gainsLosses']!, contains('伏笔'));
@@ -220,34 +288,61 @@ void main() {
     final VolumeRepository volumes = VolumeRepository(db);
     final ChapterRepository chapters = ChapterRepository(db);
     final String pid = _uuid.v4();
-    await projects.create(ProjectsCompanion.insert(id: pid, name: '查重书', type: '玄幻'));
+    await projects.create(
+      ProjectsCompanion.insert(id: pid, name: '查重书', type: '玄幻'),
+    );
     final String vid = _uuid.v4();
-    await volumes.create(VolumesCompanion.insert(
-      id: vid, title: '第一卷', projectId: pid, orderIndex: const Value(1)));
-    await chapters.create(ChaptersCompanion.insert(
-      id: _uuid.v4(), volumeId: vid, title: '第一章',
-      projectId: Value(pid), orderIndex: const Value(1)));
+    await volumes.create(
+      VolumesCompanion.insert(
+        id: vid,
+        title: '第一卷',
+        projectId: pid,
+        orderIndex: const Value(1),
+      ),
+    );
+    await chapters.create(
+      ChaptersCompanion.insert(
+        id: _uuid.v4(),
+        volumeId: vid,
+        title: '第一章',
+        projectId: Value(pid),
+        orderIndex: const Value(1),
+      ),
+    );
 
     final List<ChapterRow> rows = await chapters.getByVolumeId(vid);
 
     expect(
-      ChapterDedupGuard.findExisting(existing: rows, orderIndex: 1, title: '第一章'),
+      ChapterDedupGuard.findExisting(
+        existing: rows,
+        orderIndex: 1,
+        title: '第一章',
+      ),
       isNotNull,
       reason: '同序号必须命中',
     );
     expect(
-      ChapterDedupGuard.findExisting(existing: rows, orderIndex: 2, title: '第一章'),
+      ChapterDedupGuard.findExisting(
+        existing: rows,
+        orderIndex: 2,
+        title: '第一章',
+      ),
       isNotNull,
       reason: '同标题（即使序号不同）也必须命中，防止重复创建',
     );
     expect(
-      ChapterDedupGuard.findExisting(existing: rows, orderIndex: 2, title: '第二章'),
+      ChapterDedupGuard.findExisting(
+        existing: rows,
+        orderIndex: 2,
+        title: '第二章',
+      ),
       isNull,
     );
   });
 
   test('parseAcceptanceReport：容错解析 / 坏 JSON 返回 null', () {
-    final TeamAcceptance? a = MultiAgentBookGenerationService.parseAcceptanceReport(
+    final TeamAcceptance?
+    a = MultiAgentBookGenerationService.parseAcceptanceReport(
       '组长验收结果如下：\n```json\n'
       '{"paragraphs":[{"agent":1,"accepted":true},{"agent":2,"accepted":false,"problems":"偏题"}],'
       '"report":{"timeRange":"第一章当日","themeTask":"入门","gains":"G","safeguards":"S"},'
@@ -273,19 +368,26 @@ void main() {
 
   test('normalize：并发语义 = 并行章节数（1-9999），编制强制 10', () {
     final MultiAgentBookConfig a = const MultiAgentBookConfig(
-      bookTitle: '书', authorName: '作者', concurrency: 0, subAgentCount: 32,
+      bookTitle: '书',
+      authorName: '作者',
+      concurrency: 0,
+      subAgentCount: 32,
     ).normalize().normalized;
     expect(a.concurrency, 1, reason: '下限 1（至少 1 个团队）');
     expect(a.subAgentCount, 10, reason: '固定编制：任何输入都强制 1 组长 + 9 写手');
     expect(a.writerCount, 9);
 
     final MultiAgentBookConfig b = const MultiAgentBookConfig(
-      bookTitle: '书', authorName: '作者', concurrency: 10,
+      bookTitle: '书',
+      authorName: '作者',
+      concurrency: 10,
     ).normalize().normalized;
     expect(b.concurrency, 10, reason: '并发 10 = 10 个章节团队并行写 10 章');
 
     final MultiAgentBookConfig d = const MultiAgentBookConfig(
-      bookTitle: '书', authorName: '作者', concurrency: 99999,
+      bookTitle: '书',
+      authorName: '作者',
+      concurrency: 99999,
     ).normalize().normalized;
     expect(d.concurrency, 9999, reason: '上限 9999 个并行团队');
   });

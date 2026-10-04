@@ -1,5 +1,11 @@
 # NovelCraft Flutter 版 — 交接文档（HANDOFF）
 
+## 最新交接：1.0.0+35（2026-10-04）
+
+新增写作工艺节点 Prompt 配置，支持多模板、编辑保存、选择生效与重启恢复。
+详细接入点、测试结果、发布流程及继承的未完成问题见 [本版交接](docs/项目交接-v1.0.0+35.md)；操作见 [功能使用说明](docs/功能使用说明-v1.0.0+35.md)。
+本版静态分析通过；全量测试 392 通过 / 1 跳过 / 1 既有重复正文样例失败。旧章节的完成状态不应覆盖本版明确列出的限制。
+
 > 生成于 2026-09-12。本文件记录 C# WPF 版 NovelCraft 向 Flutter/Dart 移植的当前进度、架构、验证方式与已知阻塞，供接手者快速上手。
 
 ---
@@ -613,3 +619,84 @@ if ((resp.statusCode == 302 || resp.statusCode == 403) && resp.body.startsWith('
   新增遗留：旧 `one_click_novel_generation_service`（自命名流程）的入口已被多智能体
   向导接管，代码暂留作单章双 Agent 基线，下批可评估移除；
   `Novelcraft_Flutter_source` 与远端仓库的同步由用户决定时机。
+
+---
+
+## 2026-10-04 交接：G1K 预设与双端便携构建（TRAE）
+
+### 本轮交付
+
+- 包版本 `1.0.0+31`。AI 配置页 MainAgent / SubAgent 卡新增「预置 G1K 7.2B 主编 + 2.9B 写手」：先保存并连接官方 7B 端点，再从 7B、3B 各自 `/v1/models` 读取**完整**模型 ID，唯一匹配后才保存；缺失/多版本/失败时不替换旧配置。模型尺寸前缀与 3B 域名内置于 `lib/ai/rwkv/g1k_model_preset.dart`，**密钥未入源码/安装包**。
+- 新配置单独落 `ai_config/book.g1k_preset`，启动时加载，可在卡片「停用写书预设」清除。只有 `multiAgentBookGenerationServiceProvider` 使用它；普通 `DualAgentWorkflowService`、其它一键生成/续写保持原双代理设置。多智能体写书：7B 规划及短段润色、2.9B 正文、两端点校验完整 ID；具体参数与边界见 `docs/RWKV-G1K-双模型写作工艺.md`。
+- 安卓竖屏（触控 + 逻辑宽 <600）换 4 项底部导航，顶部「更多页面」可进入项目概览/卷宗/人物/时间线/设置；横屏和桌面仍使用侧栏。聊天输入：手机软键盘换行、独立发送按钮；网络失败恢复未发出的输入文本；没有默认 provider 时保留文本并提示配置。写书向导在小屏缩短并发标签、限制内容高度及支持滚动。
+- 验证：`flutter analyze --no-pub` 0 问题；`flutter test --no-pub` **363 项通过、1 项既有 skip**，新增 G1K 端点唯一匹配/预设独立持久化及安卓竖屏菜单测试。
+
+### 构建与后续核对
+
+- Windows 从英文 junction `F:\30_Novelcraft_Flutter\novelcraft_en` 构建；APK 从 `subst S:` 构建，避免中文路径导致 CMake/Gradle 失败。**便携包必须包含整个 Windows Release 文件夹**（exe + DLL + data），不能只复制 exe。
+- Windows x64 Release 构建成功；便携 ZIP：`build/NovelCraft-Windows-x64-1.0.0+31-portable.zip`（15,184,710 字节，SHA-256 `1986EAB164754694CC4DA1CD71CE73CC45EB4BF7EC2A913B6A2398546BE8B9B0`）。已检查 ZIP 内含 `Release/novelcraft.exe`、`flutter_windows.dll`、`data/app.so`、`data/icudtl.dat` 等完整 40 项。
+- Android Release APK：`build/app/outputs/flutter-apk/app-release.apk`（72,112,689 字节，SHA-256 `1CF635F1AF3C652934871F8FFFF890FD5B6AB0AD8440F670D9702D511C898AC3`）；`aapt` 核实包名 `com.novelcraft.novelcraft`、`versionName=1.0.0`、`versionCode=31`、minSdk 24 / targetSdk 36。`apksigner verify` 通过 v2 正式签名，证书 SHA-256 为 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`（CN=song）；未使用 debug 证书。
+- 本环境沙箱拒绝写入默认 Android SDK 的 `.knownPackages` 及 Pub 缓存中 `jni/android/.cxx`；实际成功构建时临时复制所需 SDK/依赖到工作区外 `F:\30_Novelcraft_Flutter\android-build-toolchain`，并设置 `PUB_CACHE`、`ANDROID_HOME` / `ANDROID_SDK_ROOT`。另因 `integration_test` 开发依赖在 Release 注册表中被引用但未编译，打包时暂时从 `pubspec.yaml` 排除并重新解析依赖；打包后已恢复该依赖、原 `android/local.properties` SDK 路径，并重跑 `flutter pub get`（锁文件校验和已恢复）。详见 `PITFALLS.md` 第 41 节。
+- 密钥只能由使用者在 AI 配置页填写，切勿通过 `--dart-define` 传入将长期分发的公共包；在聊天中暴露过的 Cloudflare Service Token 建议轮换。
+- `adb devices` 未发现连接设备；未做 APK 安装、Windows 图形启动或真实 G1K 云端端到端小说验收。若云端同尺寸同时开放多个 G1K 版本，一键预设会拒绝猜测，需后续明确选型。`Novelcraft_Flutter_source` 是独立旧快照，本轮未同步；当前工作区还有大量既存未提交改动，勿整体覆盖。
+
+*交接：TRAE，2026-10-04。*
+
+### 最终交付索引（1.0.0+34）
+
+- 当前功能说明：`docs/功能使用说明-v1.0.0+34.md`。
+- Windows：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+34_windows_release.zip`，SHA-256 `BCC4CC67A77A33C76FFCCC9475034BDC0C9F7F6B314B78455D2EC745C3CD6D43`。
+- Android：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+34_release.apk`，versionCode `34`，SHA-256 `F7A03FD4BC7A7CD13748771865C843A1DF68750EB034CB428638173C670F31D8`。
+- 客座读者/13B 审查实现见 `book_review_settings.dart` 与 `book_content_review_service.dart`；源代码备份同步记录见备份目录 `备份说明.txt`。
+
+## 2026-10-04 交接：1.0.0+34 审查团队与双端重新封装
+
+- 新增客座读者配置：最多 3 个第三方平台模型，可分别设置平台、模型、称呼、启用状态和人类品味；评论与 7B 审查意见统一进入留言区。
+- 新增 13B 首席审查员：默认目标为 `RWKV Cloud::official-13b`，7B 会把客座读者意见提交给 13B 复核；13B 可 `approve` 认可 7B，或 `revise` 给出改进意见。意见会继续传给 3B 改写器。
+- 配置持久化：`ai_config/book_review.settings`；实现见 `lib/application/services/book_review_settings.dart`、`book_content_review_service.dart`、`ui/pages/book_review_settings_card.dart`。
+- 使用说明：`docs/功能使用说明-v1.0.0+34.md`。
+- Windows x64 便携包：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+34_windows_release.zip`，15,565,386 字节，SHA-256 `BCC4CC67A77A33C76FFCCC9475034BDC0C9F7F6B314B78455D2EC745C3CD6D43`；包含完整 Release 目录，共 32 个文件。
+- Android APK：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+34_release.apk`，72,604,573 字节，SHA-256 `F7A03FD4BC7A7CD13748771865C843A1DF68750EB034CB428638173C670F31D8`；包名 `com.novelcraft.novelcraft`，versionCode `34`，minSdk `24`，targetSdk `36`，apksigner v2 正式签名通过。
+- 构建期间临时移除 `integration_test` 以绕过 Flutter Release 插件注册问题；构建后已恢复依赖、pubspec、锁文件和 `GeneratedPluginRegistrant.java` 中的 `IntegrationTestPlugin`。
+- 当前无 Android 设备连接，未做实体安装验收；Windows ZIP 已解压核对入口文件。Cloudflare 凭据未写入源码或安装包。
+- 本轮源码已准备无删除增量同步到 `Novelcraft_Flutter_source`，目标目录既有签名材料继续由排除规则保护。
+
+---
+
+## 2026-10-04 交接：T≤1.0 写作参数修订（TRAE）
+
+- 依据 `新一代模型T10修订补丁_20261004.zip（报告v1.1+T≤1/新一代模型四维甜点配置报告.md` 的晨间复测，G1K 写书预设将原 `temperature=1.2` 修订为 **0.88-1.0**（默认请求最低 0.88，短稿重试 1.0），保留 `top_p=0.7` / `presence_penalty=2`；仅影响多智能体写书里的 G1K Cloud 请求，其他 provider 不变。实现见 `lib/ai/rwkv/g1k_writing_profile.dart`、`lib/application/services/multi_agent_book_generation_service.dart`。
+- 保留此前用户确定的 7B MainAgent（规划/润色）、2.9B SubAgent（正文）分工；正文改为约 1100 字/段、单发最多 1200 tokens、单段最多 1200 字，提示词明确「至少写满 N 字」并禁字数自报；少于 800 字的常规段重试一次。检测同句出现三次的循环，截去复读尾部避免传递给下一段；7B 润色结果同样检查，缩水/评分回退继续保留原稿。
+- **报告与当前分工的差异**：新报告建议 7B 担任分段正文主力、3B 转做幕卡/过渡段。本轮不擅自转换用户既定角色；2.9B 的短停概率、章节成稿质量需要真实云端试产验证。报告的凌晨 N=8 是特定时间窗口数据，不硬编码全天并发或强制夜间调度；13B/1.5B 新工艺未接入本次写书预设。
+- 工艺详见 `docs/RWKV-G1K-双模型写作工艺.md`，新陷阱见 `PITFALLS.md` §42。版本 `1.0.0+32`；本轮静态分析 0 问题，完整测试 **367 通过、1 既有 skip**。无连接安卓设备，真实 G1K 请求/章节试产尚未验收；源码有大量此前未提交改动，本轮未重置、未同步独立旧快照。
+- Windows x64：`flutter build windows --release --no-pub` 成功；`build/NovelCraft-Windows-x64-1.0.0+32-portable.zip`（15,188,499 字节，SHA-256 `1125839289065BBF2369A4B04A3B379FA9382D5856A141B6121F6EBB07DA28CD`）。ZIP 内 40 项，含 `Release/novelcraft.exe`、`flutter_windows.dll`、`data/app.so`、`data/icudtl.dat`，必须整体解压使用；未做 Windows GUI 手工启动验收。
+- Android：`build/app/outputs/flutter-apk/app-release.apk`（72,112,689 字节，SHA-256 `34751319DD4DCE4A34F7C23697FB8017F2840DCEF49245BB75D848D82BA263C4`）；`aapt` 验证包名 `com.novelcraft.novelcraft`、`versionName=1.0.0`、`versionCode=32`、minSdk 24 / targetSdk 36；`apksigner verify` 通过 v2 正式签名，证书 SHA-256 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`（CN=song）。`adb devices` 无设备，尚未安装实测。
+- Android 打包沿用 §41 的可写 SDK/Pub 缓存；暂时排除测试依赖 `integration_test` 以绕开 Release 插件注册表错误，产物生成后已恢复依赖、默认 SDK 路径、锁文件校验和并复测。构建命令最后因沙箱拒绝写默认 `D:\Android\Sdk\.knownPackages` 返回非零，**不能称命令整体成功**；但新 APK 的时间戳、版本、哈希与签名均经独立核验。此次没有通过 `--dart-define` 固化 CF 凭据到安装包。
+
+*交接：TRAE，2026-10-04 07:44。*
+
+### 10:17 源码备份补记
+
+- 按用户后续要求，已将本主工程的 `1.0.0+32` 源码增量备份到 `F:\30_Novelcraft_Flutter\Novelcraft_Flutter_source` **目录根部**；此前「独立旧快照未同步」描述仅代表当时状态。无删除同步，保留备份目录独有文件；按既有备份约定排除模型、构建产物、工具缓存与密钥文件，复核 448 个源码文件待复制 0、失败 0。详情见目标目录 `备份说明.txt`。
+- 备份目录原本已有 `android/key.properties` 与 `android/app/upload-keystore.jks`，此次没有覆盖或删除；**此目录含旧签名材料，不得直接作为公开源码包分发**。本次未对备份副本单独执行 Flutter 测试，构建和完整测试均在主工程进行。
+
+*补记：TRAE，2026-10-04 10:17。*
+
+### 2026-10-04 RWKV Cloud 多端点配置补记
+
+- AI 配置页增加官方 1.5B / 3B / 7B / 13B 端点模板和自定义端点；模板不预填 API Key、模型名或 Cloudflare Access 凭据。切换到 RWKV Cloud 或切换端点时从当前地址读取 `/models`，服务端模型列表可供选择；网络/鉴权错误不会退回伪造模型。
+- 各 profile 独立保留 URL、API Key、CF Access 凭据、模型选择及运行参数；旧版单 RWKV Cloud 配置在首次加载时迁移。自定义配置可删除，官方模板保留。运行时仍是单个 `RWKV Cloud` provider 实例，所选 profile 决定当前活动端点。
+- 验证：`flutter analyze --no-pub` 无问题；专项 `rwkv_cloud_provider_test.dart` 13 项全通过；完整 `flutter test --no-pub` 372 项通过、1 项既有 skip。测试期间出现 Drift 多测试数据库复用警告，但无测试失败。未构建新安装包，也未同步源码备份目录。
+- 安全：聊天中曾出现 Cloudflare Access Service Token。未将其复制到源码、默认配置或安装包；建议在 Cloudflare 轮换该 token，应用内由用户重新填写。
+
+*补记：TRAE，2026-10-04。*
+
+## 2026-10-04 交接：1.0.0+33 双端重封装与源码备份（TRAE）
+
+- 版本提升至 `1.0.0+33`。Windows x64 Release 从英文路径构建并打包完整 `Release/` 目录；交付包 `F:\30_Novelcraft_Flutter\novelcraft_1.0.0+33_windows_release.zip`，15,206,754 字节，SHA-256 `61B64BBAB9B61E2BA52BDCB25B04973B5EDB4410C9EDB1705D70D3028332C6B7`。包内 40 项，包含 `novelcraft.exe`、Flutter DLL 与 `data/` 运行资源。
+- Android Release APK：`F:\30_Novelcraft_Flutter\novelcraft_1.0.0+33_release.apk`，72,227,377 字节，SHA-256 `8061509CBF3FBBAB5A18213C77356CFA7C530276C3031ECAD36C552FE45EA256`。包名 `com.novelcraft.novelcraft`，`versionCode=33`、`versionName=1.0.0`、minSdk 24、targetSdk 36；`apksigner verify` 通过 v2 正式签名，证书为 `CN=song`，SHA-256 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`。
+- 两种产物的构建输出与交付副本哈希一致。Windows ZIP 已核实完整性；APK 已独立验包、验签。当前没有 Android 设备连接，未做实体安装验收，也未做 Windows 图形界面手工启动验收。
+- Android 构建沿用 §41 的可写工具链与 `subst S:` 路径；为绕过 Flutter 3.38.5 Release 插件注册表问题，构建时短暂移除 `integration_test` 开发依赖。构建后已恢复 `pubspec.yaml`、锁文件、`local.properties`、插件依赖缓存及含 `IntegrationTestPlugin` 的生成注册表；不得把临时注册表覆盖进备份。
+- 已将当前源码无删除增量同步至 `F:\30_Novelcraft_Flutter\Novelcraft_Flutter_source`，排除构建产物、缓存、环境配置和签名文件，保留目标独有内容。该目录原有签名材料不作为同步内容覆盖，目录仍不可直接公开分发。详细同步核验见备份目录 `备份说明.txt`。
+
+*交接：TRAE，2026-10-04。*

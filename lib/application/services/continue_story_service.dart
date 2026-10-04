@@ -9,6 +9,7 @@
 //   ③ needNewVolume = true 时自主创建新分卷（自动命名）
 //   ④ 双 Agent 写正文（失败回落单次写手调用）→ 落库 + 联动同步
 library;
+import '../../ai/utils/fiction_quality.dart';
 
 import 'dart:convert';
 
@@ -258,6 +259,13 @@ class ContinueStoryService {
       );
     }
 
+    if (FictionQuality.issue(content) != null) {
+      return ContinueStoryResult(
+        isSuccess: false,
+        message: '正文含问答、语言漂移或复读，已拒绝写入，请重新生成。',
+        projectId: projectId,
+      );
+    }
     // ---- ⑤ 落库（查重防重复创建）+ 联动同步 + 章节档案 ----
     onProgress?.call('正在保存章节…');
     final List<ChapterRow> existingInVolume =

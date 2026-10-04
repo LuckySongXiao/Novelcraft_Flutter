@@ -13,6 +13,7 @@ import '../../application/services/multi_agent_book_generation_service.dart';
 import '../../l10n/l10n.dart';
 import '../state/multi_agent_run.dart';
 import '../widgets/readonly_prose_view.dart';
+import 'writing_prompt_settings_page.dart';
 
 /// 弹出「多智能体协同写书」向导对话框；用户中途关闭返回 null。
 Future<MultiAgentBookResult?> showMultiAgentGenerationDialog(
@@ -125,9 +126,17 @@ class _MultiAgentWizardDialogState
       title: Text(l10n.t('MAG.Title', '多智能体协同写书')),
       content: SizedBox(
         width: 480,
-        child: _running
-            ? _buildRunning(l10n)
-            : (r == null ? _buildForm(l10n) : _buildResult(context, l10n, r)),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+          ),
+          child: _running
+              ? SingleChildScrollView(child: _buildRunning(l10n))
+              : (r == null
+                  ? _buildForm(l10n)
+                  : SingleChildScrollView(
+                      child: _buildResult(context, l10n, r))),
+        ),
       ),
       actions: <Widget>[
         if (!_running && r == null)
@@ -159,6 +168,7 @@ class _MultiAgentWizardDialogState
 
   Widget _buildForm(L10n l10n) {
     final scheme = Theme.of(context).colorScheme;
+    final compact = MediaQuery.sizeOf(context).width < 600;
     return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -167,10 +177,8 @@ class _MultiAgentWizardDialogState
           Text(
             l10n.t(
               'MAG.FormIntro',
-              '开始前请填写以下信息。开始后：主智能体先规划主线大纲，'
-                  '再自主分派子智能体并行规划分卷大纲与章节大纲；'
-                  '每章由一个写作团队（含组长）分段协同完成，组长负责分工、'
-                  '边界与最终拼接润色排版。',
+              '先配置书籍信息。G1K 组合中 7.2B 负责大纲和润色，2.9B 负责正文；'
+                  '其他模型按所选写作工艺执行。',
             ),
             style: const TextStyle(fontSize: 12),
           ),
@@ -223,6 +231,13 @@ class _MultiAgentWizardDialogState
           ),
           const SizedBox(height: 10),
           // ---- 写作工艺（正文产出方式）----
+          TextButton.icon(
+            icon: const Icon(Icons.edit_note),
+            label: const Text('配置各工艺节点 Prompt 模板'),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => const WritingPromptSettingsPage(),
+            )),
+          ),
           // 2026-09-30 实测：单次生成自然收敛 ≈2000~2800 字且尾部易复读，
           // 故「主笔分段串行」为推荐默认；旧 9 写手并行保留但成本约 8 倍。
           Align(
@@ -302,12 +317,16 @@ class _MultiAgentWizardDialogState
               ButtonSegment<MultiAgentSpeedMode>(
                 value: MultiAgentSpeedMode.normal,
                 icon: const Icon(Icons.speed, size: 18),
-                label: Text(l10n.t('MAG.Mode.Normal', '普通模式（≤100 团队）')),
+                label: Text(compact
+                    ? l10n.t('MAG.Mode.NormalShort', '普通')
+                    : l10n.t('MAG.Mode.Normal', '普通模式（≤100 团队）')),
               ),
               ButtonSegment<MultiAgentSpeedMode>(
                 value: MultiAgentSpeedMode.turbo,
                 icon: const Icon(Icons.rocket_launch_outlined, size: 18),
-                label: Text(l10n.t('MAG.Mode.Turbo', '高速模式（全部同时开工）')),
+                label: Text(compact
+                    ? l10n.t('MAG.Mode.TurboShort', '高速')
+                    : l10n.t('MAG.Mode.Turbo', '高速模式（全部同时开工）')),
               ),
             ],
             selected: <MultiAgentSpeedMode>{_mode},

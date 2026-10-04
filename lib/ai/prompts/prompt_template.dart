@@ -72,6 +72,9 @@ class PromptTemplateRegistry {
 
   final Map<String, String> _files;
 
+  PromptTemplateRegistry withOverrides(Map<String, String> overrides) =>
+      PromptTemplateRegistry({..._files, ...overrides});
+
   /// 对应 C# `PromptTemplate.Get(templateId)`。
   String? get(String templateId, {required bool isEnglish}) {
     if (templateId.trim().isEmpty) return null;

@@ -180,6 +180,28 @@ class ProjectOverviewPage extends ConsumerWidget {
                       '（必要时自主追加新分卷，卷名 / 章名均自主命名）并完成本章正文。'),
                   style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                 ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: () => _auditArchive(context, ref),
+                      icon: const Icon(Icons.fact_check_outlined),
+                      label: const Text('审查并校准项目档案'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _reviewBook(context, ref),
+                      icon: const Icon(Icons.rate_review_outlined),
+                      label: const Text('7B 全书审查并改进'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _showReviewComments(context, ref),
+                      icon: const Icon(Icons.forum_outlined),
+                      label: const Text('查看审查留言'),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -200,6 +222,103 @@ class ProjectOverviewPage extends ConsumerWidget {
           ],
         ),
       ],
+    );
+  }
+
+  Future<void> _auditArchive(BuildContext context, WidgetRef ref) async {
+    final service = ref.read(projectArchiveAuditServiceProvider);
+    final report = await service.audit(projectId);
+    if (report == null || !context.mounted) return;
+    final changed = report.isConsistent ? 0 : await service.calibrate(projectId);
+    final after = changed == 0 ? report : await service.audit(projectId);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(report.isConsistent
+          ? '项目与写作档案一致：${report.archiveEntries} 条'
+          : '档案校准完成：修正/移除 $changed 条，剩余异常 ${after?.mismatchCount ?? 0} 条'),
+    ));
+  }
+
+  Future<void> _reviewBook(BuildContext context, WidgetRef ref) async {
+    final chapters = await ref.read(chapterRepositoryProvider).getByProjectId(projectId);
+    if (!context.mounted) return;
+    if (chapters.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('项目暂无章节正文')),
+      );
+      return;
+    }
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('7B 全书审查并改进'),
+        content: Text('将逐章读取 ${chapters.length} 章正文、大纲和上下文。7B 先写审查留言，发现异常后交给 3B 改写并回写版本。'),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始')),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    int reviewed = 0;
+    int applied = 0;
+    for (final chapter in chapters) {
+      if (!context.mounted) return;
+      final report = await ref.read(bookContentReviewServiceProvider).reviewChapter(
+        projectId: projectId,
+        chapterId: chapter.id,
+        apply: true,
+      );
+      if (report != null) {
+        reviewed++;
+        if (report.applied) applied++;
+      }
+    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('审查完成：已审查 $reviewed 章，3B 已改进 $applied 章。留言已保存。'),
+    ));
+    ref.invalidate(projectStatsProvider(projectId));
+  }
+
+  Future<void> _showReviewComments(BuildContext context, WidgetRef ref) async {
+    final chapters = await ref.read(chapterRepositoryProvider).getByProjectId(projectId);
+    final service = ref.read(bookContentReviewServiceProvider);
+    final List<(String, String, String, String)> rows = <(String, String, String, String)>[];
+    for (final chapter in chapters) {
+      for (final comment in await service.commentsFor(projectId, chapter.id)) {
+        rows.add((chapter.title, comment.author, comment.severity, '${comment.problem}\n建议：${comment.suggestion}'));
+      }
+    }
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('7B 审查留言'),
+        content: SizedBox(
+          width: 560,
+          height: 420,
+          child: rows.isEmpty
+              ? const Center(child: Text('暂无留言，请先运行全书审查'))
+              : ListView.separated(
+                  itemCount: rows.length,
+                  separatorBuilder: (BuildContext context, int index) {
+                    return const Divider();
+                  },
+                  itemBuilder: (BuildContext _, int i) {
+                    final (String title, String author, String severity, String body) = rows[i];
+                    return ListTile(
+                      dense: true,
+                      title: Text('[$severity] $title · $author'),
+                      subtitle: Text(body),
+                    );
+                  },
+                ),
+        ),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        ],
+      ),
     );
   }
 

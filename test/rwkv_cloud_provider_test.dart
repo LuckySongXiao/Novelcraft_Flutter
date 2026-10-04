@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:novelcraft/ai/models/provider.dart';
 import 'package:novelcraft/ai/providers/rwkv_cloud_provider.dart';
 
 /// 云端 RWKV Provider 的回归测试（PITFALLS §27.2 / §31）。
@@ -20,28 +21,31 @@ void main() {
   late Map<String, String> capturedHeaders;
 
   MockClient okModels() => MockClient((http.Request req) async {
-        capturedUrl = req.url;
-        capturedHeaders = req.headers;
-        return http.Response(
-          jsonEncode(<String, dynamic>{
-            'object': 'list',
-            'data': <dynamic>[
-              <String, dynamic>{
-                'id': kRwkvCloudDefaultModel,
-                'object': 'model',
-                'owned_by': 'rwkv_lighting_cuda',
-              },
-            ],
-          }),
-          200,
-          headers: <String, String>{'content-type': 'application/json'},
-        );
-      });
+    capturedUrl = req.url;
+    capturedHeaders = req.headers;
+    return http.Response(
+      jsonEncode(<String, dynamic>{
+        'object': 'list',
+        'data': <dynamic>[
+          <String, dynamic>{
+            'id': 'rwkv7-g1k-7.2b-20261004-ctx25600',
+            'object': 'model',
+            'owned_by': 'rwkv_lighting_cuda',
+          },
+        ],
+      }),
+      200,
+      headers: <String, String>{'content-type': 'application/json'},
+    );
+  });
 
   group('Cloudflare Access 头（精确大小写）', () {
     test('两个头名常量必须逐字节正确', () {
-      expect(kHeaderCfAccessClientId, 'CF-Access-Client-Id',
-          reason: '必须是 Id（I 大写 + d 小写），不是 ID');
+      expect(
+        kHeaderCfAccessClientId,
+        'CF-Access-Client-Id',
+        reason: '必须是 Id（I 大写 + d 小写），不是 ID',
+      );
       expect(kHeaderCfAccessClientSecret, 'CF-Access-Client-Secret');
     });
 
@@ -58,8 +62,11 @@ void main() {
       expect(capturedHeaders['cf-access-client-id'], 'abc.access');
       expect(capturedHeaders['cf-access-client-secret'], 'deadbeef');
       expect(capturedUrl.toString(), '$kRwkvCloudDefaultBaseUrl/models');
-      expect(capturedUrl.toString().contains('/openai/v1'), isFalse,
-          reason: '/openai/v1/* 在 rwkv_lightning_cuda 上是 404（PITFALLS §31.5）');
+      expect(
+        capturedUrl.toString().contains('/openai/v1'),
+        isFalse,
+        reason: '/openai/v1/* 在 rwkv_lightning_cuda 上是 404（PITFALLS §31.5）',
+      );
       prov.dispose();
     });
 
@@ -69,6 +76,80 @@ void main() {
       expect(capturedHeaders.containsKey('cf-access-client-id'), isFalse);
       expect(capturedHeaders.containsKey('cf-access-client-secret'), isFalse);
       prov.dispose();
+    });
+
+    test('官方端点模板不预置 API Key、模型 ID 或 CF 凭据', () {
+      expect(kRwkvOfficialEndpointProfiles, hasLength(4));
+      expect(
+        kRwkvOfficialEndpointProfiles.map((p) => p.baseUrl),
+        containsAll(<String>[
+          'https://api-1b5.rwkvos.com/v1',
+          'https://api-3b.rwkvos.com/v1',
+          'https://api-7b.rwkvos.com/v1',
+          'https://api-13b.rwkvos.com/v1',
+        ]),
+      );
+      for (final RwkvCloudEndpointProfile profile
+          in kRwkvOfficialEndpointProfiles) {
+        expect(profile.apiKey, isEmpty);
+        expect(profile.defaultModel, isEmpty);
+        expect(profile.cfAccessClientId, isEmpty);
+        expect(profile.cfAccessClientSecret, isEmpty);
+      }
+    });
+
+    test('RWKV Cloud 接受空 API Key 与空默认模型', () {
+      final RwkvCloudConfiguration cfg = RwkvCloudConfiguration();
+      expect(cfg.apiKey, isEmpty);
+      expect(cfg.defaultModel, isEmpty);
+      expect(cfg.getValidationErrors(), isEmpty);
+      expect(cfg.isValid(), isTrue);
+    });
+
+    test('按配置的 API 地址自动请求 /models 并读取返回模型名', () async {
+      final MockClient client = MockClient((http.Request req) async {
+        capturedUrl = req.url;
+        capturedHeaders = req.headers;
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'data': <Map<String, String>>[
+              <String, String>{'id': 'rwkv7-g1k-1.5b-test'},
+            ],
+          }),
+          200,
+          headers: <String, String>{'content-type': 'application/json'},
+        );
+      });
+      final RwkvCloudProvider provider = RwkvCloudProvider(client: client);
+      await provider.initialize(
+        RwkvCloudConfiguration(
+          baseUrl: 'https://api-1b5.rwkvos.com/v1',
+          cfAccessClientId: 'test.access',
+          cfAccessClientSecret: 'test-secret',
+        ),
+      );
+      final List<ModelInfo> models = await provider.getAvailableModels();
+      expect(capturedUrl.toString(), 'https://api-1b5.rwkvos.com/v1/models');
+      expect(capturedHeaders['cf-access-client-id'], 'test.access');
+      expect(models.map((m) => m.id), <String>['rwkv7-g1k-1.5b-test']);
+      provider.dispose();
+    });
+
+    test('Cloudflare HTML 认证失败时不伪造模型列表', () async {
+      final RwkvCloudProvider provider = RwkvCloudProvider(
+        client: MockClient(
+          (http.Request req) async => http.Response(
+            '<html>Access denied</html>',
+            403,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ),
+      );
+      await provider.initialize(
+        RwkvCloudConfiguration(defaultModel: 'manually-entered-model'),
+      );
+      expect(await provider.getAvailableModels(), isEmpty);
+      provider.dispose();
     });
   });
 
@@ -81,12 +162,40 @@ void main() {
         defaultModel: kRwkvCloudDefaultModel,
       );
       final back = RwkvCloudConfiguration.fromCloudMap(
-          jsonDecode(jsonEncode(cfg.toCloudMap())) as Map<String, Object?>);
+        jsonDecode(jsonEncode(cfg.toCloudMap())) as Map<String, Object?>,
+      );
       expect(back.cfAccessClientId, 'id.access');
       expect(back.cfAccessClientSecret, 'sec');
       expect(back.baseUrl, kRwkvCloudDefaultBaseUrl);
       expect(back.defaultModel, kRwkvCloudDefaultModel);
       expect(back.hasCfCredentials, isTrue);
+    });
+
+    test('自定义端点配置序列化保留凭据、模型和运行参数', () {
+      const RwkvCloudEndpointProfile profile = RwkvCloudEndpointProfile(
+        id: 'custom-1',
+        name: 'Private RWKV',
+        baseUrl: 'https://rwkv.example/v1',
+        apiKey: 'user-api-key',
+        defaultModel: 'rwkv-custom-model',
+        cfAccessClientId: 'private.access',
+        cfAccessClientSecret: 'private-secret',
+        timeoutSeconds: 240,
+        defaultMaxTokens: 8192,
+        defaultTemperature: 0.9,
+        enableStreaming: false,
+      );
+      final RwkvCloudEndpointProfile restored =
+          RwkvCloudEndpointProfile.fromJson(profile.toJson());
+      expect(restored.baseUrl, profile.baseUrl);
+      expect(restored.apiKey, profile.apiKey);
+      expect(restored.defaultModel, profile.defaultModel);
+      expect(restored.cfAccessClientId, profile.cfAccessClientId);
+      expect(restored.cfAccessClientSecret, profile.cfAccessClientSecret);
+      expect(restored.timeoutSeconds, profile.timeoutSeconds);
+      expect(restored.defaultMaxTokens, profile.defaultMaxTokens);
+      expect(restored.defaultTemperature, profile.defaultTemperature);
+      expect(restored.enableStreaming, profile.enableStreaming);
     });
 
     test('空凭证不算已配置', () {
@@ -97,12 +206,14 @@ void main() {
   group('CF 认证失败识别', () {
     test('返回 HTML 时给可读提示而不是裸 FormatException', () async {
       final prov = RwkvCloudProvider(
-        client: MockClient((http.Request req) async => http.Response(
-              '<!DOCTYPE html><html><head><title>Sign in</title></head>'
-              '<body>cloudflareaccess.com Access login</body></html>',
-              403,
-              headers: <String, String>{'content-type': 'text/html'},
-            )),
+        client: MockClient(
+          (http.Request req) async => http.Response(
+            '<!DOCTYPE html><html><head><title>Sign in</title></head>'
+            '<body>cloudflareaccess.com Access login</body></html>',
+            403,
+            headers: <String, String>{'content-type': 'text/html'},
+          ),
+        ),
       );
       final r = await prov.testConnection();
       expect(r.isSuccess, isFalse);

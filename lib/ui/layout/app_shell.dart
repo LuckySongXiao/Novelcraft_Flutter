@@ -119,13 +119,43 @@ class _AppShellState extends ConsumerState<AppShell> {
     // 手机横屏逻辑宽 ~780：主侧栏展开（200px）会把内容区挤到 ~420px，
     // 二级导航再占 160px 后正文仅 ~260px。窄屏默认收起为图标栏（80px）。
     final width = MediaQuery.sizeOf(context).width;
+    final phonePortrait = kSubNavTouchPlatform && width < 600;
     final extended = _extendedOverride ?? width >= 1000;
     final writingPill = _buildWritingPill(context);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(_titleFor(nav.target, l10n)),
-        leading: IconButton(
+        leading: phonePortrait
+            ? PopupMenuButton<NavigationTarget>(
+                icon: const Icon(Icons.menu),
+                tooltip: l10n.t('Shell.MorePages', '更多页面'),
+                onSelected: (target) =>
+                    ref.read(navigationProvider.notifier).navigateTo(target),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: NavigationTarget.projectOverview,
+                    child: Text(l10n.t('Shell.PO.Title', '项目概览')),
+                  ),
+                  PopupMenuItem(
+                    value: NavigationTarget.volumeManagement,
+                    child: Text(l10n.t('Shell.VM.Title', '卷宗管理')),
+                  ),
+                  PopupMenuItem(
+                    value: NavigationTarget.characterManagement,
+                    child: Text(l10n.t('Shell.CM.Title', '人物管理')),
+                  ),
+                  PopupMenuItem(
+                    value: NavigationTarget.timeline,
+                    child: Text(l10n.t('Shell.TL.Title', '时间线')),
+                  ),
+                  PopupMenuItem(
+                    value: NavigationTarget.settings,
+                    child: Text(l10n.t('Shell.Settings', '设置')),
+                  ),
+                ],
+              )
+            : IconButton(
           icon: Icon(extended ? Icons.menu_open : Icons.menu),
           tooltip: extended
               ? l10n.t('Shell.CollapseRail', '收起侧栏')
@@ -148,7 +178,14 @@ class _AppShellState extends ConsumerState<AppShell> {
               onPressed: _oneClickGenerate,
             ),
           const SizedBox(width: 4),
-          ...writingPill,
+          if (phonePortrait && writingPill.isNotEmpty)
+            IconButton(
+              tooltip: l10n.t('MAG.Running', '写作中，查看进度'),
+              onPressed: () => showMultiAgentRunMatrixDialog(context),
+              icon: const Icon(Icons.pending_actions, color: Colors.green),
+            )
+          else
+            ...writingPill,
           IconButton(
             icon: Text(l10n.isEnglish ? '中' : 'EN'),
             tooltip: l10n.isEnglish
@@ -157,7 +194,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             onPressed: () =>
                 ref.read(localeControllerProvider.notifier).toggle(),
           ),
-          PopupMenuButton<String>(
+          if (!phonePortrait) PopupMenuButton<String>(
             icon: const Icon(Icons.palette_outlined),
             tooltip: l10n.t('Shell.Theme', '主题'),
             onSelected: (id) =>
@@ -180,6 +217,37 @@ class _AppShellState extends ConsumerState<AppShell> {
           const SizedBox(width: 8),
         ],
       ),
+      bottomNavigationBar: phonePortrait
+          ? NavigationBar(
+              height: 64,
+              selectedIndex: switch (_railIndex(nav.target)) {
+                3 => 1,
+                5 => 2,
+                6 => 3,
+                _ => 0,
+              },
+              onDestinationSelected: (index) =>
+                  _onRailSelected(context, const [0, 3, 5, 6][index]),
+              destinations: [
+                NavigationDestination(
+                  icon: const Icon(Icons.folder_outlined),
+                  label: l10n.t('Shell.PM.Title', '项目管理'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.article_outlined),
+                  label: l10n.t('Shell.ChM.Title', '章节管理'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.public_outlined),
+                  label: l10n.t('Shell.WS.Title', '世界观'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.smart_toy_outlined),
+                  label: l10n.t('Shell.AC.Title', 'AI 助手'),
+                ),
+              ],
+            )
+          : null,
       body: SafeArea(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -189,7 +257,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             // ⚠ NavigationRail 外层 Column 是 MainAxisSize.max 且含 Flexible，
             // 直接塞进滚动视图会触发 unbounded 断言，必须套 IntrinsicHeight；
             // ConstrainedBox(minHeight) 让内容不满一屏时仍撑满整列（背景不断层）。
-            Flexible(
+            if (!phonePortrait) Flexible(
               child: LayoutBuilder(
                 builder: (context, box) {
                   return SingleChildScrollView(

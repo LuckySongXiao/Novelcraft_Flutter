@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/di.dart';
+import '../../application/services/agent_endpoint_registry.dart';
 import '../../data/storage/key_value_store.dart';
 import '../../l10n/l10n.dart';
 import '../../ai/models/provider.dart';
@@ -11,7 +12,9 @@ import '../../ai/providers/openai_compatible_provider.dart';
 import '../../ai/providers/ollama_provider.dart';
 import '../../ai/providers/rwkv_provider.dart';
 import '../../ai/providers/rwkv_cloud_provider.dart';
-import '../../ai/rwkv/rwkv_engine.dart' show RwkvEngineConfig, RwkvNativeOptions;
+import '../../ai/rwkv/rwkv_engine.dart'
+    show RwkvEngineConfig, RwkvNativeOptions;
+import '../../ai/rwkv/g1k_model_preset.dart';
 import '../../ai/runtime_settings.dart';
 import '../../ai/rwkv/rwkv_gpu_probe.dart';
 import '../../ai/rwkv/rwkv_model_fit.dart';
@@ -31,6 +34,7 @@ import '../../ai/providers/deepseek_provider.dart';
 import '../../ai/providers/openrouter_provider.dart';
 import '../../ai/providers/zhipu_provider.dart';
 import '../../ai/workflow/dual_agent_workflow.dart';
+import 'book_review_settings_card.dart';
 
 enum _ProviderKind {
   deepseek,
@@ -47,27 +51,26 @@ enum _ProviderKind {
 }
 
 String _pvdLabel(_ProviderKind kind, bool isEnglish) => switch (kind) {
-      _ProviderKind.deepseek => 'DeepSeek',
-      _ProviderKind.zhipu => isEnglish ? 'Zhipu AI' : '智谱 AI',
-      _ProviderKind.openrouter => 'OpenRouter',
-      _ProviderKind.ollama => isEnglish ? 'Ollama (Local)' : 'Ollama (本地)',
-      _ProviderKind.rwkv => isEnglish ? 'RWKV (Local)' : 'RWKV (本地)',
-      _ProviderKind.rwkvCloud =>
-        isEnglish ? 'RWKV Cloud (Official)' : 'RWKV 云端（官方）',
-      _ProviderKind.custom =>
-        isEnglish ? 'OpenAI Compatible' : 'OpenAI 兼容',
-    };
+  _ProviderKind.deepseek => 'DeepSeek',
+  _ProviderKind.zhipu => isEnglish ? 'Zhipu AI' : '智谱 AI',
+  _ProviderKind.openrouter => 'OpenRouter',
+  _ProviderKind.ollama => isEnglish ? 'Ollama (Local)' : 'Ollama (本地)',
+  _ProviderKind.rwkv => isEnglish ? 'RWKV (Local)' : 'RWKV (本地)',
+  _ProviderKind.rwkvCloud =>
+    isEnglish ? 'RWKV Cloud (Official)' : 'RWKV 云端（官方）',
+  _ProviderKind.custom => isEnglish ? 'OpenAI Compatible' : 'OpenAI 兼容',
+};
 
 extension _ProviderKindX on _ProviderKind {
   IconData get icon => switch (this) {
-        _ProviderKind.deepseek => Icons.auto_awesome,
-        _ProviderKind.zhipu => Icons.lightbulb_outline,
-        _ProviderKind.openrouter => Icons.hub_outlined,
-        _ProviderKind.ollama => Icons.computer_outlined,
-        _ProviderKind.rwkv => Icons.memory_outlined,
-        _ProviderKind.rwkvCloud => Icons.cloud_outlined,
-        _ProviderKind.custom => Icons.settings_input_component_outlined,
-      };
+    _ProviderKind.deepseek => Icons.auto_awesome,
+    _ProviderKind.zhipu => Icons.lightbulb_outline,
+    _ProviderKind.openrouter => Icons.hub_outlined,
+    _ProviderKind.ollama => Icons.computer_outlined,
+    _ProviderKind.rwkv => Icons.memory_outlined,
+    _ProviderKind.rwkvCloud => Icons.cloud_outlined,
+    _ProviderKind.custom => Icons.settings_input_component_outlined,
+  };
 
   bool get isLocal =>
       this == _ProviderKind.ollama || this == _ProviderKind.rwkv;
@@ -120,39 +123,39 @@ class _ProviderConfig {
   int rwkvMaxConcurrentSessions = 16;
 
   _ProviderConfig(this.kind)
-      : baseUrl = switch (kind) {
-          _ProviderKind.deepseek => 'https://api.deepseek.com/v1',
-          _ProviderKind.zhipu => 'https://open.bigmodel.cn/api/paas/v4',
-          _ProviderKind.openrouter => kOpenRouterDefaultBaseUrl,
-          _ProviderKind.ollama => 'http://localhost:11434',
-          _ProviderKind.rwkv => 'http://localhost:8000',
-          _ProviderKind.rwkvCloud => kRwkvCloudDefaultBaseUrl,
-          _ProviderKind.custom => 'https://api.openai.com/v1',
-        },
-        apiKey = '',
-        defaultModel = switch (kind) {
-          _ProviderKind.deepseek => 'deepseek-chat',
-          _ProviderKind.zhipu => 'glm-4-flash',
-          _ProviderKind.openrouter => kOpenRouterDefaultModel,
-          _ProviderKind.ollama => 'qwen2.5:7b',
-          _ProviderKind.rwkv => 'rwkv7-g1i',
-          _ProviderKind.rwkvCloud => kRwkvCloudDefaultModel,
-          _ProviderKind.custom => 'gpt-3.5-turbo',
-        },
-        timeoutSeconds = 120,
-        defaultTemperature = 0.7,
-        defaultMaxTokens = 4000,
-        enableStreaming = true;
+    : baseUrl = switch (kind) {
+        _ProviderKind.deepseek => 'https://api.deepseek.com/v1',
+        _ProviderKind.zhipu => 'https://open.bigmodel.cn/api/paas/v4',
+        _ProviderKind.openrouter => kOpenRouterDefaultBaseUrl,
+        _ProviderKind.ollama => 'http://localhost:11434',
+        _ProviderKind.rwkv => 'http://localhost:8000',
+        _ProviderKind.rwkvCloud => kRwkvCloudDefaultBaseUrl,
+        _ProviderKind.custom => 'https://api.openai.com/v1',
+      },
+      apiKey = '',
+      defaultModel = switch (kind) {
+        _ProviderKind.deepseek => 'deepseek-chat',
+        _ProviderKind.zhipu => 'glm-4-flash',
+        _ProviderKind.openrouter => kOpenRouterDefaultModel,
+        _ProviderKind.ollama => 'qwen2.5:7b',
+        _ProviderKind.rwkv => 'rwkv7-g1i',
+        _ProviderKind.rwkvCloud => '',
+        _ProviderKind.custom => 'gpt-3.5-turbo',
+      },
+      timeoutSeconds = 120,
+      defaultTemperature = 0.7,
+      defaultMaxTokens = 4000,
+      enableStreaming = true;
 
   String get registeredName => switch (kind) {
-        _ProviderKind.deepseek => 'DeepSeek',
-        _ProviderKind.zhipu => 'ZhipuAI',
-      _ProviderKind.openrouter => 'OpenRouter',
-        _ProviderKind.ollama => 'Ollama',
-        _ProviderKind.rwkv => 'RWKV',
-        _ProviderKind.rwkvCloud => 'RWKV Cloud',
-        _ProviderKind.custom => 'Custom',
-      };
+    _ProviderKind.deepseek => 'DeepSeek',
+    _ProviderKind.zhipu => 'ZhipuAI',
+    _ProviderKind.openrouter => 'OpenRouter',
+    _ProviderKind.ollama => 'Ollama',
+    _ProviderKind.rwkv => 'RWKV',
+    _ProviderKind.rwkvCloud => 'RWKV Cloud',
+    _ProviderKind.custom => 'Custom',
+  };
 
   /// 模型最大参考长度 —— **恒等于「最大令牌数」**（用户约定：两者必须相等）。
   ///
@@ -186,8 +189,18 @@ const List<int> kMaxTokensSteps = <int>[
 
 /// 档位刻度标签（与 [kMaxTokensSteps] 一一对应）。
 const List<String> kMaxTokensStepLabels = <String>[
-  '512', '1K', '2K', '4K', '8K', '16K', '32K', '64K', '128K', '256K',
-  '512K', '1M',
+  '512',
+  '1K',
+  '2K',
+  '4K',
+  '8K',
+  '16K',
+  '32K',
+  '64K',
+  '128K',
+  '256K',
+  '512K',
+  '1M',
 ];
 
 /// 值 → 档位标签（16K/32K/.../1M；非档位值显示实际数值）。
@@ -221,6 +234,12 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   bool _testing = false;
   ConnectionTestResult? _lastTest;
   String? _connectingTo;
+  List<RwkvCloudEndpointProfile> _cloudProfiles = kRwkvOfficialEndpointProfiles;
+  String _activeCloudProfileId = 'official-7b';
+  List<String> _cloudModelIds = <String>[];
+  bool _cloudModelsLoading = false;
+  String? _cloudModelsError;
+  int _cloudModelsRequestId = 0;
 
   final List<RwkvLocalModel> _rwkvModels = <RwkvLocalModel>[];
   bool _rwkvScanning = false;
@@ -239,6 +258,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadPersistedRwkvPrefs();
       await _loadPersistedProviderConfigs();
+      await _loadRwkvCloudProfiles();
       _refreshFromManager();
       _ensureRwkvScanned();
     });
@@ -249,6 +269,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
 
   /// 云端 RWKV（api-7b.rwkvos.com）的配置：baseUrl + CF Service Token。
   static const String _kvKeyRwkvCloudCfg = 'rwkv.cloud_configuration';
+  static const String _kvKeyRwkvCloudProfiles = 'rwkv.cloud_profiles';
+  static const String _kvKeyRwkvCloudActiveProfile =
+      'rwkv.cloud_active_profile';
   static const String _kvScopeUiPrefs = 'ui_prefs';
   static const String _kvKeyRwkvServerVariant = 'rwkv.server_variant';
 
@@ -261,8 +284,10 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         cfgJson = await kv.readJson(_kvScopeAiConfig, _kvKeyRwkvCfg);
       } catch (_) {}
       try {
-        variantJson =
-            await kv.readJson(_kvScopeUiPrefs, _kvKeyRwkvServerVariant);
+        variantJson = await kv.readJson(
+          _kvScopeUiPrefs,
+          _kvKeyRwkvServerVariant,
+        );
       } catch (_) {}
       String? cloudJson;
       try {
@@ -303,8 +328,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         if (variantJson != null && variantJson.isNotEmpty) {
           try {
             _serverVariant = OfficialServerVariant.values.firstWhere(
-                (OfficialServerVariant v) => v.name == variantJson,
-                orElse: () => OfficialServerVariant.vulkan);
+              (OfficialServerVariant v) => v.name == variantJson,
+              orElse: () => OfficialServerVariant.vulkan,
+            );
           } catch (_) {}
         }
         if (cloudJson != null && cloudJson.isNotEmpty) {
@@ -355,6 +381,346 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     });
   }
 
+  Future<void> _loadRwkvCloudProfiles() async {
+    try {
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
+      final String? rawProfiles = await kv.readJson(
+        _kvScopeAiConfig,
+        _kvKeyRwkvCloudProfiles,
+      );
+      final String? rawActive = await kv.readJson(
+        _kvScopeAiConfig,
+        _kvKeyRwkvCloudActiveProfile,
+      );
+
+      final Map<String, RwkvCloudEndpointProfile> profilesById =
+          <String, RwkvCloudEndpointProfile>{
+            for (final RwkvCloudEndpointProfile profile
+                in kRwkvOfficialEndpointProfiles)
+              profile.id: profile,
+          };
+      if (rawProfiles != null && rawProfiles.isNotEmpty) {
+        final Object? decoded = jsonDecode(rawProfiles);
+        if (decoded is List) {
+          for (final Object? item in decoded) {
+            if (item is! Map) continue;
+            final RwkvCloudEndpointProfile profile =
+                RwkvCloudEndpointProfile.fromJson(
+                  item.map(
+                    (Object? key, Object? value) =>
+                        MapEntry<String, Object?>('$key', value),
+                  ),
+                );
+            if (profile.id.isNotEmpty && _validCloudBaseUrl(profile.baseUrl)) {
+              profilesById[profile.id] = profile;
+            }
+          }
+        }
+      } else {
+        // Migrate the former single cloud configuration without losing fields.
+        final _ProviderConfig legacy = _configs[_ProviderKind.rwkvCloud]!;
+        final String? officialId = _officialProfileForUrl(legacy.baseUrl)?.id;
+        final RwkvCloudEndpointProfile migrated = RwkvCloudEndpointProfile(
+          id:
+              officialId ??
+              'custom-legacy-${DateTime.now().microsecondsSinceEpoch}',
+          name:
+              _officialProfileForUrl(legacy.baseUrl)?.name ??
+              'RWKV Cloud (Legacy)',
+          baseUrl: legacy.baseUrl,
+          apiKey: legacy.apiKey,
+          defaultModel: legacy.defaultModel,
+          cfAccessClientId: legacy.cfAccessClientId,
+          cfAccessClientSecret: legacy.cfAccessClientSecret,
+          timeoutSeconds: legacy.timeoutSeconds,
+          defaultMaxTokens: legacy.defaultMaxTokens,
+          defaultTemperature: legacy.defaultTemperature,
+          enableStreaming: legacy.enableStreaming,
+        );
+        profilesById[migrated.id] = migrated;
+      }
+
+      final String requestedActive = rawActive == null || rawActive.isEmpty
+          ? ''
+          : (jsonDecode(rawActive) as String? ?? '');
+      final RwkvCloudEndpointProfile active =
+          profilesById[requestedActive] ??
+          _officialProfileForUrl(_configs[_ProviderKind.rwkvCloud]!.baseUrl) ??
+          profilesById['official-7b']!;
+      if (!mounted) return;
+      setState(() {
+        _cloudProfiles = profilesById.values.toList()
+          ..sort((a, b) {
+            final int aOfficial = a.id.startsWith('official-') ? 0 : 1;
+            final int bOfficial = b.id.startsWith('official-') ? 0 : 1;
+            return aOfficial != bOfficial
+                ? aOfficial.compareTo(bOfficial)
+                : a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+        _activeCloudProfileId = active.id;
+        _applyCloudProfile(active);
+      });
+      await _persistCloudProfiles();
+    } on Object {
+      // Keep the four empty official endpoint templates available on bad data.
+    }
+  }
+
+  static bool _validCloudBaseUrl(String value) {
+    final Uri? uri = Uri.tryParse(value.trim());
+    return uri != null &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty;
+  }
+
+  RwkvCloudEndpointProfile? _officialProfileForUrl(String url) {
+    final String normalized = url.trim().replaceAll(RegExp(r'/+$'), '');
+    for (final RwkvCloudEndpointProfile profile
+        in kRwkvOfficialEndpointProfiles) {
+      if (profile.baseUrl == normalized) return profile;
+    }
+    return null;
+  }
+
+  void _applyCloudProfile(RwkvCloudEndpointProfile profile) {
+    final _ProviderConfig cfg = _configs[_ProviderKind.rwkvCloud]!;
+    cfg
+      ..baseUrl = profile.baseUrl
+      ..apiKey = profile.apiKey
+      ..defaultModel = profile.defaultModel
+      ..cfAccessClientId = profile.cfAccessClientId
+      ..cfAccessClientSecret = profile.cfAccessClientSecret
+      ..timeoutSeconds = profile.timeoutSeconds
+      ..defaultMaxTokens = profile.defaultMaxTokens
+      ..defaultTemperature = profile.defaultTemperature
+      ..enableStreaming = profile.enableStreaming;
+  }
+
+  RwkvCloudEndpointProfile _currentCloudProfile() {
+    final _ProviderConfig cfg = _configs[_ProviderKind.rwkvCloud]!;
+    final RwkvCloudEndpointProfile? selected = _cloudProfiles
+        .where((RwkvCloudEndpointProfile p) => p.id == _activeCloudProfileId)
+        .firstOrNull;
+    return RwkvCloudEndpointProfile(
+      id: _activeCloudProfileId,
+      name: selected?.name ?? 'RWKV Cloud',
+      baseUrl: cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), ''),
+      apiKey: cfg.apiKey,
+      defaultModel: cfg.defaultModel,
+      cfAccessClientId: cfg.cfAccessClientId,
+      cfAccessClientSecret: cfg.cfAccessClientSecret,
+      timeoutSeconds: cfg.timeoutSeconds,
+      defaultMaxTokens: cfg.defaultMaxTokens,
+      defaultTemperature: cfg.defaultTemperature,
+      enableStreaming: cfg.enableStreaming,
+    );
+  }
+
+  Future<void> _persistCloudProfiles() async {
+    try {
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
+      final RwkvCloudEndpointProfile current = _currentCloudProfile();
+      final List<RwkvCloudEndpointProfile> profiles = _cloudProfiles
+          .map(
+            (RwkvCloudEndpointProfile profile) =>
+                profile.id == current.id ? current : profile,
+          )
+          .toList();
+      if (!profiles.any((RwkvCloudEndpointProfile p) => p.id == current.id)) {
+        profiles.add(current);
+      }
+      _cloudProfiles = profiles;
+      await kv.writeJson(
+        _kvScopeAiConfig,
+        _kvKeyRwkvCloudProfiles,
+        jsonEncode(profiles.map((p) => p.toJson()).toList()),
+      );
+      await kv.writeJson(
+        _kvScopeAiConfig,
+        _kvKeyRwkvCloudActiveProfile,
+        jsonEncode(_activeCloudProfileId),
+      );
+      await ref.read(agentEndpointRegistryProvider).replace(profiles);
+    } on Object {
+      // Profile persistence is best-effort; normal provider config is also saved.
+    }
+  }
+
+  Future<void> _selectCloudProfile(String id) async {
+    final RwkvCloudEndpointProfile? profile = _cloudProfiles
+        .where((RwkvCloudEndpointProfile p) => p.id == id)
+        .firstOrNull;
+    if (profile == null || id == _activeCloudProfileId) return;
+    await _persistCloudProfiles();
+    setState(() {
+      _activeCloudProfileId = profile.id;
+      _applyCloudProfile(profile);
+      _cloudModelIds = <String>[];
+      _cloudModelsError = null;
+      _lastTest = null;
+    });
+    await _persistCloudProfiles();
+    await _persistProviderConfig();
+    await _persistRwkvPrefs();
+    await _fetchCloudModels();
+  }
+
+  Future<void> _addCloudProfile() async {
+    final TextEditingController nameController = TextEditingController();
+    final TextEditingController urlController = TextEditingController();
+    final (String name, String url)? result =
+        await showDialog<(String, String)>(
+          context: context,
+          builder: (BuildContext context) => AlertDialog(
+            title: Text(
+              ref.read(l10nProvider).t('AIC.Cloud.AddProfile', '添加云端配置'),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: ref
+                        .read(l10nProvider)
+                        .t('AIC.Cloud.ProfileName', '配置名称'),
+                  ),
+                ),
+                TextField(
+                  controller: urlController,
+                  keyboardType: TextInputType.url,
+                  decoration: InputDecoration(
+                    labelText: ref
+                        .read(l10nProvider)
+                        .t('AIC.FieldBaseUrl', 'API 基础地址'),
+                    hintText: 'https://example.com/v1',
+                  ),
+                ),
+              ],
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(ref.read(l10nProvider).t('Common.Cancel', '取消')),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final String name = nameController.text.trim();
+                  final String url = urlController.text.trim().replaceAll(
+                    RegExp(r'/+$'),
+                    '',
+                  );
+                  if (name.isEmpty || !_validCloudBaseUrl(url)) return;
+                  Navigator.pop(context, (name, url));
+                },
+                child: Text(ref.read(l10nProvider).t('Common.Add', '添加')),
+              ),
+            ],
+          ),
+        );
+    nameController.dispose();
+    urlController.dispose();
+    if (result == null || !mounted) return;
+    final RwkvCloudEndpointProfile profile = RwkvCloudEndpointProfile(
+      id: 'custom-${DateTime.now().microsecondsSinceEpoch}',
+      name: result.$1,
+      baseUrl: result.$2,
+    );
+    setState(() {
+      _cloudProfiles = <RwkvCloudEndpointProfile>[..._cloudProfiles, profile];
+    });
+    await _selectCloudProfile(profile.id);
+  }
+
+  Future<void> _removeCloudProfile() async {
+    final RwkvCloudEndpointProfile? active = _cloudProfiles
+        .where((RwkvCloudEndpointProfile p) => p.id == _activeCloudProfileId)
+        .firstOrNull;
+    if (active == null || active.id.startsWith('official-')) return;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text(
+          ref.read(l10nProvider).t('AIC.Cloud.RemoveProfile', '删除此配置？'),
+        ),
+        content: Text(active.name),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(ref.read(l10nProvider).t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(ref.read(l10nProvider).t('Common.Delete', '删除')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _cloudProfiles.removeWhere(
+        (RwkvCloudEndpointProfile p) => p.id == active.id,
+      );
+      _activeCloudProfileId = 'official-7b';
+      _applyCloudProfile(
+        _cloudProfiles.firstWhere((p) => p.id == _activeCloudProfileId),
+      );
+      _cloudModelIds = <String>[];
+    });
+    await _persistCloudProfiles();
+    await _persistProviderConfig();
+    await _persistRwkvPrefs();
+    await _fetchCloudModels();
+  }
+
+  Future<void> _fetchCloudModels() async {
+    final int requestId = ++_cloudModelsRequestId;
+    final String profileId = _activeCloudProfileId;
+    setState(() {
+      _cloudModelsLoading = true;
+      _cloudModelsError = null;
+    });
+    try {
+      final RwkvCloudProvider provider = ref.read(
+        rwkvCloudProviderInstanceProvider,
+      );
+      await provider.initialize(_buildConfig());
+      final List<String> ids = <String>{
+        for (final ModelInfo model in await provider.getAvailableModels())
+          if (model.id.trim().isNotEmpty) model.id.trim(),
+      }.toList()..sort();
+      if (!mounted ||
+          requestId != _cloudModelsRequestId ||
+          profileId != _activeCloudProfileId) {
+        return;
+      }
+      setState(() {
+        _cloudModelIds = ids;
+        if (ids.isEmpty) {
+          _cloudModelsError = ref
+              .read(l10nProvider)
+              .t(
+                'AIC.Cloud.ModelsUnavailable',
+                '未能从该 API 地址读取模型列表，请检查地址和 Cloudflare Access 凭据。',
+              );
+        } else if (_cfg.defaultModel.isEmpty && ids.length == 1) {
+          _cfg.defaultModel = ids.single;
+        }
+      });
+    } on Object catch (e) {
+      if (mounted &&
+          requestId == _cloudModelsRequestId &&
+          profileId == _activeCloudProfileId) {
+        setState(() => _cloudModelsError = '$e');
+      }
+    } finally {
+      if (mounted && requestId == _cloudModelsRequestId) {
+        setState(() => _cloudModelsLoading = false);
+      }
+    }
+  }
+
   /// 存储键（`provider_cfg.{kind}` 的 `{kind}`）→ 页面 provider 枚举。
   static _ProviderKind? _kindByStorageKey(String key) {
     for (final _ProviderKind k in _ProviderKind.values) {
@@ -367,10 +733,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   ///
   /// 约定：**键存在即覆盖**（含空值 —— 用户清空 API Key 也应当被尊重）；
   /// 仅 RWKV 本地路径类字段跳过空值，避免覆盖 legacy 键里更完整的旧配置。
-  static void _applyPersistedJson(
-    _ProviderConfig c,
-    Map<String, Object?> j,
-  ) {
+  static void _applyPersistedJson(_ProviderConfig c, Map<String, Object?> j) {
     void str(String k, void Function(String v) apply) {
       final Object? v = j[k];
       if (v is String) apply(v);
@@ -390,17 +753,17 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     str('apiKey', (String v) => c.apiKey = v);
     str('defaultModel', (String v) => c.defaultModel = v);
     num_('timeoutSeconds', (num v) => c.timeoutSeconds = v.toInt());
-    num_('defaultTemperature',
-        (num v) => c.defaultTemperature = v.toDouble());
+    num_('defaultTemperature', (num v) => c.defaultTemperature = v.toDouble());
     num_('defaultMaxTokens', (num v) => c.defaultMaxTokens = v.toInt());
     boolean('enableStreaming', (bool v) => c.enableStreaming = v);
     str('rwkvThinkType', (String v) {
       if (v.isNotEmpty) c.rwkvThinkType = v;
     });
-    boolean('rwkvUseStatefulRoute',
-        (bool v) => c.rwkvUseStatefulRoute = v);
-    num_('rwkvMaxConcurrentSessions',
-        (num v) => c.rwkvMaxConcurrentSessions = v.toInt());
+    boolean('rwkvUseStatefulRoute', (bool v) => c.rwkvUseStatefulRoute = v);
+    num_(
+      'rwkvMaxConcurrentSessions',
+      (num v) => c.rwkvMaxConcurrentSessions = v.toInt(),
+    );
     str('rwkvLocalExecutable', (String v) {
       if (v.isNotEmpty) c.rwkvLocalExecutable = v;
     });
@@ -440,7 +803,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
 
   /// 内置引擎的 `.pth` 权重下载完成后写进配置。
   void _onBuiltInModelDownloaded(
-      String modelPath, OfficialServerVariant variant) {
+    String modelPath,
+    OfficialServerVariant variant,
+  ) {
     final cfg = _configs[_ProviderKind.rwkv]!;
     cfg.rwkvLocalModelPath = modelPath;
     cfg.rwkvLocalServerVariant = variant;
@@ -462,33 +827,40 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         localServerVariant: cfg.rwkvLocalServerVariant,
       );
       await kv.writeJson(
-          _kvScopeAiConfig, _kvKeyRwkvCfg, jsonEncode(rwkvCfg.toMap()));
+        _kvScopeAiConfig,
+        _kvKeyRwkvCfg,
+        jsonEncode(rwkvCfg.toMap()),
+      );
       await kv.writeJson(
-          _kvScopeUiPrefs, _kvKeyRwkvServerVariant, _serverVariant.name);
+        _kvScopeUiPrefs,
+        _kvKeyRwkvServerVariant,
+        _serverVariant.name,
+      );
       // 云端配置（含 CF Service Token）单独持久化，与本地引擎互不影响
       final _ProviderConfig cloudCfg = _configs[_ProviderKind.rwkvCloud]!;
       await kv.writeJson(
         _kvScopeAiConfig,
         _kvKeyRwkvCloudCfg,
-        jsonEncode(RwkvCloudConfiguration(
-          baseUrl: cloudCfg.baseUrl,
-          apiKey: cloudCfg.apiKey,
-          defaultModel: cloudCfg.defaultModel,
-          timeoutSeconds: cloudCfg.timeoutSeconds,
-          defaultMaxTokens: cloudCfg.defaultMaxTokens,
-          defaultTemperature: cloudCfg.defaultTemperature,
-          enableStreaming: cloudCfg.enableStreaming,
-          cfAccessClientId: cloudCfg.cfAccessClientId,
-          cfAccessClientSecret: cloudCfg.cfAccessClientSecret,
-        ).toCloudMap()),
+        jsonEncode(
+          RwkvCloudConfiguration(
+            baseUrl: cloudCfg.baseUrl,
+            apiKey: cloudCfg.apiKey,
+            defaultModel: cloudCfg.defaultModel,
+            timeoutSeconds: cloudCfg.timeoutSeconds,
+            defaultMaxTokens: cloudCfg.defaultMaxTokens,
+            defaultTemperature: cloudCfg.defaultTemperature,
+            enableStreaming: cloudCfg.enableStreaming,
+            cfAccessClientId: cloudCfg.cfAccessClientId,
+            cfAccessClientSecret: cloudCfg.cfAccessClientSecret,
+          ).toCloudMap(),
+        ),
       );
       // ⚠ 双写通用 provider 注册表（provider_cfg.rwkvCloud）：
       // 启动恢复（ProviderAutoRestore）与页面字段回填都读**这个**键；
       // 上面那个 legacy 键仅为兼容旧版本数据而保留。
-      await ref.read(modelConfigStoreProvider).save(
-            _ProviderKind.rwkvCloud.name,
-            _snapshotToJson(cloudCfg),
-          );
+      await ref
+          .read(modelConfigStoreProvider)
+          .save(_ProviderKind.rwkvCloud.name, _snapshotToJson(cloudCfg));
     } catch (_) {}
   }
 
@@ -530,7 +902,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       final ok = await prov.launchLocalServer(
         overrideExecutable: cfg.rwkvLocalExecutable,
         overrideModelPath: cfg.rwkvLocalModelPath,
-        port: int.tryParse(Uri.tryParse(cfg.baseUrl)?.port.toString() ?? '') ?? 8000,
+        port:
+            int.tryParse(Uri.tryParse(cfg.baseUrl)?.port.toString() ?? '') ??
+            8000,
       );
       if (!mounted) return;
       final diagnostics = prov.lastLaunchDiagnostics;
@@ -540,8 +914,10 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                 isSuccess: true,
                 responseTime: const Duration(milliseconds: 50),
                 serverInfo: <String, dynamic>{
-                  'note': l10n.t('AIC.RwkvServerLaunchedNote',
-                      '本地 RWKV server 已拉起，等待就绪…'),
+                  'note': l10n.t(
+                    'AIC.RwkvServerLaunchedNote',
+                    '本地 RWKV server 已拉起，等待就绪…',
+                  ),
                 },
               )
             : ConnectionTestResult(
@@ -549,8 +925,10 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                 responseTime: const Duration(milliseconds: 0),
                 errorMessage: diagnostics != null && diagnostics.isNotEmpty
                     ? diagnostics
-                    : l10n.t('AIC.RwkvLaunchFailed',
-                        '拉起失败：请检查「RWKV Server 可执行文件」路径与模型文件路径'),
+                    : l10n.t(
+                        'AIC.RwkvLaunchFailed',
+                        '拉起失败：请检查「RWKV Server 可执行文件」路径与模型文件路径',
+                      ),
               );
       });
       if (ok) await Future<void>.delayed(const Duration(seconds: 1));
@@ -568,8 +946,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       _lastTest = null;
     });
     try {
-      final bool stopped =
-          await ref.read(rwkvProviderInstanceProvider).stopLocalServer();
+      final bool stopped = await ref
+          .read(rwkvProviderInstanceProvider)
+          .stopLocalServer();
       if (!mounted) return;
       setState(() {
         _lastTest = ConnectionTestResult(
@@ -578,13 +957,17 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           serverInfo: <String, dynamic>{
             'note': stopped
                 ? l10n.t('AIC.RwkvServerStoppedNote', '本地 RWKV server 已停止')
-                : l10n.t('AIC.RwkvServerNotRunningNote',
-                    '本地 RWKV server 当前没有在运行（无需停止）'),
+                : l10n.t(
+                    'AIC.RwkvServerNotRunningNote',
+                    '本地 RWKV server 当前没有在运行（无需停止）',
+                  ),
           },
           errorMessage: stopped
               ? null
-              : l10n.t('AIC.RwkvServerNotRunningNote',
-                  '本地 RWKV server 当前没有在运行（无需停止）'),
+              : l10n.t(
+                  'AIC.RwkvServerNotRunningNote',
+                  '本地 RWKV server 当前没有在运行（无需停止）',
+                ),
         );
       });
       // 停止后立刻复测，让「可用性」与状态卡片反映真实情况（对齐启动后的行为）
@@ -604,9 +987,11 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       _serverInstallCancelHandle = null;
       _serverInstallProgress = RwkvDownloadProgress(
         phase: RwkvDownloadPhase.fetchingMeta,
-        message: l10n.tf('AIC.PreparingOfficialServer',
-            '准备下载官方 llama.cpp {variant} …',
-            {'variant': _serverVariant.displayName}),
+        message: l10n.tf(
+          'AIC.PreparingOfficialServer',
+          '准备下载官方 llama.cpp {variant} …',
+          {'variant': _serverVariant.displayName},
+        ),
       );
     });
     final prov = ref.read(rwkvProviderInstanceProvider);
@@ -628,8 +1013,11 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         cfg.rwkvLocalExecutable = exePath;
         _serverInstallProgress = RwkvDownloadProgress(
           phase: RwkvDownloadPhase.done,
-          message: l10n.tf('AIC.OfficialServerInstalled', '官方 server 已安装：{path}',
-              {'path': exePath}),
+          message: l10n.tf(
+            'AIC.OfficialServerInstalled',
+            '官方 server 已安装：{path}',
+            {'path': exePath},
+          ),
           totalBytes: _serverInstallProgress?.totalBytes ?? 0,
           receivedBytes: _serverInstallProgress?.totalBytes ?? 0,
         );
@@ -659,7 +1047,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           phase: RwkvDownloadPhase.failed,
           error: e,
           stackTrace: s,
-          message: l10n.tf('AIC.InstallFailed', '安装失败：{error}', {'error': '$e'}),
+          message: l10n.tf('AIC.InstallFailed', '安装失败：{error}', {
+            'error': '$e',
+          }),
         );
         _serverInstallCancelHandle = null;
       });
@@ -670,7 +1060,8 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     final l10n = ref.read(l10nProvider);
     final mm = ScaffoldMessenger.of(context);
     final prov = ref.read(rwkvProviderInstanceProvider);
-    final List<RwkvOfficialModel>? models = await showDialog<List<RwkvOfficialModel>>(
+    final List<RwkvOfficialModel>?
+    models = await showDialog<List<RwkvOfficialModel>>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext ctx) {
@@ -678,85 +1069,102 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           future: prov.listOfficialModels(
             onProgress: (RwkvDownloadProgress p) {},
           ),
-          builder: (BuildContext dialogCtx,
-              AsyncSnapshot<List<RwkvOfficialModel>> snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return AlertDialog(
-                title: Text(l10n.t('AIC.QueryingOfficialModels', '正在查询官方模型列表…')),
-                content: const LinearProgressIndicator(),
-              );
-            }
-            if (snapshot.hasError) {
-              return AlertDialog(
-                title: Text(l10n.t('AIC.QueryFailed', '查询失败')),
-                content: SingleChildScrollView(
-                  child: Text('${snapshot.error}'),
-                ),
-                actions: <Widget>[
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogCtx),
-                    child: Text(l10n.t('Common.Close', '关闭')),
-                  ),
-                ],
-              );
-            }
-            final list = snapshot.data ?? const <RwkvOfficialModel>[];
-            return SimpleDialog(
-              title: Text(l10n.t('AIC.SelectOfficialModel', '选择要下载的官方 RWKV 模型')),
-              children: <Widget>[
-                for (final m in list)
-                  SimpleDialogOption(
-                    onPressed: () => Navigator.pop(dialogCtx, <RwkvOfficialModel>[m]),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          const Icon(Icons.download_for_offline_outlined),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: <Widget>[
-                                Text(m.displayName,
-                                    style: Theme.of(ctx).textTheme.titleSmall),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${m.paramsLabel} · ${m.quant.displayLabel.split('(').last.replaceAll(')', '')} · ${m.sizeHumanReadable}\n${m.fileName}',
-                                  style: Theme.of(ctx).textTheme.bodySmall,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
+          builder:
+              (
+                BuildContext dialogCtx,
+                AsyncSnapshot<List<RwkvOfficialModel>> snapshot,
+              ) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return AlertDialog(
+                    title: Text(
+                      l10n.t('AIC.QueryingOfficialModels', '正在查询官方模型列表…'),
                     ),
+                    content: const LinearProgressIndicator(),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return AlertDialog(
+                    title: Text(l10n.t('AIC.QueryFailed', '查询失败')),
+                    content: SingleChildScrollView(
+                      child: Text('${snapshot.error}'),
+                    ),
+                    actions: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogCtx),
+                        child: Text(l10n.t('Common.Close', '关闭')),
+                      ),
+                    ],
+                  );
+                }
+                final list = snapshot.data ?? const <RwkvOfficialModel>[];
+                return SimpleDialog(
+                  title: Text(
+                    l10n.t('AIC.SelectOfficialModel', '选择要下载的官方 RWKV 模型'),
                   ),
-                if (list.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(l10n.t('AIC.NoOfficialModels',
-                        '未找到可用官方模型，请稍后再试或手动下载 GGUF 到 rwkv_models/ 目录。')),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogCtx),
-                  child: Text(l10n.t('Common.Cancel', '取消')),
-                ),
-              ],
-            );
-          },
+                  children: <Widget>[
+                    for (final m in list)
+                      SimpleDialogOption(
+                        onPressed: () =>
+                            Navigator.pop(dialogCtx, <RwkvOfficialModel>[m]),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              const Icon(Icons.download_for_offline_outlined),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Text(
+                                      m.displayName,
+                                      style: Theme.of(ctx).textTheme.titleSmall,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${m.paramsLabel} · ${m.quant.displayLabel.split('(').last.replaceAll(')', '')} · ${m.sizeHumanReadable}\n${m.fileName}',
+                                      style: Theme.of(ctx).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (list.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(
+                          l10n.t(
+                            'AIC.NoOfficialModels',
+                            '未找到可用官方模型，请稍后再试或手动下载 GGUF 到 rwkv_models/ 目录。',
+                          ),
+                        ),
+                      ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogCtx),
+                      child: Text(l10n.t('Common.Cancel', '取消')),
+                    ),
+                  ],
+                );
+              },
         );
       },
     );
     if (models == null || models.isEmpty) return;
     final model = models.first;
-    mm.showSnackBar(SnackBar(
-      content: Text(l10n.tf('AIC.StartDownloadModel',
-          '开始下载：{name}（{size}）', {
-        'name': model.displayName,
-        'size': model.sizeHumanReadable,
-      })),
-    ));
+    mm.showSnackBar(
+      SnackBar(
+        content: Text(
+          l10n.tf('AIC.StartDownloadModel', '开始下载：{name}（{size}）', {
+            'name': model.displayName,
+            'size': model.sizeHumanReadable,
+          }),
+        ),
+      ),
+    );
     await _downloadModel(model);
   }
 
@@ -770,8 +1178,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       _modelDownloadCancelHandle = null;
       _modelDownloadProgress = RwkvDownloadProgress(
         phase: RwkvDownloadPhase.fetchingMeta,
-        message: l10n.tf('AIC.PreparingDownload', '准备下载：{name} …',
-            {'name': model.displayName}),
+        message: l10n.tf('AIC.PreparingDownload', '准备下载：{name} …', {
+          'name': model.displayName,
+        }),
       );
     });
     final mm = ScaffoldMessenger.of(context);
@@ -792,8 +1201,9 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       setState(() {
         _modelDownloadProgress = RwkvDownloadProgress(
           phase: RwkvDownloadPhase.done,
-          message: l10n.tf('AIC.DownloadComplete', '下载完成：{path}',
-              {'path': filePath}),
+          message: l10n.tf('AIC.DownloadComplete', '下载完成：{path}', {
+            'path': filePath,
+          }),
           totalBytes: model.sizeBytes,
           receivedBytes: model.sizeBytes,
         );
@@ -807,11 +1217,16 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       await _saveAndRegister();
       await _ensureRwkvScanned(force: true);
       _persistRwkvPrefs();
-      mm.showSnackBar(SnackBar(
-        content: Text(l10n.tf('AIC.ModelDownloadedSelected',
-            '✅ {name} 已下载并选中。', {'name': model.displayName})),
-        duration: const Duration(seconds: 2),
-      ));
+      mm.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.tf('AIC.ModelDownloadedSelected', '✅ {name} 已下载并选中。', {
+              'name': model.displayName,
+            }),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } on RwkvDownloadCancelledException catch (e, s) {
       if (!mounted) return;
       setState(() {
@@ -827,11 +1242,16 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         );
         _modelDownloadCancelHandle = null;
       });
-      mm.showSnackBar(SnackBar(
-        content: Text(l10n.tf('AIC.DownloadCancelledModel',
-            '下载已取消：{name}', {'name': model.displayName})),
-        duration: const Duration(seconds: 2),
-      ));
+      mm.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.tf('AIC.DownloadCancelledModel', '下载已取消：{name}', {
+              'name': model.displayName,
+            }),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } on Exception catch (e, s) {
       if (!mounted) return;
       setState(() {
@@ -839,16 +1259,20 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           phase: RwkvDownloadPhase.failed,
           error: e,
           stackTrace: s,
-          message: l10n.tf('AIC.DownloadFailed', '下载失败：{error}',
-              {'error': '$e'}),
+          message: l10n.tf('AIC.DownloadFailed', '下载失败：{error}', {
+            'error': '$e',
+          }),
         );
         _modelDownloadCancelHandle = null;
       });
-      mm.showSnackBar(SnackBar(
-        content: Text(l10n.tf('AIC.DownloadFailedSnack', '下载失败：{error}',
-            {'error': '$e'})),
-        duration: const Duration(seconds: 4),
-      ));
+      mm.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.tf('AIC.DownloadFailedSnack', '下载失败：{error}', {'error': '$e'}),
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -873,6 +1297,16 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   }
 
   _ProviderConfig get _cfg => _configs[_selectedKind]!;
+
+  void _selectProviderKind(_ProviderKind kind) {
+    setState(() {
+      _selectedKind = kind;
+      _lastTest = null;
+    });
+    if (kind == _ProviderKind.rwkvCloud) {
+      _fetchCloudModels();
+    }
+  }
 
   Future<void> _testConnection() async {
     setState(() {
@@ -988,9 +1422,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
           engineConfig: RwkvEngineConfig(
             baseUrl: _cfg.baseUrl,
             maxConcurrentSessions: _cfg.rwkvMaxConcurrentSessions,
-            nativeOptions: RwkvNativeOptions(
-              thinkType: _cfg.rwkvThinkType,
-            ),
+            nativeOptions: RwkvNativeOptions(thinkType: _cfg.rwkvThinkType),
             useStatefulRoute: _cfg.rwkvUseStatefulRoute,
           ),
         );
@@ -1071,21 +1503,29 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     final String label = _pvdLabel(_cfg.kind, isEnglish);
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.tf('AIC.ConfigSavedRegistered',
-            '{label} 配置已保存并注册', {
-          'label': label,
-        }))),
+        SnackBar(
+          content: Text(
+            l10n.tf('AIC.ConfigSavedRegistered', '{label} 配置已保存并注册', {
+              'label': label,
+            }),
+          ),
+        ),
       );
       _refreshFromManager();
     } else {
       // 已落盘，仅连通性检查失败：如实告知「已保存、但当前连不上」
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(l10n.tf('AIC.ConfigSavedButOffline',
-                '{label} 配置已保存到本地（重启后自动恢复），但当前连通性检查未通过：'
-                '请检查地址、API Key / CF Token 与网络后重试',
-                {'label': label})),
-            backgroundColor: Colors.orange),
+          content: Text(
+            l10n.tf(
+              'AIC.ConfigSavedButOffline',
+              '{label} 配置已保存到本地（重启后自动恢复），但当前连通性检查未通过：'
+                  '请检查地址、API Key / CF Token 与网络后重试',
+              {'label': label},
+            ),
+          ),
+          backgroundColor: Colors.orange,
+        ),
       );
       _refreshFromManager();
     }
@@ -1106,27 +1546,30 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   /// 把当前 provider 配置写入本地（下次启动自动恢复），并在保存默认后同步。
   Future<void> _persistProviderConfig() async {
     try {
-      await ref.read(modelConfigStoreProvider).save(
-            _selectedKind.name,
-            _snapshotToJson(_cfg),
-          );
+      if (_selectedKind == _ProviderKind.rwkvCloud) {
+        await _persistCloudProfiles();
+      }
       await ref
           .read(modelConfigStoreProvider)
-          .saveDefault(_defaultProvider);
+          .save(_selectedKind.name, _snapshotToJson(_cfg));
+      await ref.read(modelConfigStoreProvider).saveDefault(_defaultProvider);
       // 模型最大参考长度 = 最大令牌数：保存 provider 时一并同步并持久化，
       // 保障重启后生成链路的参考窗口与「最大令牌数」依然一致。
       // 同时从模型名解析上下文窗口（`ctx16384` → 16384），供生成链路
       // 把「参考 + 输出」在窗口内切分，避免「最大令牌数填得比窗口还大」。
       final AiRuntimeSettings synced = aiRuntimeSettings.copyWith(
         maxReferenceLength: _cfg.defaultMaxTokens,
-        contextWindowTokens:
-            AiRuntimeSettings.parseContextWindow(_cfg.defaultModel),
+        contextWindowTokens: AiRuntimeSettings.parseContextWindow(
+          _cfg.defaultModel,
+        ),
       );
       aiRuntimeSettings = synced;
-      final KeyValueStore kv =
-          await ref.read(keyValueStoreProvider.future);
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
       await kv.writeJson(
-          'ai_config', 'runtime_settings', jsonEncode(synced.toJson()));
+        'ai_config',
+        'runtime_settings',
+        jsonEncode(synced.toJson()),
+      );
     } on Object {
       // 持久化失败不影响保存结果
     }
@@ -1164,7 +1607,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     // 重复占一行；触屏窄屏隐藏并收紧内边距，把空间还给配置卡。
     final bool touch =
         Theme.of(context).platform == TargetPlatform.android ||
-            Theme.of(context).platform == TargetPlatform.iOS;
+        Theme.of(context).platform == TargetPlatform.iOS;
     final bool phoneLayout = touch && MediaQuery.sizeOf(context).width < 1000;
 
     return Scaffold(
@@ -1183,169 +1626,195 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
             Expanded(
               // 手机横屏逻辑宽 ~780：内容区只剩 ~500px，左右分栏（220 列表 + 卡片）
               // 会把配置卡挤爆 —— 窄屏改为「提供商列表在上、配置卡在下」整体滚动。
-              child: LayoutBuilder(builder: (context, box) {
-                final narrow =
-                    box.maxWidth < 560 || (touch && box.maxWidth < 860);
-                final Widget cards = Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                          _ConfigCard(
-                            cfg: _cfg,
-                            onChanged: () => setState(() {}),
-                            testing: _testing,
-                            onTest: _testConnection,
-                            connectingTo: _connectingTo,
-                            onSave: _saveAndRegister,
-                            lastTest: _lastTest,
-                            rwkvModels: _selectedKind == _ProviderKind.rwkv
-                                ? _rwkvModels
-                                : null,
-                            rwkvScanning: _rwkvScanning,
-                            rwkvLaunching: _rwkvLaunching,
-                            rwkvStopping: _rwkvStopping,
-                            rwkvServerRunning: ref
-                                .watch(rwkvProviderInstanceProvider)
-                                .localServerRunning,
-                            onStopRwkvServer:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? _stopRwkvLocalServer
-                                    : null,
-                            onRefreshRwkvModels: _selectedKind == _ProviderKind.rwkv
-                                ? () => _ensureRwkvScanned(force: true)
-                                : null,
-                            onLaunchRwkvServer: _selectedKind == _ProviderKind.rwkv
-                                ? _launchRwkvLocalServer
-                                : null,
-                            serverVariant: _selectedKind == _ProviderKind.rwkv
-                                ? _serverVariant
-                                : null,
-                            onServerVariantChanged: _selectedKind == _ProviderKind.rwkv
-                                ? (OfficialServerVariant v) {
-                                    setState(() => _serverVariant = v);
-                                    _persistRwkvPrefs();
-                                  }
-                                : null,
-                            serverInstallProgress:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? _serverInstallProgress
-                                    : null,
-                            modelDownloadProgress:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? _modelDownloadProgress
-                                    : null,
-                            onInstallOfficialServer:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? _installOfficialServer
-                                    : null,
-                            onShowOfficialModelsDialog:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? _showOfficialModelsDialog
-                                    : null,
-                            onCancelServerInstall:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? () {
-                                        final h = _serverInstallCancelHandle;
-                                        if (h != null && !h.isCancelled) {
-                                          h.cancel(l10n.t('Common.UserCancelled', '用户取消'));
-                                        }
-                                      }
-                                    : null,
-                            onCancelModelDownload:
-                                _selectedKind == _ProviderKind.rwkv
-                                    ? () {
-                                        final h = _modelDownloadCancelHandle;
-                                        if (h != null && !h.isCancelled) {
-                                          h.cancel(l10n.t('Common.UserCancelled', '用户取消'));
-                                        }
-                                      }
-                                    : null,
-                            isEnglish: isEnglish,
-                          ),
-                          // ---- 内置推理引擎：rwkv_lightning_cuda（albatross）----
-                          if (_selectedKind == _ProviderKind.rwkv) ...[
-                            const SizedBox(height: 16),
-                            _BuiltInEngineCard(
-                              onProvisioned: _onBuiltInProvisioned,
-                              onModelDownloaded: _onBuiltInModelDownloaded,
-                              statefulRoute: _cfg.rwkvUseStatefulRoute,
-                              onStatefulRouteChanged: (bool v) {
-                                setState(() => _cfg.rwkvUseStatefulRoute = v);
-                                _persistRwkvPrefs();
-                              },
-                              thinkType: _cfg.rwkvThinkType,
-                              onThinkTypeChanged: (String v) {
-                                setState(() => _cfg.rwkvThinkType = v);
-                                _persistRwkvPrefs();
-                              },
-                            ),
-                          ],
-                          // ---- 云端官方端点：Cloudflare Access 凭证 ----
-                          if (_selectedKind == _ProviderKind.rwkvCloud) ...[
-                            const SizedBox(height: 16),
-                            _CloudCfCard(
-                              clientId: _cfg.cfAccessClientId,
-                              clientSecret: _cfg.cfAccessClientSecret,
-                              onCredentialsChanged:
-                                  (String id, String secret) {
-                                setState(() {
-                                  _cfg.cfAccessClientId = id;
-                                  _cfg.cfAccessClientSecret = secret;
-                                });
-                              },
-                              onPersist: _persistRwkvPrefs,
-                              onFetchStatus: _fetchCloudStatus,
-                            ),
-                          ],
-                          const SizedBox(height: 16),
-                          _StatsCard(
-                            stats: _statsMap[_cfg.registeredName],
-                            available: _availableMap[_cfg.registeredName],
-                          ),
-                          // ---- MainAgent / SubAgent 双代理写作流（全局配置）----
-                          const SizedBox(height: 16),
-                          const _DualAgentCard(),
-                          // ---- 功能 C：章节落库后自动同步世界观 ----
-                          const SizedBox(height: 16),
-                          const _ChapterSyncCard(),
-                          // ---- 生成采样参数（官方推荐预设 + 手动微调）与思维链 ----
-                          const SizedBox(height: 16),
-                          const _SamplingThinkingCard(),
-                        ],
-                );
-
-                final Widget list = _ProviderList(
-                  width: narrow ? double.infinity : 220,
-                  selectedKind: _selectedKind,
-                  onTap: (k) => setState(() => _selectedKind = k),
-                  configs: _configs,
-                  availableMap: _availableMap,
-                  defaultProvider: _defaultProvider,
-                  registered: registered,
-                  onSetDefault: _setDefault,
-                  isEnglish: isEnglish,
-                );
-
-                if (narrow) {
-                  return SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        list,
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final narrow =
+                      box.maxWidth < 560 || (touch && box.maxWidth < 860);
+                  final Widget cards = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_selectedKind == _ProviderKind.rwkvCloud) ...[
+                        _CloudEndpointProfilesCard(
+                          profiles: _cloudProfiles,
+                          selectedId: _activeCloudProfileId,
+                          onSelected: _selectCloudProfile,
+                          onAdd: _addCloudProfile,
+                          onRemove: _removeCloudProfile,
+                        ),
                         const SizedBox(height: 16),
-                        cards,
                       ],
-                    ),
+                      _ConfigCard(
+                        cfg: _cfg,
+                        onChanged: () => setState(() {}),
+                        testing: _testing,
+                        onTest: _testConnection,
+                        connectingTo: _connectingTo,
+                        onSave: _saveAndRegister,
+                        lastTest: _lastTest,
+                        cloudModelIds: _selectedKind == _ProviderKind.rwkvCloud
+                            ? _cloudModelIds
+                            : null,
+                        cloudModelsLoading: _cloudModelsLoading,
+                        cloudModelsError: _cloudModelsError,
+                        onFetchCloudModels:
+                            _selectedKind == _ProviderKind.rwkvCloud
+                            ? _fetchCloudModels
+                            : null,
+                        rwkvModels: _selectedKind == _ProviderKind.rwkv
+                            ? _rwkvModels
+                            : null,
+                        rwkvScanning: _rwkvScanning,
+                        rwkvLaunching: _rwkvLaunching,
+                        rwkvStopping: _rwkvStopping,
+                        rwkvServerRunning: ref
+                            .watch(rwkvProviderInstanceProvider)
+                            .localServerRunning,
+                        onStopRwkvServer: _selectedKind == _ProviderKind.rwkv
+                            ? _stopRwkvLocalServer
+                            : null,
+                        onRefreshRwkvModels: _selectedKind == _ProviderKind.rwkv
+                            ? () => _ensureRwkvScanned(force: true)
+                            : null,
+                        onLaunchRwkvServer: _selectedKind == _ProviderKind.rwkv
+                            ? _launchRwkvLocalServer
+                            : null,
+                        serverVariant: _selectedKind == _ProviderKind.rwkv
+                            ? _serverVariant
+                            : null,
+                        onServerVariantChanged:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? (OfficialServerVariant v) {
+                                setState(() => _serverVariant = v);
+                                _persistRwkvPrefs();
+                              }
+                            : null,
+                        serverInstallProgress:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? _serverInstallProgress
+                            : null,
+                        modelDownloadProgress:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? _modelDownloadProgress
+                            : null,
+                        onInstallOfficialServer:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? _installOfficialServer
+                            : null,
+                        onShowOfficialModelsDialog:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? _showOfficialModelsDialog
+                            : null,
+                        onCancelServerInstall:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? () {
+                                final h = _serverInstallCancelHandle;
+                                if (h != null && !h.isCancelled) {
+                                  h.cancel(
+                                    l10n.t('Common.UserCancelled', '用户取消'),
+                                  );
+                                }
+                              }
+                            : null,
+                        onCancelModelDownload:
+                            _selectedKind == _ProviderKind.rwkv
+                            ? () {
+                                final h = _modelDownloadCancelHandle;
+                                if (h != null && !h.isCancelled) {
+                                  h.cancel(
+                                    l10n.t('Common.UserCancelled', '用户取消'),
+                                  );
+                                }
+                              }
+                            : null,
+                        isEnglish: isEnglish,
+                      ),
+                      // ---- 内置推理引擎：rwkv_lightning_cuda（albatross）----
+                      if (_selectedKind == _ProviderKind.rwkv) ...[
+                        const SizedBox(height: 16),
+                        _BuiltInEngineCard(
+                          onProvisioned: _onBuiltInProvisioned,
+                          onModelDownloaded: _onBuiltInModelDownloaded,
+                          statefulRoute: _cfg.rwkvUseStatefulRoute,
+                          onStatefulRouteChanged: (bool v) {
+                            setState(() => _cfg.rwkvUseStatefulRoute = v);
+                            _persistRwkvPrefs();
+                          },
+                          thinkType: _cfg.rwkvThinkType,
+                          onThinkTypeChanged: (String v) {
+                            setState(() => _cfg.rwkvThinkType = v);
+                            _persistRwkvPrefs();
+                          },
+                        ),
+                      ],
+                      // ---- 云端官方端点：Cloudflare Access 凭证 ----
+                      if (_selectedKind == _ProviderKind.rwkvCloud) ...[
+                        const SizedBox(height: 16),
+                        _CloudCfCard(
+                          clientId: _cfg.cfAccessClientId,
+                          clientSecret: _cfg.cfAccessClientSecret,
+                          onCredentialsChanged: (String id, String secret) {
+                            setState(() {
+                              _cfg.cfAccessClientId = id;
+                              _cfg.cfAccessClientSecret = secret;
+                            });
+                          },
+                          onPersist: () async {
+                            await _persistCloudProfiles();
+                            await _persistRwkvPrefs();
+                            await _persistProviderConfig();
+                          },
+                          onFetchStatus: _fetchCloudStatus,
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      _StatsCard(
+                        stats: _statsMap[_cfg.registeredName],
+                        available: _availableMap[_cfg.registeredName],
+                      ),
+                      // ---- MainAgent / SubAgent 双代理写作流（全局配置）----
+                      const SizedBox(height: 16),
+                      const _DualAgentCard(),
+                      const SizedBox(height: 16),
+                      const BookReviewSettingsCard(),
+                      // ---- 功能 C：章节落库后自动同步世界观 ----
+                      const SizedBox(height: 16),
+                      const _ChapterSyncCard(),
+                      // ---- 生成采样参数（官方推荐预设 + 手动微调）与思维链 ----
+                      const SizedBox(height: 16),
+                      const _SamplingThinkingCard(),
+                    ],
                   );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    list,
-                    const SizedBox(width: 16),
-                    Expanded(child: SingleChildScrollView(child: cards)),
-                  ],
-                );
-              }),
+
+                  final Widget list = _ProviderList(
+                    width: narrow ? double.infinity : 220,
+                    selectedKind: _selectedKind,
+                    onTap: _selectProviderKind,
+                    configs: _configs,
+                    availableMap: _availableMap,
+                    defaultProvider: _defaultProvider,
+                    registered: registered,
+                    onSetDefault: _setDefault,
+                    isEnglish: isEnglish,
+                  );
+
+                  if (narrow) {
+                    return SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [list, const SizedBox(height: 16), cards],
+                      ),
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      list,
+                      const SizedBox(width: 16),
+                      Expanded(child: SingleChildScrollView(child: cards)),
+                    ],
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -1374,7 +1843,7 @@ class _BuiltInEngineCard extends ConsumerStatefulWidget {
 
   /// .pth 权重下载完成后回调
   final void Function(String modelPath, OfficialServerVariant variant)
-      onModelDownloaded;
+  onModelDownloaded;
 
   /// 会话 state 续跑开关（走 `/state/chat/completions`）
   final bool statefulRoute;
@@ -1442,18 +1911,24 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       );
       if (!mounted) return;
       widget.onProvisioned(p);
-      setState(() => _status = l10n.tf(
+      setState(
+        () => _status = l10n.tf(
           'AIC.BuiltIn.EngineReadyFmt',
           '引擎已就位：{0}\n词表已就位：{1}',
-          {'0': p.executablePath, '1': p.vocabPath}));
+          {'0': p.executablePath, '1': p.vocabPath},
+        ),
+      );
     } on RwkvDownloadCancelledException catch (_) {
       if (mounted) {
         setState(() => _status = l10n.t('AIC.StatusCancelled', '已取消'));
       }
     } on Object catch (e) {
       if (mounted) {
-        setState(() => _status = l10n.tf(
-            'AIC.InstallFailed', '安装失败：{error}', {'error': '$e'}));
+        setState(
+          () => _status = l10n.tf('AIC.InstallFailed', '安装失败：{error}', {
+            'error': '$e',
+          }),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1472,8 +1947,10 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       if (!mounted) return;
       if (models.isEmpty) {
         setState(() {
-          _status = l10n.t('AIC.BuiltIn.NoModel',
-              '未找到可用 .pth 权重，请稍后重试或手动下载到 rwkv_models/。');
+          _status = l10n.t(
+            'AIC.BuiltIn.NoModel',
+            '未找到可用 .pth 权重，请稍后重试或手动下载到 rwkv_models/。',
+          );
           _busy = false;
         });
         return;
@@ -1482,21 +1959,20 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       final List<RwkvGpuInfo> gpus = _gpus ?? await rwkvProbeGpus();
       _gpus = gpus;
       if (!mounted) return; // await 之后 context 可能已失效
-      final int? vramFree =
-          gpus.isEmpty ? null : gpus.first.freeBytes;
+      final int? vramFree = gpus.isEmpty ? null : gpus.first.freeBytes;
 
       // ⚠ 关键：**按参数量**挑推荐，不是按文件体积 ——
       //   真实清单里 `rwkv7b-g1b-0.1b-...` 有 3.4GB，比 1.5B 还大，
       //   按体积挑会挑到那个降智的架构变体（PITFALLS §38.3）。
-      final RwkvOfficialModel? recommended = pickBestFittingModel<RwkvOfficialModel>(
-        models,
-        sizeOf: (RwkvOfficialModel m) => m.sizeBytes,
-        rankOf: (RwkvOfficialModel m) => parseParamRankFromName(m.fileName),
-        vramAvailableBytes: vramFree,
-      );
+      final RwkvOfficialModel? recommended =
+          pickBestFittingModel<RwkvOfficialModel>(
+            models,
+            sizeOf: (RwkvOfficialModel m) => m.sizeBytes,
+            rankOf: (RwkvOfficialModel m) => parseParamRankFromName(m.fileName),
+            vramAvailableBytes: vramFree,
+          );
 
-      final RwkvOfficialModel? picked =
-          await showDialog<RwkvOfficialModel>(
+      final RwkvOfficialModel? picked = await showDialog<RwkvOfficialModel>(
         context: context,
         builder: (BuildContext ctx) => AlertDialog(
           title: Text(l10n.t('AIC.BuiltIn.PickModel', '选择官方原生 .pth 权重')),
@@ -1519,8 +1995,10 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
-                      l10n.t('AIC.BuiltIn.NoGpuProbe',
-                          '未探测到显卡显存，以下仅显示权重体积，请自行确认能否加载'),
+                      l10n.t(
+                        'AIC.BuiltIn.NoGpuProbe',
+                        '未探测到显卡显存，以下仅显示权重体积，请自行确认能否加载',
+                      ),
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -1534,38 +2012,44 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                         vramAvailableBytes: vramFree,
                       );
                       final bool isRecommended =
-                          recommended != null && recommended.fileName == m.fileName;
+                          recommended != null &&
+                          recommended.fileName == m.fileName;
                       return ListTile(
                         dense: true,
                         leading: Icon(
                           fit == RwkvModelFit.fits
                               ? Icons.check_circle_outline
                               : fit == RwkvModelFit.tight
-                                  ? Icons.warning_amber_outlined
-                                  : fit == RwkvModelFit.tooLarge
-                                      ? Icons.block_outlined
-                                      : Icons.help_outline,
+                              ? Icons.warning_amber_outlined
+                              : fit == RwkvModelFit.tooLarge
+                              ? Icons.block_outlined
+                              : Icons.help_outline,
                           size: 18,
                           color: fit == RwkvModelFit.fits
                               ? Theme.of(ctx).colorScheme.primary
                               : fit == RwkvModelFit.tight
-                                  ? Theme.of(ctx).colorScheme.tertiary
-                                  : Theme.of(ctx).colorScheme.error,
+                              ? Theme.of(ctx).colorScheme.tertiary
+                              : Theme.of(ctx).colorScheme.error,
                         ),
                         title: Row(
                           children: <Widget>[
                             Expanded(
-                              child: Text(m.fileName, maxLines: 1,
-                                  overflow: TextOverflow.ellipsis),
+                              child: Text(
+                                m.fileName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             if (isRecommended)
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: Theme.of(ctx)
-                                      .colorScheme
-                                      .primaryContainer,
+                                  color: Theme.of(
+                                    ctx,
+                                  ).colorScheme.primaryContainer,
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
@@ -1582,7 +2066,9 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                         ),
                         isThreeLine: true,
                         enabled: !fit.shouldBlock,
-                        onTap: fit.shouldBlock ? null : () => Navigator.pop(ctx, m),
+                        onTap: fit.shouldBlock
+                            ? null
+                            : () => Navigator.pop(ctx, m),
                       );
                     },
                   ),
@@ -1606,16 +2092,22 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       );
       if (!mounted) return;
       widget.onModelDownloaded(path, _variant);
-      setState(() => _status = l10n.tf(
-          'AIC.ModelDownloadedPathFmt', '模型已下载：{0}', {'0': path}));
+      setState(
+        () => _status = l10n.tf('AIC.ModelDownloadedPathFmt', '模型已下载：{0}', {
+          '0': path,
+        }),
+      );
     } on RwkvDownloadCancelledException catch (_) {
       if (mounted) {
         setState(() => _status = l10n.t('AIC.StatusCancelled', '已取消'));
       }
     } on Object catch (e) {
       if (mounted) {
-        setState(() => _status = l10n.tf(
-            'AIC.DownloadFailed', '下载失败：{error}', {'error': '$e'}));
+        setState(
+          () => _status = l10n.tf('AIC.DownloadFailed', '下载失败：{error}', {
+            'error': '$e',
+          }),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1632,9 +2124,11 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       );
       final String? diag = _provider.lastLaunchDiagnostics;
       if (!mounted) return;
-      setState(() => _status = ok
-          ? '✅ 内置引擎已启动（/v1/server/status 可查能力与显存）'
-          : '启动失败：\n${diag ?? "无诊断信息"}');
+      setState(
+        () => _status = ok
+            ? '✅ 内置引擎已启动（/v1/server/status 可查能力与显存）'
+            : '启动失败：\n${diag ?? "无诊断信息"}',
+      );
     } finally {
       if (mounted) setState(() => _launching = false);
     }
@@ -1660,8 +2154,7 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  l10n.t('AIC.BuiltIn.Title',
-                      '内置推理引擎 · rwkv_lightning_cuda'),
+                  l10n.t('AIC.BuiltIn.Title', '内置推理引擎 · rwkv_lightning_cuda'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
@@ -1673,9 +2166,11 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
           ),
           const SizedBox(height: 6),
           Text(
-            l10n.t('AIC.BuiltIn.Desc',
-                '官方预编译 CUDA 包，下载后校验 SHA-256 并自动解压。'
-                '只支持 .pth / .rwkvq 权重，且必须配套外置词表（引擎不内嵌词表）。'),
+            l10n.t(
+              'AIC.BuiltIn.Desc',
+              '官方预编译 CUDA 包，下载后校验 SHA-256 并自动解压。'
+                  '只支持 .pth / .rwkvq 权重，且必须配套外置词表（引擎不内嵌词表）。',
+            ),
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 10),
@@ -1719,8 +2214,9 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.memory_outlined, size: 18),
-                  label: Text(l10n.t('AIC.BuiltIn.InstallBtn',
-                      '⚡ 安装内置引擎 + 词表')),
+                  label: Text(
+                    l10n.t('AIC.BuiltIn.InstallBtn', '⚡ 安装内置引擎 + 词表'),
+                  ),
                 ),
               ),
             ],
@@ -1731,10 +2227,13 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: _busy || _running ? null : _downloadModel,
-                  icon: const Icon(Icons.download_for_offline_outlined,
-                      size: 18),
-                  label: Text(l10n.t('AIC.BuiltIn.DownloadModelBtn',
-                      '📥 下载 .pth 原生权重')),
+                  icon: const Icon(
+                    Icons.download_for_offline_outlined,
+                    size: 18,
+                  ),
+                  label: Text(
+                    l10n.t('AIC.BuiltIn.DownloadModelBtn', '📥 下载 .pth 原生权重'),
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1765,9 +2264,11 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
               style: const TextStyle(fontSize: 13),
             ),
             subtitle: Text(
-              l10n.t('AIC.BuiltIn.StatefulRouteHint',
-                  '走 /state/chat/completions，由服务端按 session_id 维护 state。'
-                  '实测有效；若换成不提供 /state/* 的引擎请关闭。'),
+              l10n.t(
+                'AIC.BuiltIn.StatefulRouteHint',
+                '走 /state/chat/completions，由服务端按 session_id 维护 state。'
+                    '实测有效；若换成不提供 /state/* 的引擎请关闭。',
+              ),
               style: const TextStyle(fontSize: 11),
             ),
           ),
@@ -1784,17 +2285,31 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                     isDense: true,
                   ),
                   items: const <DropdownMenuItem<String>>[
-                    DropdownMenuItem<String>(value: 'none', child: Text('none')),
                     DropdownMenuItem<String>(
-                        value: 'fast', child: Text('fast（默认）')),
-                    DropdownMenuItem<String>(value: 'free', child: Text('free')),
+                      value: 'none',
+                      child: Text('none'),
+                    ),
                     DropdownMenuItem<String>(
-                        value: 'preferChinese', child: Text('preferChinese')),
+                      value: 'fast',
+                      child: Text('fast（默认）'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'free',
+                      child: Text('free'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'preferChinese',
+                      child: Text('preferChinese'),
+                    ),
                     DropdownMenuItem<String>(value: 'en', child: Text('en')),
                     DropdownMenuItem<String>(
-                        value: 'enShort', child: Text('enShort')),
+                      value: 'enShort',
+                      child: Text('enShort'),
+                    ),
                     DropdownMenuItem<String>(
-                        value: 'enLong', child: Text('enLong')),
+                      value: 'enLong',
+                      child: Text('enLong'),
+                    ),
                   ],
                   onChanged: _busy || _running
                       ? null
@@ -1806,12 +2321,15 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  l10n.t('AIC.BuiltIn.ThinkHint',
-                      '控制助手思考前缀；采样参数（top_k/top_p/alpha_*）与 '
-                      'stop_tokens 已按官方默认值固定透传。'),
+                  l10n.t(
+                    'AIC.BuiltIn.ThinkHint',
+                    '控制助手思考前缀；采样参数（top_k/top_p/alpha_*）与 '
+                        'stop_tokens 已按官方默认值固定透传。',
+                  ),
                   style: TextStyle(
-                      fontSize: 11,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    fontSize: 11,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ],
@@ -1829,8 +2347,10 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(_fmtProgress(_progress!),
-                    style: const TextStyle(fontSize: 11)),
+                Text(
+                  _fmtProgress(_progress!),
+                  style: const TextStyle(fontSize: 11),
+                ),
                 if (_running)
                   IconButton(
                     tooltip: l10n.t('Common.Cancel', '取消'),
@@ -1847,14 +2367,18 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
             if (_progress!.message != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text(_progress!.message!,
-                    style: const TextStyle(fontSize: 11)),
+                child: Text(
+                  _progress!.message!,
+                  style: const TextStyle(fontSize: 11),
+                ),
               ),
           ],
           if (_status != null) ...<Widget>[
             const SizedBox(height: 8),
-            SelectableText(_status!,
-                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+            SelectableText(
+              _status!,
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
           ],
         ],
       ),
@@ -1867,6 +2391,78 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
 /// 单独一张卡的原因：CF Service Token 的两个头名**按字节精确**比较，
 /// 拼错不会 401，而是静默返回 HTML 登录页 —— 必须把这两个值摆在显眼处，
 /// 并给出「取引擎状态」按钮让用户立刻验证是否真的通了（PITFALLS §27.2 / §31）。
+class _CloudEndpointProfilesCard extends ConsumerWidget {
+  const _CloudEndpointProfilesCard({
+    required this.profiles,
+    required this.selectedId,
+    required this.onSelected,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  final List<RwkvCloudEndpointProfile> profiles;
+  final String selectedId;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onAdd;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = ref.watch(l10nProvider);
+    final RwkvCloudEndpointProfile? selected = profiles
+        .where((RwkvCloudEndpointProfile p) => p.id == selectedId)
+        .firstOrNull;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            SizedBox(
+              width: 300,
+              child: DropdownButtonFormField<String>(
+                initialValue: selected?.id,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: l10n.t('AIC.Cloud.EndpointProfile', '云端端点配置'),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: <DropdownMenuItem<String>>[
+                  for (final RwkvCloudEndpointProfile profile in profiles)
+                    DropdownMenuItem<String>(
+                      value: profile.id,
+                      child: Text(
+                        '${profile.name} · ${profile.baseUrl}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (String? id) {
+                  if (id != null) onSelected(id);
+                },
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(l10n.t('AIC.Cloud.AddProfile', '添加配置')),
+            ),
+            if (selected != null && !selected.id.startsWith('official-'))
+              IconButton(
+                tooltip: l10n.t('AIC.Cloud.RemoveProfile', '删除此配置'),
+                onPressed: onRemove,
+                icon: const Icon(Icons.delete_outline),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CloudCfCard extends ConsumerStatefulWidget {
   const _CloudCfCard({
     required this.clientId,
@@ -1879,7 +2475,7 @@ class _CloudCfCard extends ConsumerStatefulWidget {
   final String clientId;
   final String clientSecret;
   final void Function(String clientId, String clientSecret)
-      onCredentialsChanged;
+  onCredentialsChanged;
   final Future<void> Function() onPersist;
   final Future<RwkvCloudServerSummary?> Function() onFetchStatus;
 
@@ -1888,10 +2484,12 @@ class _CloudCfCard extends ConsumerStatefulWidget {
 }
 
 class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
-  late final TextEditingController _idCtrl =
-      TextEditingController(text: widget.clientId);
-  late final TextEditingController _secretCtrl =
-      TextEditingController(text: widget.clientSecret);
+  late final TextEditingController _idCtrl = TextEditingController(
+    text: widget.clientId,
+  );
+  late final TextEditingController _secretCtrl = TextEditingController(
+    text: widget.clientSecret,
+  );
   bool _busy = false;
   RwkvCloudServerSummary? _summary;
   String? _error;
@@ -1914,8 +2512,12 @@ class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
       setState(() {
         _summary = s;
         _error = s == null
-            ? ref.read(l10nProvider).t('AIC.Cloud.StatusUnavailable',
-                '取不到引擎状态：端点未响应或不是 rwkv_lightning_cuda。')
+            ? ref
+                  .read(l10nProvider)
+                  .t(
+                    'AIC.Cloud.StatusUnavailable',
+                    '取不到引擎状态：端点未响应或不是 rwkv_lightning_cuda。',
+                  )
             : null;
       });
     } on Object catch (e) {
@@ -1945,19 +2547,24 @@ class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  l10n.t('AIC.Cloud.CfTitle',
-                      'Cloudflare Access 凭证（Service Token）'),
+                  l10n.t(
+                    'AIC.Cloud.CfTitle',
+                    'Cloudflare Access 凭证（Service Token）',
+                  ),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
               TextButton(
                 onPressed: () async {
                   widget.onCredentialsChanged(
-                      _idCtrl.text.trim(), _secretCtrl.text.trim());
+                    _idCtrl.text.trim(),
+                    _secretCtrl.text.trim(),
+                  );
                   await widget.onPersist();
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(l10n.t('Common.Saved', '已保存'))));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(l10n.t('Common.Saved', '已保存'))),
+                    );
                   }
                 },
                 child: Text(l10n.t('Common.Save', '保存')),
@@ -1966,9 +2573,11 @@ class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
           ),
           const SizedBox(height: 4),
           Text(
-            l10n.t('AIC.Cloud.CfHint',
-                '头名按字节精确匹配：CF-Access-Client-Id / CF-Access-Client-Secret。'
-                '拼错不会报 401，而是静默返回 HTML 登录页。'),
+            l10n.t(
+              'AIC.Cloud.CfHint',
+              '头名按字节精确匹配：CF-Access-Client-Id / CF-Access-Client-Secret。'
+                  '拼错不会报 401，而是静默返回 HTML 登录页。',
+            ),
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 10),
@@ -2007,8 +2616,9 @@ class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.monitor_heart_outlined, size: 18),
-                label: Text(l10n.t('AIC.Cloud.FetchStatus',
-                    '🩺 取引擎状态（验证是否真的连通）')),
+                label: Text(
+                  l10n.t('AIC.Cloud.FetchStatus', '🩺 取引擎状态（验证是否真的连通）'),
+                ),
               ),
             ],
           ),
@@ -2039,8 +2649,10 @@ class _CloudCfCardState extends ConsumerState<_CloudCfCard> {
           ],
           if (_error != null) ...<Widget>[
             const SizedBox(height: 8),
-            SelectableText(_error!,
-                style: TextStyle(fontSize: 11, color: scheme.error)),
+            SelectableText(
+              _error!,
+              style: TextStyle(fontSize: 11, color: scheme.error),
+            ),
           ],
         ],
       ),
@@ -2088,11 +2700,14 @@ class _ProviderList extends ConsumerWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Text(l10n.t('AIC.ProviderListTitle', '提供商'),
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onSurfaceVariant,
-                        fontWeight: FontWeight.bold)),
+                child: Text(
+                  l10n.t('AIC.ProviderListTitle', '提供商'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               const SizedBox(height: 4),
               for (final k in _ProviderKind.values)
@@ -2100,13 +2715,13 @@ class _ProviderList extends ConsumerWidget {
                   kind: k,
                   selected: k == selectedKind,
                   onTap: () => onTap(k),
-                  isAvailable: availableMap[configs[k]!.registeredName] ?? false,
-                  isRegistered: registered
-                      .any((p) => p.providerName == configs[k]!.registeredName),
-                  isDefault:
-                      defaultProvider == configs[k]!.registeredName,
-                  onSetDefault: () =>
-                      onSetDefault(configs[k]!.registeredName),
+                  isAvailable:
+                      availableMap[configs[k]!.registeredName] ?? false,
+                  isRegistered: registered.any(
+                    (p) => p.providerName == configs[k]!.registeredName,
+                  ),
+                  isDefault: defaultProvider == configs[k]!.registeredName,
+                  onSetDefault: () => onSetDefault(configs[k]!.registeredName),
                   isEnglish: isEnglish,
                 ),
             ],
@@ -2159,46 +2774,48 @@ class _ProviderTile extends ConsumerWidget {
           ),
           child: Row(
             children: [
-              Icon(kind.icon,
-                  size: 18,
-                  color: selected ? scheme.onSecondaryContainer : null),
+              Icon(
+                kind.icon,
+                size: 18,
+                color: selected ? scheme.onSecondaryContainer : null,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_pvdLabel(kind, isEnglish),
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: selected
-                                ? scheme.onSecondaryContainer
-                                : null,
-                            fontWeight: FontWeight.w500)),
+                    Text(
+                      _pvdLabel(kind, isEnglish),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: selected ? scheme.onSecondaryContainer : null,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                     Row(
                       children: [
                         Icon(
                           isAvailable
                               ? Icons.check_circle
                               : (isRegistered
-                                  ? Icons.help_outline
-                                  : Icons.circle_outlined),
+                                    ? Icons.help_outline
+                                    : Icons.circle_outlined),
                           size: 10,
                           color: isAvailable
                               ? Colors.green
-                              : (isRegistered
-                                  ? Colors.orange
-                                  : scheme.outline),
+                              : (isRegistered ? Colors.orange : scheme.outline),
                         ),
                         const SizedBox(width: 4),
                         Text(
                           isAvailable
                               ? l10n.t('AIC.StatusConnected', '已连接')
                               : (isRegistered
-                                  ? l10n.t('AIC.StatusPendingTest', '待测试')
-                                  : l10n.t('AIC.StatusUnregistered', '未注册')),
+                                    ? l10n.t('AIC.StatusPendingTest', '待测试')
+                                    : l10n.t('AIC.StatusUnregistered', '未注册')),
                           style: TextStyle(
-                              fontSize: 10,
-                              color: scheme.onSurfaceVariant),
+                            fontSize: 10,
+                            color: scheme.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -2207,8 +2824,10 @@ class _ProviderTile extends ConsumerWidget {
               ),
               if (isDefault)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.primaryContainer,
                     borderRadius: BorderRadius.circular(6),
@@ -2216,9 +2835,10 @@ class _ProviderTile extends ConsumerWidget {
                   child: Text(
                     l10n.t('AIC.DefaultBadge', '默认'),
                     style: TextStyle(
-                        fontSize: 9,
-                        color: scheme.onPrimaryContainer,
-                        fontWeight: FontWeight.bold),
+                      fontSize: 9,
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 )
               else if (isRegistered)
@@ -2247,6 +2867,10 @@ class _ConfigCard extends ConsumerWidget {
     required this.connectingTo,
     required this.onSave,
     this.lastTest,
+    this.cloudModelIds,
+    this.cloudModelsLoading = false,
+    this.cloudModelsError,
+    this.onFetchCloudModels,
     this.rwkvModels,
     this.rwkvScanning = false,
     this.rwkvLaunching = false,
@@ -2273,6 +2897,10 @@ class _ConfigCard extends ConsumerWidget {
   final String? connectingTo;
   final Future<void> Function() onSave;
   final ConnectionTestResult? lastTest;
+  final List<String>? cloudModelIds;
+  final bool cloudModelsLoading;
+  final String? cloudModelsError;
+  final Future<void> Function()? onFetchCloudModels;
   final List<RwkvLocalModel>? rwkvModels;
   final bool rwkvScanning;
   final bool rwkvLaunching;
@@ -2311,11 +2939,12 @@ class _ConfigCard extends ConsumerWidget {
               children: [
                 Flexible(
                   child: Text(
-                    l10n.tf('AIC.ParamsTitle', '{label} 参数',
-                        {'label': _pvdLabel(cfg.kind, isEnglish)}),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: scheme.primary,
-                        ),
+                    l10n.tf('AIC.ParamsTitle', '{label} 参数', {
+                      'label': _pvdLabel(cfg.kind, isEnglish),
+                    }),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleMedium?.copyWith(color: scheme.primary),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -2337,9 +2966,11 @@ class _ConfigCard extends ConsumerWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.link_outlined, size: 18),
-                  label: Text(testing
-                      ? l10n.t('AIC.Connecting', '连接中…')
-                      : l10n.t('AIC.TestConnection', '测试连接')),
+                  label: Text(
+                    testing
+                        ? l10n.t('AIC.Connecting', '连接中…')
+                        : l10n.t('AIC.TestConnection', '测试连接'),
+                  ),
                 ),
                 FilledButton.icon(
                   onPressed: onSave,
@@ -2360,14 +2991,18 @@ class _ConfigCard extends ConsumerWidget {
                     child: TextField(
                       controller: TextEditingController(text: cfg.baseUrl)
                         ..selection = TextSelection.fromPosition(
-                            TextPosition(offset: cfg.baseUrl.length)),
+                          TextPosition(offset: cfg.baseUrl.length),
+                        ),
                       onChanged: (v) {
                         cfg.baseUrl = v;
                         onChanged();
                       },
+                      onSubmitted: (_) => onFetchCloudModels?.call(),
                       decoration: InputDecoration(
-                        hintText: l10n.t('AIC.HintBaseUrl',
-                            'https://… 或 http://localhost:…'),
+                        hintText: l10n.t(
+                          'AIC.HintBaseUrl',
+                          'https://… 或 http://localhost:…',
+                        ),
                         border: const OutlineInputBorder(),
                         isDense: true,
                       ),
@@ -2376,14 +3011,17 @@ class _ConfigCard extends ConsumerWidget {
                 ),
                 if (!cfg.kind.isLocal)
                   _Field(
-                    label: l10n.t('AIC.FieldApiKey', 'API Key'),
+                    label: cfg.kind == _ProviderKind.rwkvCloud
+                        ? l10n.t('AIC.Cloud.ApiKeyOptional', 'API Key（可选）')
+                        : l10n.t('AIC.FieldApiKey', 'API Key'),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 360),
                       child: TextField(
                         obscureText: true,
                         controller: TextEditingController(text: cfg.apiKey)
                           ..selection = TextSelection.fromPosition(
-                              TextPosition(offset: cfg.apiKey.length)),
+                            TextPosition(offset: cfg.apiKey.length),
+                          ),
                         onChanged: (v) {
                           cfg.apiKey = v;
                           onChanged();
@@ -2403,7 +3041,8 @@ class _ConfigCard extends ConsumerWidget {
                     child: TextField(
                       controller: TextEditingController(text: cfg.defaultModel)
                         ..selection = TextSelection.fromPosition(
-                            TextPosition(offset: cfg.defaultModel.length)),
+                          TextPosition(offset: cfg.defaultModel.length),
+                        ),
                       onChanged: (v) {
                         cfg.defaultModel = v;
                         onChanged();
@@ -2415,6 +3054,98 @@ class _ConfigCard extends ConsumerWidget {
                     ),
                   ),
                 ),
+                if (cfg.kind == _ProviderKind.rwkvCloud)
+                  _Field(
+                    label: l10n.t(
+                      'AIC.Cloud.ModelsFromEndpoint',
+                      '从当前 API 地址获取模型',
+                    ),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: InputDecorator(
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 2,
+                                ),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  value:
+                                      (cloudModelIds ?? const <String>[])
+                                          .contains(cfg.defaultModel)
+                                      ? cfg.defaultModel
+                                      : null,
+                                  isExpanded: true,
+                                  isDense: true,
+                                  hint: Text(
+                                    (cloudModelIds ?? const <String>[]).isEmpty
+                                        ? l10n.t(
+                                            'AIC.Cloud.FetchModelsHint',
+                                            '获取后选择模型',
+                                          )
+                                        : l10n.t(
+                                            'AIC.Cloud.SelectModel',
+                                            '请选择模型',
+                                          ),
+                                  ),
+                                  items: <DropdownMenuItem<String>>[
+                                    for (final String id
+                                        in cloudModelIds ?? const <String>[])
+                                      DropdownMenuItem<String>(
+                                        value: id,
+                                        child: Text(
+                                          id,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                  ],
+                                  onChanged: (String? id) {
+                                    if (id == null) return;
+                                    cfg.defaultModel = id;
+                                    onChanged();
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          IconButton(
+                            tooltip: l10n.t(
+                              'AIC.Cloud.FetchModels',
+                              '从 API 地址获取模型',
+                            ),
+                            onPressed: cloudModelsLoading
+                                ? null
+                                : () => onFetchCloudModels?.call(),
+                            icon: cloudModelsLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.refresh),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (cfg.kind == _ProviderKind.rwkvCloud &&
+                    cloudModelsError != null)
+                  SizedBox(
+                    width: 360,
+                    child: Text(
+                      cloudModelsError!,
+                      style: TextStyle(color: scheme.error, fontSize: 11),
+                    ),
+                  ),
                 _Field(
                   label: l10n.t('AIC.FieldTimeout', '超时 (秒)'),
                   child: ConstrainedBox(
@@ -2422,7 +3153,8 @@ class _ConfigCard extends ConsumerWidget {
                     child: TextField(
                       keyboardType: TextInputType.number,
                       controller: TextEditingController(
-                          text: cfg.timeoutSeconds.toString()),
+                        text: cfg.timeoutSeconds.toString(),
+                      ),
                       onChanged: (v) {
                         final n = int.tryParse(v);
                         if (n != null && n > 0) {
@@ -2442,10 +3174,12 @@ class _ConfigCard extends ConsumerWidget {
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 120),
                     child: TextField(
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       controller: TextEditingController(
-                          text: cfg.defaultTemperature.toString()),
+                        text: cfg.defaultTemperature.toString(),
+                      ),
                       onChanged: (v) {
                         final n = double.tryParse(v);
                         if (n != null) {
@@ -2486,8 +3220,9 @@ class _ConfigCard extends ConsumerWidget {
                         ],
                       ),
                       Slider(
-                        value: maxTokensSliderIndex(cfg.defaultMaxTokens)
-                            .toDouble(),
+                        value: maxTokensSliderIndex(
+                          cfg.defaultMaxTokens,
+                        ).toDouble(),
                         min: 0,
                         max: (kMaxTokensSteps.length - 1).toDouble(),
                         divisions: kMaxTokensSteps.length - 1,
@@ -2497,8 +3232,9 @@ class _ConfigCard extends ConsumerWidget {
                           cfg.defaultMaxTokens = next;
                           // 最大参考长度恒等于最大令牌数 → 同步运行时设置，
                           // 生成链路据此决定参考上下文的字符预算。
-                          aiRuntimeSettings = aiRuntimeSettings
-                              .copyWith(maxReferenceLength: next);
+                          aiRuntimeSettings = aiRuntimeSettings.copyWith(
+                            maxReferenceLength: next,
+                          );
                           onChanged();
                         },
                       ),
@@ -2506,8 +3242,7 @@ class _ConfigCard extends ConsumerWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          for (final String lbl
-                              in kMaxTokensStepLabels)
+                          for (final String lbl in kMaxTokensStepLabels)
                             Text(
                               lbl,
                               style: TextStyle(
@@ -2584,16 +3319,17 @@ class _ConfigCard extends ConsumerWidget {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.cloud_download_outlined,
-                            size: 18, color: scheme.tertiary),
+                        Icon(
+                          Icons.cloud_download_outlined,
+                          size: 18,
+                          color: scheme.tertiary,
+                        ),
                         const SizedBox(width: 6),
-                        Text(l10n.t('AIC.OfficialResourcesTitle', '官方资源一键安装'),
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(
-                                  color: scheme.onTertiaryContainer,
-                                )),
+                        Text(
+                          l10n.t('AIC.OfficialResourcesTitle', '官方资源一键安装'),
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(color: scheme.onTertiaryContainer),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 10),
@@ -2602,67 +3338,86 @@ class _ConfigCard extends ConsumerWidget {
                       children: [
                         Expanded(
                           flex: 3,
-                          child: Builder(builder: (BuildContext _) {
-                            final sv = serverVariant ??
-                                OfficialServerVariant.vulkan;
-                            return InputDecorator(
-                              decoration: InputDecoration(
-                                isDense: true,
-                                labelText: l10n.t('AIC.FieldHardwareVariant', '硬件加速版本'),
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: DropdownButton<OfficialServerVariant>(
-                                  value: sv,
+                          child: Builder(
+                            builder: (BuildContext _) {
+                              final sv =
+                                  serverVariant ?? OfficialServerVariant.vulkan;
+                              return InputDecorator(
+                                decoration: InputDecoration(
                                   isDense: true,
-                                  onChanged: (OfficialServerVariant? v) {
-                                    if (v != null &&
-                                        onServerVariantChanged != null) {
-                                      onServerVariantChanged!(v);
-                                    }
-                                  },
-                                  items: OfficialServerVariant.values
-                                      .map((OfficialServerVariant v) =>
-                                          DropdownMenuItem<
-                                                  OfficialServerVariant>(
-                                              value: v,
-                                              child: Text(v.displayName)))
-                                      .toList(growable: false),
+                                  labelText: l10n.t(
+                                    'AIC.FieldHardwareVariant',
+                                    '硬件加速版本',
+                                  ),
+                                  border: const OutlineInputBorder(),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
                                 ),
-                              ),
-                            );
-                          }),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<OfficialServerVariant>(
+                                    value: sv,
+                                    isDense: true,
+                                    onChanged: (OfficialServerVariant? v) {
+                                      if (v != null &&
+                                          onServerVariantChanged != null) {
+                                        onServerVariantChanged!(v);
+                                      }
+                                    },
+                                    items: OfficialServerVariant.values
+                                        .map(
+                                          (OfficialServerVariant v) =>
+                                              DropdownMenuItem<
+                                                OfficialServerVariant
+                                              >(
+                                                value: v,
+                                                child: Text(v.displayName),
+                                              ),
+                                        )
+                                        .toList(growable: false),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           flex: 4,
                           child: FilledButton.icon(
-                            onPressed: (serverInstallProgress != null &&
+                            onPressed:
+                                (serverInstallProgress != null &&
                                     !serverInstallProgress!.phase.isTerminal)
                                 ? null
                                 : onInstallOfficialServer,
-                            icon: serverInstallProgress != null &&
+                            icon:
+                                serverInstallProgress != null &&
                                     !serverInstallProgress!.phase.isTerminal
                                 ? const SizedBox(
                                     width: 16,
                                     height: 16,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2),
+                                      strokeWidth: 2,
+                                    ),
                                   )
-                                : const Icon(Icons.install_desktop_outlined,
-                                    size: 18),
+                                : const Icon(
+                                    Icons.install_desktop_outlined,
+                                    size: 18,
+                                  ),
                             label: Text(
                               serverInstallProgress != null &&
-                                      serverInstallProgress!
-                                          .phase.isTerminal &&
+                                      serverInstallProgress!.phase.isTerminal &&
                                       serverInstallProgress!.phase ==
                                           RwkvDownloadPhase.done
-                                  ? l10n.t('AIC.OfficialServerInstalledBtn',
-                                      '✅ 已安装官方 Server')
-                                  : l10n.t('AIC.InstallOfficialServerBtn',
-                                      '📦 安装官方 llama.cpp Server'),
+                                  ? l10n.t(
+                                      'AIC.OfficialServerInstalledBtn',
+                                      '✅ 已安装官方 Server',
+                                    )
+                                  : l10n.t(
+                                      'AIC.InstallOfficialServerBtn',
+                                      '📦 安装官方 llama.cpp Server',
+                                    ),
                             ),
                           ),
                         ),
@@ -2675,10 +3430,13 @@ class _ConfigCard extends ConsumerWidget {
                         ref: ref,
                         progress: serverInstallProgress!,
                         scheme: scheme,
-                        completedLabel: l10n.t('AIC.LlamaServerInstalled',
-                            '✅ llama-server.exe 已安装'),
+                        completedLabel: l10n.t(
+                          'AIC.LlamaServerInstalled',
+                          '✅ llama-server.exe 已安装',
+                        ),
                         idleHide: false,
-                        onCancel: (serverInstallProgress != null &&
+                        onCancel:
+                            (serverInstallProgress != null &&
                                 !serverInstallProgress!.phase.isTerminal &&
                                 onCancelServerInstall != null)
                             ? onCancelServerInstall
@@ -2689,29 +3447,38 @@ class _ConfigCard extends ConsumerWidget {
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: (modelDownloadProgress != null &&
+                            onPressed:
+                                (modelDownloadProgress != null &&
                                     !modelDownloadProgress!.phase.isTerminal)
                                 ? null
                                 : onShowOfficialModelsDialog,
-                            icon: modelDownloadProgress != null &&
+                            icon:
+                                modelDownloadProgress != null &&
                                     !modelDownloadProgress!.phase.isTerminal
                                 ? const SizedBox(
                                     width: 16,
                                     height: 16,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2),
+                                      strokeWidth: 2,
+                                    ),
                                   )
-                                : const Icon(Icons.download_for_offline_outlined,
-                                    size: 18),
+                                : const Icon(
+                                    Icons.download_for_offline_outlined,
+                                    size: 18,
+                                  ),
                             label: Text(
                               modelDownloadProgress != null &&
                                       modelDownloadProgress!.phase.isTerminal &&
                                       modelDownloadProgress!.phase ==
                                           RwkvDownloadPhase.done
-                                  ? l10n.t('AIC.LatestModelDownloadedBtn',
-                                      '✅ 已下载最新模型')
-                                  : l10n.t('AIC.DownloadOfficialModelBtn',
-                                      '📥 下载官方原生 RWKV 模型'),
+                                  ? l10n.t(
+                                      'AIC.LatestModelDownloadedBtn',
+                                      '✅ 已下载最新模型',
+                                    )
+                                  : l10n.t(
+                                      'AIC.DownloadOfficialModelBtn',
+                                      '📥 下载官方原生 RWKV 模型',
+                                    ),
                             ),
                           ),
                         ),
@@ -2724,10 +3491,13 @@ class _ConfigCard extends ConsumerWidget {
                         ref: ref,
                         progress: modelDownloadProgress!,
                         scheme: scheme,
-                        completedLabel: l10n.t('AIC.OfficialModelDownloaded',
-                            '✅ 官方模型已下载'),
+                        completedLabel: l10n.t(
+                          'AIC.OfficialModelDownloaded',
+                          '✅ 官方模型已下载',
+                        ),
                         idleHide: false,
-                        onCancel: (modelDownloadProgress != null &&
+                        onCancel:
+                            (modelDownloadProgress != null &&
                                 !modelDownloadProgress!.phase.isTerminal &&
                                 onCancelModelDownload != null)
                             ? onCancelModelDownload
@@ -2749,13 +3519,17 @@ class _ConfigCard extends ConsumerWidget {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.memory_outlined,
-                            size: 18, color: scheme.secondary),
+                        Icon(
+                          Icons.memory_outlined,
+                          size: 18,
+                          color: scheme.secondary,
+                        ),
                         const SizedBox(width: 6),
-                        Text(l10n.t('AIC.LocalRwkvManagement', '本地 RWKV 管理'),
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                  color: scheme.onSecondaryContainer,
-                                )),
+                        Text(
+                          l10n.t('AIC.LocalRwkvManagement', '本地 RWKV 管理'),
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(color: scheme.onSecondaryContainer),
+                        ),
                         const Spacer(),
                         IconButton.filledTonal(
                           onPressed: rwkvScanning ? null : onRefreshRwkvModels,
@@ -2768,7 +3542,8 @@ class _ConfigCard extends ConsumerWidget {
                                   width: 16,
                                   height: 16,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2),
+                                    strokeWidth: 2,
+                                  ),
                                 )
                               : const Icon(Icons.refresh, size: 18),
                         ),
@@ -2781,35 +3556,49 @@ class _ConfigCard extends ConsumerWidget {
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 )
                               : const Icon(Icons.play_arrow, size: 18),
-                          label: Text(rwkvLaunching
-                              ? l10n.t('AIC.Starting', '启动中…')
-                              : l10n.t('AIC.StartLocalRwkvServer',
-                                  '启动本地 RWKV Server')),
+                          label: Text(
+                            rwkvLaunching
+                                ? l10n.t('AIC.Starting', '启动中…')
+                                : l10n.t(
+                                    'AIC.StartLocalRwkvServer',
+                                    '启动本地 RWKV Server',
+                                  ),
+                          ),
                         ),
                         const SizedBox(width: 6),
                         // 手动停止：仅在进程确实在跑时可点（避免无意义点击）
                         OutlinedButton.icon(
                           onPressed:
-                              (rwkvStopping || !rwkvServerRunning ||
-                                      onStopRwkvServer == null)
-                                  ? null
-                                  : onStopRwkvServer,
+                              (rwkvStopping ||
+                                  !rwkvServerRunning ||
+                                  onStopRwkvServer == null)
+                              ? null
+                              : onStopRwkvServer,
                           icon: rwkvStopping
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 )
-                              : const Icon(Icons.stop_circle_outlined, size: 18),
-                          label: Text(rwkvStopping
-                              ? l10n.t('AIC.Stopping', '停止中…')
-                              : l10n.t('AIC.StopLocalRwkvServer',
-                                  '停止本地 Server')),
+                              : const Icon(
+                                  Icons.stop_circle_outlined,
+                                  size: 18,
+                                ),
+                          label: Text(
+                            rwkvStopping
+                                ? l10n.t('AIC.Stopping', '停止中…')
+                                : l10n.t(
+                                    'AIC.StopLocalRwkvServer',
+                                    '停止本地 Server',
+                                  ),
+                          ),
                         ),
                       ],
                     ),
@@ -2819,26 +3608,32 @@ class _ConfigCard extends ConsumerWidget {
                       runSpacing: 12,
                       children: [
                         _Field(
-                          label: l10n.t('AIC.FieldRwkvExecutable',
-                              'RWKV Server 可执行文件'),
+                          label: l10n.t(
+                            'AIC.FieldRwkvExecutable',
+                            'RWKV Server 可执行文件',
+                          ),
                           child: ConstrainedBox(
-                            constraints:
-                                const BoxConstraints(maxWidth: 440),
+                            constraints: const BoxConstraints(maxWidth: 440),
                             child: TextField(
-                              controller: TextEditingController(
-                                  text: cfg.rwkvLocalExecutable ?? '')
-                                ..selection = TextSelection.fromPosition(
-                                    TextPosition(
+                              controller:
+                                  TextEditingController(
+                                      text: cfg.rwkvLocalExecutable ?? '',
+                                    )
+                                    ..selection = TextSelection.fromPosition(
+                                      TextPosition(
                                         offset: (cfg.rwkvLocalExecutable ?? '')
-                                            .length)),
+                                            .length,
+                                      ),
+                                    ),
                               onChanged: (v) {
-                                cfg.rwkvLocalExecutable =
-                                    v.isEmpty ? null : v;
+                                cfg.rwkvLocalExecutable = v.isEmpty ? null : v;
                                 onChanged();
                               },
                               decoration: InputDecoration(
-                                hintText: l10n.t('AIC.HintRwkvExecutable',
-                                    r'C:\path\to\llama-server.exe 或 rwkv.cpp\server.exe'),
+                                hintText: l10n.t(
+                                  'AIC.HintRwkvExecutable',
+                                  r'C:\path\to\llama-server.exe 或 rwkv.cpp\server.exe',
+                                ),
                                 border: const OutlineInputBorder(),
                                 isDense: true,
                               ),
@@ -2846,11 +3641,12 @@ class _ConfigCard extends ConsumerWidget {
                           ),
                         ),
                         _Field(
-                          label: l10n.t('AIC.FieldLocalGgufModel',
-                              '本地 GGUF 模型（下拉选择）'),
+                          label: l10n.t(
+                            'AIC.FieldLocalGgufModel',
+                            '本地 GGUF 模型（下拉选择）',
+                          ),
                           child: ConstrainedBox(
-                            constraints:
-                                const BoxConstraints(maxWidth: 320),
+                            constraints: const BoxConstraints(maxWidth: 320),
                             child: Builder(
                               builder: (context) {
                                 final list = rwkvModels ?? const [];
@@ -2860,25 +3656,30 @@ class _ConfigCard extends ConsumerWidget {
                                         (m) =>
                                             m.filePath ==
                                             cfg.rwkvLocalModelPath,
-                                        orElse: () => list.first);
+                                        orElse: () => list.first,
+                                      );
                                 return InputDecorator(
                                   decoration: InputDecoration(
                                     border: const OutlineInputBorder(),
                                     isDense: true,
                                     contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 2),
+                                      horizontal: 10,
+                                      vertical: 2,
+                                    ),
                                     suffixIcon: onRefreshRwkvModels == null
                                         ? null
                                         : Padding(
-                                            padding:
-                                                const EdgeInsets.only(right: 4),
+                                            padding: const EdgeInsets.only(
+                                              right: 4,
+                                            ),
                                             child: rwkvScanning
                                                 ? const SizedBox(
                                                     width: 14,
                                                     height: 14,
                                                     child:
                                                         CircularProgressIndicator(
-                                                            strokeWidth: 2),
+                                                          strokeWidth: 2,
+                                                        ),
                                                   )
                                                 : null,
                                           ),
@@ -2890,12 +3691,17 @@ class _ConfigCard extends ConsumerWidget {
                                       isDense: true,
                                       hint: Text(
                                         list.isEmpty
-                                            ? l10n.t('AIC.NoGgufFiles',
-                                                'rwkv_models/ 无 GGUF 文件')
-                                            : l10n.t('AIC.SelectModelHint',
-                                                '请选择模型'),
+                                            ? l10n.t(
+                                                'AIC.NoGgufFiles',
+                                                'rwkv_models/ 无 GGUF 文件',
+                                              )
+                                            : l10n.t(
+                                                'AIC.SelectModelHint',
+                                                '请选择模型',
+                                              ),
                                         style: TextStyle(
-                                            color: scheme.onSurfaceVariant),
+                                          color: scheme.onSurfaceVariant,
+                                        ),
                                       ),
                                       items: [
                                         for (final m in list)
@@ -2908,18 +3714,23 @@ class _ConfigCard extends ConsumerWidget {
                                                     CrossAxisAlignment.start,
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  Text(m.displayName,
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
-                                                          fontWeight: FontWeight
-                                                              .w500)),
+                                                  Text(
+                                                    m.displayName,
+                                                    style: const TextStyle(
+                                                      fontSize: 13,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                    ),
+                                                  ),
                                                   const SizedBox(height: 2),
                                                   Text(
-                                                      '${(m.sizeBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB · ${m.fileName}',
-                                                      style: TextStyle(
-                                                          fontSize: 10,
-                                                          color: scheme
-                                                              .onSurfaceVariant)),
+                                                    '${(m.sizeBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB · ${m.fileName}',
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: scheme
+                                                          .onSurfaceVariant,
+                                                    ),
+                                                  ),
                                                 ],
                                               ),
                                             ),
@@ -2947,12 +3758,14 @@ class _ConfigCard extends ConsumerWidget {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          l10n.tf('AIC.CurrentModelPath', '当前模型路径: {path}',
-                              {'path': cfg.rwkvLocalModelPath ?? ''}),
+                          l10n.tf('AIC.CurrentModelPath', '当前模型路径: {path}', {
+                            'path': cfg.rwkvLocalModelPath ?? '',
+                          }),
                           style: TextStyle(
-                              fontSize: 10,
-                              color: scheme.onSurfaceVariant,
-                              fontFeatures: const [FontFeature.tabularFigures()]),
+                            fontSize: 10,
+                            color: scheme.onSurfaceVariant,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
                         ),
                       ),
                   ],
@@ -2980,28 +3793,35 @@ class _ConfigCard extends ConsumerWidget {
                       lastTest!.isSuccess
                           ? Icons.check_circle_outline
                           : Icons.error_outline,
-                      color: lastTest!.isSuccess
-                          ? scheme.primary
-                          : Colors.red,
+                      color: lastTest!.isSuccess ? scheme.primary : Colors.red,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         lastTest!.isSuccess
-                            ? l10n.tf('AIC.ConnectSuccess',
-                                '连接成功 · 耗时 {ms}ms{versionInfo}', {
-                                'ms': '${lastTest!.responseTime.inMilliseconds}',
-                                'versionInfo': lastTest!.serverInfo
-                                        .containsKey('version')
-                                    ? l10n.tf('AIC.ServerVersion',
-                                        ' · 服务版本: {v}', {
-                                        'v': '${lastTest!.serverInfo['version']}'
-                                      })
-                                    : '',
-                              })
-                            : l10n.tf('AIC.ConnectFailed',
-                                '连接失败: {msg}', {
-                                'msg': '${lastTest!.errorMessage}'
+                            ? l10n.tf(
+                                'AIC.ConnectSuccess',
+                                '连接成功 · 耗时 {ms}ms{versionInfo}',
+                                {
+                                  'ms':
+                                      '${lastTest!.responseTime.inMilliseconds}',
+                                  'versionInfo':
+                                      lastTest!.serverInfo.containsKey(
+                                        'version',
+                                      )
+                                      ? l10n.tf(
+                                          'AIC.ServerVersion',
+                                          ' · 服务版本: {v}',
+                                          {
+                                            'v':
+                                                '${lastTest!.serverInfo['version']}',
+                                          },
+                                        )
+                                      : '',
+                                },
+                              )
+                            : l10n.tf('AIC.ConnectFailed', '连接失败: {msg}', {
+                                'msg': '${lastTest!.errorMessage}',
                               }),
                       ),
                     ),
@@ -3030,9 +3850,10 @@ class _Field extends ConsumerWidget {
         Text(
           label,
           style: TextStyle(
-              fontSize: 12,
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w500),
+            fontSize: 12,
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w500,
+          ),
         ),
         const SizedBox(height: 6),
         child,
@@ -3057,46 +3878,55 @@ class _StatsCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.t('AIC.StatsTitle', '运行统计'),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.primary,
-                    )),
+            Text(
+              l10n.t('AIC.StatsTitle', '运行统计'),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: scheme.primary),
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               runSpacing: 12,
               children: [
-                _StatChip(label: l10n.t('AIC.StatTotalRequests', '总请求'), value: '${s.totalRequests}'),
                 _StatChip(
-                    label: l10n.t('AIC.StatSuccess', '成功'),
-                    value: '${s.successfulRequests}',
-                    color: Colors.green),
+                  label: l10n.t('AIC.StatTotalRequests', '总请求'),
+                  value: '${s.totalRequests}',
+                ),
                 _StatChip(
-                    label: l10n.t('AIC.StatFailed', '失败'),
-                    value: '${s.failedRequests}',
-                    color: Colors.red),
+                  label: l10n.t('AIC.StatSuccess', '成功'),
+                  value: '${s.successfulRequests}',
+                  color: Colors.green,
+                ),
                 _StatChip(
-                    label: l10n.t('AIC.StatAvgResponse', '平均响应'),
-                    value:
-                        '${s.averageResponseTime.inMilliseconds}ms'),
-                _StatChip(label: l10n.t('AIC.StatTotalTokens', '累计令牌'), value: '${s.totalTokensUsed}'),
+                  label: l10n.t('AIC.StatFailed', '失败'),
+                  value: '${s.failedRequests}',
+                  color: Colors.red,
+                ),
+                _StatChip(
+                  label: l10n.t('AIC.StatAvgResponse', '平均响应'),
+                  value: '${s.averageResponseTime.inMilliseconds}ms',
+                ),
+                _StatChip(
+                  label: l10n.t('AIC.StatTotalTokens', '累计令牌'),
+                  value: '${s.totalTokensUsed}',
+                ),
                 _StatChip(
                   label: l10n.t('AIC.StatLastRequest', '最后请求'),
                   value: s.lastRequestTime == null
                       ? '—'
                       : s.lastRequestTime!
-                          .toLocal()
-                          .toString()
-                          .split('.')
-                          .first,
+                            .toLocal()
+                            .toString()
+                            .split('.')
+                            .first,
                 ),
                 _StatChip(
                   label: l10n.t('AIC.StatAvailability', '可用性'),
                   value: available == true
                       ? l10n.t('AIC.StatusOnline', '在线')
                       : l10n.t('AIC.StatusOffline', '离线'),
-                  color:
-                      available == true ? Colors.green : scheme.outline,
+                  color: available == true ? Colors.green : scheme.outline,
                 ),
               ],
             ),
@@ -3128,17 +3958,23 @@ class _StatChip extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: TextStyle(
-                  fontSize: 10,
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           const SizedBox(height: 2),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 16,
-                  color: c,
-                  fontWeight: FontWeight.bold)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              color: c,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
     );
@@ -3157,6 +3993,7 @@ class _DualAgentCard extends ConsumerStatefulWidget {
 }
 
 class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
+  bool _g1kPresetLoading = false;
   late final TextEditingController _mainModelCtrl;
   late final TextEditingController _mainRoleCtrl;
   late final TextEditingController _subModelCtrl;
@@ -3179,14 +4016,13 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     _loadingModelsFor = name;
     List<String> ids = <String>[];
     try {
-      final IModelProvider? p = ref.read(modelManagerProvider).getProvider(name);
+      final IModelProvider? p = ref.read(agentProviderResolverProvider)(name);
       if (p != null) {
         final List<ModelInfo> list = await p.getAvailableModels();
         ids = <String>{
           for (final ModelInfo e in list)
             if (e.id.trim().isNotEmpty) e.id.trim(),
-        }.toList()
-          ..sort();
+        }.toList()..sort();
       }
     } catch (_) {
       // 拉取失败保持空列表：用户仍可自由输入模型 id
@@ -3207,6 +4043,7 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
   ) async {
     final l10n = ref.read(l10nProvider);
     final String name = providerName.trim();
+    _models.remove(name);
     await _ensureModels(name);
     final List<String> ids = _models[name] ?? const <String>[];
     if (!context.mounted) return;
@@ -3228,16 +4065,20 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                   child: Text(
                     '$name · ${l10n.tf('AICfg.AgentModelListTitle', '可用模型（{0}）', <Object>[ids.length])}',
                     style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.bold),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 if (ids.isEmpty)
                   Padding(
                     padding: const EdgeInsets.all(20),
                     child: Text(
-                      l10n.t('AICfg.AgentModelEmpty',
-                          '未取到模型列表（该平台可能未配置或不支持 /models）。'
-                          '可直接在上方输入框手填模型 id。'),
+                      l10n.t(
+                        'AICfg.AgentModelEmpty',
+                        '未取到模型列表（该平台可能未配置或不支持 /models）。'
+                            '可直接在上方输入框手填模型 id。',
+                      ),
                       style: const TextStyle(fontSize: 12),
                     ),
                   )
@@ -3250,10 +4091,10 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                         final String id = ids[i];
                         return ListTile(
                           dense: true,
-                          title: Text(id,
-                              style: const TextStyle(fontSize: 12)),
+                          title: Text(id, style: const TextStyle(fontSize: 12)),
                           onTap: () {
                             ctrl.text = id;
+                            _save();
                             Navigator.pop(ctx);
                           },
                         );
@@ -3295,7 +4136,9 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
 
   Future<void> _save() async {
     final AgentRoleWorkflowSettings s = ref.read(dualAgentSettingsProvider);
-    await ref.read(dualAgentSettingsProvider.notifier).update(
+    await ref
+        .read(dualAgentSettingsProvider.notifier)
+        .update(
           s.copyWith(
             mainAgentModel: _mainModelCtrl.text.trim(),
             mainAgentRoleDescription: _mainRoleCtrl.text.trim().isEmpty
@@ -3307,6 +4150,93 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                 : _subRoleCtrl.text.trim(),
           ),
         );
+    await ref.read(g1kBookPresetProvider.notifier).update(const G1kBookPreset());
+  }
+
+  Future<void> _applyG1kPreset() async {
+    final L10n l10n = ref.read(l10nProvider);
+    final RwkvCloudProvider cloud = ref.read(rwkvCloudProviderInstanceProvider);
+    if (!cloud.isAvailable ||
+        Uri.tryParse(cloud.configuration.baseUrl)?.host !=
+            'api-7b.rwkvos.com') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t(
+              'AICfg.G1kPresetSetup',
+              '请先在 RWKV 云端页保存 7B 官方端点和 CF 凭据，并测试连接。',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _g1kPresetLoading = true);
+    final Map<String, String> headers = cloud.configuration.customHeaders;
+    final RwkvCloudProvider writer = RwkvCloudProvider();
+    try {
+      final String? mainId = resolveG1kModel(
+        kG1kMainModelFamily,
+        (await cloud.getAvailableModels()).map((m) => m.id),
+      );
+      final bool writerReady = await writer.initialize(
+        RwkvCloudConfiguration(
+          baseUrl: kG1kWriterBaseUrl,
+          defaultModel: kG1kWriterModelFamily,
+          cfAccessClientId: headers[kHeaderCfAccessClientId] ?? '',
+          cfAccessClientSecret: headers[kHeaderCfAccessClientSecret] ?? '',
+          timeoutSeconds: cloud.configuration.timeoutSeconds,
+        ),
+      );
+      final String? writerId = writerReady
+          ? resolveG1kModel(
+              kG1kWriterModelFamily,
+              (await writer.getAvailableModels()).map((m) => m.id),
+            )
+          : null;
+      if (!mounted) return;
+      if (mainId == null || writerId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.t(
+                'AICfg.G1kPresetFailed',
+                '无法唯一匹配 G1K 两个模型，请检查 7B/3B 端点模型列表，或手动填写完整 ID。',
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      await ref
+          .read(g1kBookPresetProvider.notifier)
+          .update(G1kBookPreset(mainModel: mainId, writerModel: writerId));
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t('AICfg.G1kPresetSaved', '已配置 G1K：7.2B 规划/润色，2.9B 写正文。'),
+          ),
+        ),
+      );
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.t(
+                'AICfg.G1kPresetFailed',
+                '无法唯一匹配 G1K 两个模型，请检查 7B/3B 端点模型列表，或手动填写完整 ID。',
+              ),
+            ),
+          ),
+        );
+      }
+    } finally {
+      writer.dispose();
+      if (mounted) setState(() => _g1kPresetLoading = false);
+    }
   }
 
   /// 可选项：**ModelManager 已注册（即已在对应平台页配置/测试过）的 provider**
@@ -3326,18 +4256,60 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     return list;
   }
 
+  Widget _endpointField(String binding, {required bool main}) {
+    if (AgentEndpointRegistry.platform(binding) != 'RWKV Cloud') {
+      return const SizedBox.shrink();
+    }
+    final profiles = ref.read(agentEndpointRegistryProvider).profiles;
+    final keys = <String>{'RWKV Cloud', ...profiles.keys, binding};
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: DropdownButtonFormField<String>(
+        key: ValueKey('endpoint-$main-$binding'),
+        initialValue: binding,
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: '端点配置（独立于上方当前端点）'),
+        items: [
+          for (final key in keys)
+            DropdownMenuItem(
+              value: key,
+              child: Text(key == 'RWKV Cloud'
+                  ? '兼容旧配置：跟随当前端点（建议选择固定配置）'
+                  : profiles[key]?.name ?? '已删除配置：$key',
+                overflow: TextOverflow.ellipsis),
+            ),
+        ],
+        onChanged: (key) async {
+          if (key == null) return;
+          final s = ref.read(dualAgentSettingsProvider);
+          final ctrl = main ? _mainModelCtrl : _subModelCtrl;
+          ctrl.clear();
+          await ref.read(dualAgentSettingsProvider.notifier).update(s.copyWith(
+            mainAgentProvider: main ? key : null,
+            subAgentProvider: main ? null : key,
+            mainAgentModel: main ? '' : null,
+            subAgentModel: main ? null : '',
+          ));
+          await ref.read(g1kBookPresetProvider.notifier).update(const G1kBookPreset());
+          if (mounted) await _ensureModels(key);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = ref.watch(l10nProvider);
     final scheme = Theme.of(context).colorScheme;
     final mm = ref.watch(modelManagerProvider);
     final AgentRoleWorkflowSettings s = ref.watch(dualAgentSettingsProvider);
+    final G1kBookPreset g1kPreset = ref.watch(g1kBookPresetProvider);
     final List<String> options = _providerOptions(mm.getAllProviders());
-    if (!options.contains(s.mainAgentProvider)) {
-      options.add(s.mainAgentProvider);
+    if (!options.contains(AgentEndpointRegistry.platform(s.mainAgentProvider))) {
+      options.add(AgentEndpointRegistry.platform(s.mainAgentProvider));
     }
-    if (!options.contains(s.subAgentProvider)) {
-      options.add(s.subAgentProvider);
+    if (!options.contains(AgentEndpointRegistry.platform(s.subAgentProvider))) {
+      options.add(AgentEndpointRegistry.platform(s.subAgentProvider));
     }
 
     Future<void> patch({
@@ -3346,14 +4318,23 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
       String? mainProvider,
       String? subProvider,
     }) async {
-      await ref.read(dualAgentSettingsProvider.notifier).update(
+      await ref
+          .read(dualAgentSettingsProvider.notifier)
+          .update(
             s.copyWith(
               enableDualAgentWorkflow: enable,
               enableArchiveWrite: archive,
               mainAgentProvider: mainProvider,
               subAgentProvider: subProvider,
+              mainAgentModel: mainProvider != null ? '' : null,
+              subAgentModel: subProvider != null ? '' : null,
             ),
           );
+      if (mainProvider != null || subProvider != null) {
+        if (mainProvider != null) _mainModelCtrl.clear();
+        if (subProvider != null) _subModelCtrl.clear();
+        await ref.read(g1kBookPresetProvider.notifier).update(const G1kBookPreset());
+      }
     }
 
     return Container(
@@ -3380,8 +4361,9 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                 onPressed: () async {
                   await _save();
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(l10n.t('Common.Saved', '已保存'))));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(l10n.t('Common.Saved', '已保存'))),
+                    );
                   }
                 },
                 child: Text(l10n.t('Common.Save', '保存')),
@@ -3390,9 +4372,51 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
           ),
           const SizedBox(height: 4),
           Text(
-            l10n.t('AICfg.DualAgentDesc',
-                '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。'),
+            l10n.t(
+              'AICfg.DualAgentDesc',
+              '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。',
+            ),
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+          ),
+          Text(
+            l10n.t(
+              'AICfg.G1kPresetHint',
+              '多智能体写书专用：7.2B 负责大纲与润色，2.9B 负责正文；不修改普通双代理配置。',
+            ),
+            style: TextStyle(fontSize: 11, color: scheme.primary),
+          ),
+          if (g1kPreset.enabled)
+            SelectableText(
+              'Main: ${g1kPreset.mainModel}\nSub: ${g1kPreset.writerModel}',
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: _g1kPresetLoading ? null : _applyG1kPreset,
+                  icon: _g1kPresetLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.auto_fix_high_outlined, size: 18),
+                  label: Text(
+                    l10n.t('AICfg.G1kPreset', '预置 G1K 7.2B 主编 + 2.9B 写手'),
+                  ),
+                ),
+                if (g1kPreset.enabled)
+                  TextButton(
+                    onPressed: () => ref
+                        .read(g1kBookPresetProvider.notifier)
+                        .update(const G1kBookPreset()),
+                    child: Text(l10n.t('AICfg.G1kDisable', '停用写书预设')),
+                  ),
+              ],
+            ),
           ),
           Material(
             type: MaterialType.transparency,
@@ -3401,17 +4425,20 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               dense: true,
               value: s.enableDualAgentWorkflow,
               onChanged: (bool v) => patch(enable: v),
-              title: Text(l10n.t('AICfg.EnableDualAgent',
-                  '启用 MainAgent / SubAgent 双代理写作流')),
+              title: Text(
+                l10n.t(
+                  'AICfg.EnableDualAgent',
+                  '启用 MainAgent / SubAgent 双代理写作流',
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 8),
           _Field(
             label: l10n.t('AICfg.HintMainAgentProvider', 'MainAgent 提供者'),
             child: DropdownButtonFormField<String>(
-              initialValue: options.contains(s.mainAgentProvider)
-                  ? s.mainAgentProvider
-                  : options.first,
+              key: ValueKey('main-${s.mainAgentProvider}'),
+              initialValue: AgentEndpointRegistry.platform(s.mainAgentProvider),
               isExpanded: true,
               items: <DropdownMenuItem<String>>[
                 for (final String n in options)
@@ -3427,24 +4454,31 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               },
             ),
           ),
+          _endpointField(s.mainAgentProvider, main: true),
           const SizedBox(height: 4),
           Text(
-            l10n.t('AICfg.HintAgentProviderHelper',
-                '仅列出已配置并注册的平台；新增平台请先到其页签填好 Key 并点「保存 / 测试连接」'),
+            l10n.t(
+              'AICfg.HintAgentProviderHelper',
+              '仅列出已配置并注册的平台；新增平台请先到其页签填好 Key 并点「保存 / 测试连接」',
+            ),
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
           _Field(
-            label: l10n.t('AICfg.HintMainAgentModel',
-                'MainAgent 模型（可选，留空使用提供者默认模型）'),
+            label: l10n.t(
+              'AICfg.HintMainAgentModel',
+              'MainAgent 模型（可选，留空使用提供者默认模型）',
+            ),
             child: Row(
               children: <Widget>[
                 Expanded(
                   child: TextField(
                     controller: _mainModelCtrl,
                     decoration: InputDecoration(
-                      hintText: l10n.t('AICfg.HintAgentModelHint',
-                          '留空 = 用该平台默认模型'),
+                      hintText: l10n.t(
+                        'AICfg.HintAgentModelHint',
+                        '留空 = 用该平台默认模型',
+                      ),
                       isDense: true,
                     ),
                   ),
@@ -3453,8 +4487,8 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                 IconButton(
                   tooltip: l10n.t('AICfg.AgentModelList', '模型列表'),
                   icon: const Icon(Icons.list_alt_outlined),
-                  onPressed: () => _pickModel(
-                      context, s.mainAgentProvider, _mainModelCtrl),
+                  onPressed: () =>
+                      _pickModel(context, s.mainAgentProvider, _mainModelCtrl),
                 ),
               ],
             ),
@@ -3470,9 +4504,8 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
           _Field(
             label: l10n.t('AICfg.HintSubAgentProvider', 'SubAgent 提供者'),
             child: DropdownButtonFormField<String>(
-              initialValue: options.contains(s.subAgentProvider)
-                  ? s.subAgentProvider
-                  : options.first,
+              key: ValueKey('sub-${s.subAgentProvider}'),
+              initialValue: AgentEndpointRegistry.platform(s.subAgentProvider),
               isExpanded: true,
               items: <DropdownMenuItem<String>>[
                 for (final String n in options)
@@ -3488,18 +4521,23 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               },
             ),
           ),
+          _endpointField(s.subAgentProvider, main: false),
           const SizedBox(height: 12),
           _Field(
-            label: l10n.t('AICfg.HintSubAgentModel',
-                'SubAgent 模型（可选，留空使用提供者默认模型）'),
+            label: l10n.t(
+              'AICfg.HintSubAgentModel',
+              'SubAgent 模型（可选，留空使用提供者默认模型）',
+            ),
             child: Row(
               children: <Widget>[
                 Expanded(
                   child: TextField(
                     controller: _subModelCtrl,
                     decoration: InputDecoration(
-                      hintText: l10n.t('AICfg.HintAgentModelHint',
-                          '留空 = 用该平台默认模型'),
+                      hintText: l10n.t(
+                        'AICfg.HintAgentModelHint',
+                        '留空 = 用该平台默认模型',
+                      ),
                       isDense: true,
                     ),
                   ),
@@ -3508,8 +4546,8 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
                 IconButton(
                   tooltip: l10n.t('AICfg.AgentModelList', '模型列表'),
                   icon: const Icon(Icons.list_alt_outlined),
-                  onPressed: () => _pickModel(
-                      context, s.subAgentProvider, _subModelCtrl),
+                  onPressed: () =>
+                      _pickModel(context, s.subAgentProvider, _subModelCtrl),
                 ),
               ],
             ),
@@ -3526,10 +4564,11 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
               dense: true,
               value: s.enableArchiveWrite,
               onChanged: (bool v) => patch(archive: v),
-              title: Text(l10n.t('AICfg.AllowArchiveWrite',
-                  '允许 SubAgent 将纯净定稿写入正式项目档案库')),
+              title: Text(
+                l10n.t('AICfg.AllowArchiveWrite', '允许 SubAgent 将纯净定稿写入正式项目档案库'),
+              ),
             ),
-          )
+          ),
         ],
       ),
     );
@@ -3565,14 +4604,17 @@ Widget _buildProgressBlock(
   VoidCallback? onCancel,
 }) {
   final l10n = ref.watch(l10nProvider);
-  if (idleHide && progress.phase == RwkvDownloadPhase.idle &&
+  if (idleHide &&
+      progress.phase == RwkvDownloadPhase.idle &&
       (progress.message ?? '').isEmpty) {
     return const SizedBox.shrink();
   }
   switch (progress.phase) {
     case RwkvDownloadPhase.failed:
       final err =
-          progress.error?.toString() ?? progress.message ?? l10n.t('AIC.UnknownError', '未知错误');
+          progress.error?.toString() ??
+          progress.message ??
+          l10n.t('AIC.UnknownError', '未知错误');
       return Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -3590,14 +4632,16 @@ Widget _buildProgressBlock(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    l10n.tf('AIC.PhaseFailedLabel', '❌ {phaseLabel}',
-                        {
-                          'phaseLabel': l10n.t(
-                              progress.phase.labelKey, progress.phase.label)
-                        }),
+                    l10n.tf('AIC.PhaseFailedLabel', '❌ {phaseLabel}', {
+                      'phaseLabel': l10n.t(
+                        progress.phase.labelKey,
+                        progress.phase.label,
+                      ),
+                    }),
                     style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onErrorContainer),
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onErrorContainer,
+                    ),
                   ),
                   const SizedBox(height: 3),
                   Text(
@@ -3605,7 +4649,9 @@ Widget _buildProgressBlock(
                     maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                        fontSize: 12, color: scheme.onErrorContainer),
+                      fontSize: 12,
+                      color: scheme.onErrorContainer,
+                    ),
                   ),
                 ],
               ),
@@ -3619,13 +4665,18 @@ Widget _buildProgressBlock(
           Icon(Icons.cancel_outlined, size: 16, color: scheme.onSurfaceVariant),
           const SizedBox(width: 6),
           Expanded(
-              child: Text(l10n.tf('AIC.CancelledWithMessage', '已取消：{msg}',
-                  {'msg': progress.message ?? ''}),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontFeatures: const [FontFeature.tabularFigures()]))),
+            child: Text(
+              l10n.tf('AIC.CancelledWithMessage', '已取消：{msg}', {
+                'msg': progress.message ?? '',
+              }),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: scheme.onSurfaceVariant,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
         ],
       );
     case RwkvDownloadPhase.done:
@@ -3639,8 +4690,7 @@ Widget _buildProgressBlock(
         ),
         child: Row(
           children: [
-            Icon(Icons.check_circle_outline,
-                size: 16, color: scheme.primary),
+            Icon(Icons.check_circle_outline, size: 16, color: scheme.primary),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
@@ -3648,10 +4698,11 @@ Widget _buildProgressBlock(
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurface,
-                    fontWeight: FontWeight.w500,
-                    fontFeatures: const [FontFeature.tabularFigures()]),
+                  fontSize: 12,
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w500,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
               ),
             ),
           ],
@@ -3667,7 +4718,9 @@ Widget _buildProgressBlock(
           ? progress.fractionComplete.clamp(0.0, 1.0)
           : 0.0;
       final received = _formatBytes(progress.receivedBytes);
-      final total = progress.totalBytes > 0 ? _formatBytes(progress.totalBytes) : '--';
+      final total = progress.totalBytes > 0
+          ? _formatBytes(progress.totalBytes)
+          : '--';
       final speed = progress.speedMbps > 0
           ? '${progress.speedMbps.toStringAsFixed(2)} Mbps'
           : '-- Mbps';
@@ -3688,48 +4741,55 @@ Widget _buildProgressBlock(
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    Text(l10n.t(progress.phase.labelKey, progress.phase.label),
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: scheme.primary)),
+                    Text(
+                      l10n.t(progress.phase.labelKey, progress.phase.label),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.primary,
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Text('$received / $total',
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: scheme.onSurfaceVariant,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ])),
+                    Text(
+                      '$received / $total',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
                     const Spacer(),
-                    Text(speed,
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: scheme.onSurfaceVariant,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ])),
+                    Text(
+                      speed,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Text('ETA $eta',
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: scheme.onSurfaceVariant,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ])),
+                    Text(
+                      'ETA $eta',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
                   ],
                 ),
                 if ((progress.message ?? '').isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(progress.message!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: scheme.onSurfaceVariant,
-                          fontFeatures: const [
-                            FontFeature.tabularFigures()
-                          ])),
+                  Text(
+                    progress.message!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -3748,8 +4808,11 @@ Widget _buildProgressBlock(
                     onTap: onCancel,
                     child: Padding(
                       padding: const EdgeInsets.all(4),
-                      child: Icon(Icons.highlight_off_outlined,
-                          size: 18, color: scheme.onSurfaceVariant),
+                      child: Icon(
+                        Icons.highlight_off_outlined,
+                        size: 18,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),
@@ -3791,8 +4854,8 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
 
   late final Map<String, TextEditingController> _ctrl =
       <String, TextEditingController>{
-    for (final String k in _paramKeys) k: TextEditingController(),
-  };
+        for (final String k in _paramKeys) k: TextEditingController(),
+      };
 
   @override
   void initState() {
@@ -3846,10 +4909,13 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
     setState(() => aiRuntimeSettings = s);
     await _persist(s);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            ref.read(l10nProvider).t('AIC.Sampling.Saved', '已保存，下一次生成生效')),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ref.read(l10nProvider).t('AIC.Sampling.Saved', '已保存，下一次生成生效'),
+          ),
+        ),
+      );
     }
   }
 
@@ -3857,7 +4923,10 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
     try {
       final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
       await kv.writeJson(
-          'ai_config', 'runtime_settings', jsonEncode(s.toJson()));
+        'ai_config',
+        'runtime_settings',
+        jsonEncode(s.toJson()),
+      );
     } catch (_) {
       // KVStore 写失败不阻塞创作（与 chapter_referral 同策略），下次保存会重试
     }
@@ -3919,7 +4988,9 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
             width: 250,
             child: TextField(
               controller: _ctrl[k],
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: InputDecoration(
                 isDense: true,
                 labelText: l10n.t(_labelKey(k), _labelFallback(k)),
@@ -3936,16 +5007,19 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.t('AIC.Sampling.Title', '生成采样参数与思维链'),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.primary,
-                    )),
+            Text(
+              l10n.t('AIC.Sampling.Title', '生成采样参数与思维链'),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: scheme.primary),
+            ),
             const SizedBox(height: 4),
             Text(
               l10n.t(
-                  'AIC.Sampling.Sub',
-                  '仅对 RWKV 家族生效：官方推荐值（alpha_* 重复惩罚 + DRY 抗整段复读）'
-                  '可一键套用，再按需微调；修改下一次生成即生效'),
+                'AIC.Sampling.Sub',
+                '仅对 RWKV 家族生效：官方推荐值（alpha_* 重复惩罚 + DRY 抗整段复读）'
+                    '可一键套用，再按需微调；修改下一次生成即生效',
+              ),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -3962,32 +5036,37 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
               ),
             ),
             const Divider(height: 24),
-            Text(l10n.t('AIC.Thinking.Title', '思维链'),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.primary,
-                    )),
+            Text(
+              l10n.t('AIC.Thinking.Title', '思维链'),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: scheme.primary),
+            ),
             Material(
               type: MaterialType.transparency,
               child: SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: s.thinkingEnabled,
                 onChanged: (bool v) async {
-                  final AiRuntimeSettings next =
-                      s.copyWith(thinkingEnabled: v);
+                  final AiRuntimeSettings next = s.copyWith(thinkingEnabled: v);
                   setState(() => aiRuntimeSettings = next);
                   await _persist(next);
                 },
                 title: Text(l10n.t('AIC.Thinking.Enable', '启用思维链')),
                 subtitle: Text(
-                  l10n.t('AIC.Thinking.EnableSub',
-                      '关闭后 Agent 直接产出结果，不再构造/解析思维步骤'),
+                  l10n.t(
+                    'AIC.Thinking.EnableSub',
+                    '关闭后 Agent 直接产出结果，不再构造/解析思维步骤',
+                  ),
                   style: const TextStyle(fontSize: 12),
                 ),
               ),
             ),
             if (s.thinkingEnabled) ...[
-              Text(l10n.t('AIC.Thinking.Intensity', '思考强度'),
-                  style: const TextStyle(fontSize: 12)),
+              Text(
+                l10n.t('AIC.Thinking.Intensity', '思考强度'),
+                style: const TextStyle(fontSize: 12),
+              ),
               const SizedBox(height: 8),
               SegmentedButton<ThinkingIntensity>(
                 segments: <ButtonSegment<ThinkingIntensity>>[
@@ -4006,16 +5085,19 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
                 ],
                 selected: <ThinkingIntensity>{s.thinkingIntensity},
                 onSelectionChanged: (Set<ThinkingIntensity> sel) async {
-                  final AiRuntimeSettings next =
-                      s.copyWith(thinkingIntensity: sel.first);
+                  final AiRuntimeSettings next = s.copyWith(
+                    thinkingIntensity: sel.first,
+                  );
                   setState(() => aiRuntimeSettings = next);
                   await _persist(next);
                 },
               ),
               const SizedBox(height: 4),
               Text(
-                l10n.t('AIC.Thinking.IntensitySub',
-                    '低 = 仅正文/大纲/续写/角色等核心长文任务；中 = 复杂任务（默认）；高 = 全部任务'),
+                l10n.t(
+                  'AIC.Thinking.IntensitySub',
+                  '低 = 仅正文/大纲/续写/角色等核心长文任务；中 = 复杂任务（默认）；高 = 全部任务',
+                ),
                 style: const TextStyle(fontSize: 12),
               ),
             ],
@@ -4026,30 +5108,30 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
   }
 
   String _labelKey(String key) => switch (key) {
-        'top_k' => 'AIC.Sampling.TopK',
-        'top_p' => 'AIC.Sampling.TopP',
-        'alpha_presence' => 'AIC.Sampling.AlphaPresence',
-        'alpha_frequency' => 'AIC.Sampling.AlphaFrequency',
-        'alpha_decay' => 'AIC.Sampling.AlphaDecay',
-        'dry_multiplier' => 'AIC.Sampling.DryMultiplier',
-        'dry_base' => 'AIC.Sampling.DryBase',
-        'dry_allowed_length' => 'AIC.Sampling.DryAllowed',
-        'dry_penalty_last_n' => 'AIC.Sampling.DryLastN',
-        _ => key,
-      };
+    'top_k' => 'AIC.Sampling.TopK',
+    'top_p' => 'AIC.Sampling.TopP',
+    'alpha_presence' => 'AIC.Sampling.AlphaPresence',
+    'alpha_frequency' => 'AIC.Sampling.AlphaFrequency',
+    'alpha_decay' => 'AIC.Sampling.AlphaDecay',
+    'dry_multiplier' => 'AIC.Sampling.DryMultiplier',
+    'dry_base' => 'AIC.Sampling.DryBase',
+    'dry_allowed_length' => 'AIC.Sampling.DryAllowed',
+    'dry_penalty_last_n' => 'AIC.Sampling.DryLastN',
+    _ => key,
+  };
 
   String _labelFallback(String key) => switch (key) {
-        'top_k' => 'top_k（候选数）',
-        'top_p' => 'top_p（核采样）',
-        'alpha_presence' => 'alpha_presence（重复惩罚）',
-        'alpha_frequency' => 'alpha_frequency（频率惩罚）',
-        'alpha_decay' => 'alpha_decay（惩罚衰减）',
-        'dry_multiplier' => 'dry_multiplier（DRY 强度）',
-        'dry_base' => 'dry_base（DRY 衰减底数）',
-        'dry_allowed_length' => 'dry_allowed_length（DRY 容忍长度）',
-        'dry_penalty_last_n' => 'dry_penalty_last_n（DRY 窗口）',
-        _ => key,
-      };
+    'top_k' => 'top_k（候选数）',
+    'top_p' => 'top_p（核采样）',
+    'alpha_presence' => 'alpha_presence（重复惩罚）',
+    'alpha_frequency' => 'alpha_frequency（频率惩罚）',
+    'alpha_decay' => 'alpha_decay（惩罚衰减）',
+    'dry_multiplier' => 'dry_multiplier（DRY 强度）',
+    'dry_base' => 'dry_base（DRY 衰减底数）',
+    'dry_allowed_length' => 'dry_allowed_length（DRY 容忍长度）',
+    'dry_penalty_last_n' => 'dry_penalty_last_n（DRY 窗口）',
+    _ => key,
+  };
 }
 
 class _ChapterSyncCard extends ConsumerStatefulWidget {
@@ -4092,10 +5174,12 @@ class _ChapterSyncCardState extends ConsumerState<_ChapterSyncCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l10n.t('SYN.GroupTitle', '章节自动同步（世界观联动）'),
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.primary,
-                    )),
+            Text(
+              l10n.t('SYN.GroupTitle', '章节自动同步（世界观联动）'),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: scheme.primary),
+            ),
             if (_loading) ...[
               const SizedBox(height: 12),
               const Center(child: CircularProgressIndicator(strokeWidth: 2)),
@@ -4113,8 +5197,10 @@ class _ChapterSyncCardState extends ConsumerState<_ChapterSyncCard> {
                   },
                   title: Text(l10n.t('SYN.ToggleTitle', '章节保存后自动同步世界观')),
                   subtitle: Text(
-                    l10n.t('SYN.ToggleSub',
-                        '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）'),
+                    l10n.t(
+                      'SYN.ToggleSub',
+                      '按名字匹配追加人物履历 / 势力记录 / 剧情进度 / 时间线事件（不消耗模型调用）',
+                    ),
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
@@ -4132,12 +5218,14 @@ class _ChapterSyncCardState extends ConsumerState<_ChapterSyncCard> {
                   },
                   title: Text(l10n.t('SYN.AIToggleTitle', 'AI 状态抽取（实验）')),
                   subtitle: Text(
-                    l10n.t('SYN.AIToggleSub',
-                        '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）'),
+                    l10n.t(
+                      'SYN.AIToggleSub',
+                      '保存后由模型从正文抽取人物 / 势力状态变化并更新对应字段（每章额外一次模型调用，失败自动跳过）',
+                    ),
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
-              )
+              ),
             ],
           ],
         ),

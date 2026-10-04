@@ -11,6 +11,8 @@
 //   * 开关持久化在 KVStore（scope=chapter_sync），缺省 规则=开 / AI=关。
 library;
 
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import '../../data/database.dart';
 import '../../data/storage/key_value_store.dart';
 import '../../ai/utils/localized_text.dart';
@@ -82,7 +84,7 @@ class ChapterPostProcessService {
   static const String scope = 'chapter_sync';
   static const String _keyRuleEnabled = 'rule.enabled';
   static const String _keyAiEnabled = 'ai.enabled';
-  static String _lastVersionKey(String chapterId) => 'last_version:$chapterId';
+  static String _lastVersionKey(String chapterId) => 'last_success_v2:$chapterId';
 
   final ChapterSyncService _sync;
   final Future<KeyValueStore> Function() _kv;
@@ -100,7 +102,7 @@ class ChapterPostProcessService {
 
   Future<bool> ruleEnabled() async => _toggleEnabled(_keyRuleEnabled, dflt: true);
 
-  Future<bool> aiEnabled() async => _toggleEnabled(_keyAiEnabled, dflt: false);
+  Future<bool> aiEnabled() async => _toggleEnabled(_keyAiEnabled, dflt: true);
 
   Future<void> setRuleEnabled(bool value) =>
       _writeToggle(_keyRuleEnabled, value);
@@ -131,18 +133,19 @@ class ChapterPostProcessService {
     try {
       final KeyValueStore store = await _kv();
 
-      // 防重：同章同版本号不重跑（改写会自增 versionNumber，天然放行）
+      final bool ruleOn = await ruleEnabled();
+      final bool aiOn = _aiStage != null && await aiEnabled();
+      final signature = sha256.convert(utf8.encode(jsonEncode([
+        input.versionNumber, input.content, input.status, ruleOn, aiOn,
+      ]))).toString();
+      // Fingerprint content as well: legacy save paths did not increment versions.
       final String? lastVersion =
           await store.readJson(scope, _lastVersionKey(input.chapterId));
-      if (lastVersion != null && lastVersion == '${input.versionNumber}') {
+      if (lastVersion == signature) {
         return const ChapterPostProcessSummary.skipped('alreadySynced');
       }
 
-      final bool ruleOn = await ruleEnabled();
-      final bool aiOn = _aiStage != null && await aiEnabled();
       if (!ruleOn && !aiOn) {
-        await store.writeJson(
-            scope, _lastVersionKey(input.chapterId), '${input.versionNumber}');
         return const ChapterPostProcessSummary.skipped('disabled');
       }
 
@@ -177,8 +180,15 @@ class ChapterPostProcessService {
         }
       }
 
-      await store.writeJson(
-          scope, _lastVersionKey(input.chapterId), '${input.versionNumber}');
+      // Newly extracted entities must receive appearances and timeline links too.
+      if (aiApplied && ruleOn) {
+        final outcome = await _sync.sync(input);
+        ruleApplied = outcome.applied;
+        counts = outcome.counts;
+      }
+      if ((!ruleOn || ruleApplied) && (!aiOn || aiApplied)) {
+        await store.writeJson(scope, _lastVersionKey(input.chapterId), signature);
+      }
       return ChapterPostProcessSummary(
         ruleApplied: ruleApplied,
         ruleCounts: counts,

@@ -30,6 +30,7 @@ import '../rwkv/rwkv_sampling.dart';
 import '../runtime_settings.dart';
 import '../utils/localized_text.dart';
 import '../utils/output_sanitizer.dart';
+import '../utils/fiction_quality.dart';
 
 /// 归档写入回调 —— 返回机器码（`ok` / `empty` / `noProject` / `notFound` / `failed`）。
 ///
@@ -253,7 +254,8 @@ class DualAgentWorkflowService {
         provider: mainProvider,
         model: s.mainAgentModel,
         systemPrompt: _buildMainAgentSystemPrompt(taskType, s),
-        userPrompt: _buildMainAgentUserPrompt(taskType, requirementBrief),
+        userPrompt: '${_buildMainAgentUserPrompt(taskType, requirementBrief)}\n'
+            '原始作者要求与正文（优先于简报）：\n${serializeParameters(parameters)}',
         temperature: taskType == 'PolishText' ? 0.55 : 0.85,
         maxTokens: 6000,
       );
@@ -318,6 +320,20 @@ class DualAgentWorkflowService {
           finalContent = sanitizedDraft;
           _logger.info('SubAgent 定稿跑题或语言错误，已回退为 MainAgent 草稿（$taskType）');
         }
+      }
+
+      if (taskType != 'GenerateOutline' &&
+          FictionQuality.issue(finalContent, chinese: !_genEn) != null) {
+        finalContent = await FictionQuality.generate(
+          chat: mainProvider.chat,
+          model: s.mainAgentModel,
+          chinese: !_genEn,
+          prompt: '${taskFormatInstruction(taskType, isEnglish: _genEn)}\n'
+              '${serializeParameters(parameters)}',
+          maxTokens: 4000,
+          parameters: isRwkvFamilyProvider(mainProvider.providerName)
+              ? aiRuntimeSettings.longFormSamplingParams() : {},
+        );
       }
 
       final String mainModel = s.mainAgentModel.isNotEmpty

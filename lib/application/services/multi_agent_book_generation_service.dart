@@ -23,7 +23,9 @@
 library;
 
 import 'dart:async';
+import 'writing_prompt_templates.dart';
 import 'dart:convert';
+import '../../ai/utils/fiction_quality.dart';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:logging/logging.dart';
@@ -34,6 +36,14 @@ import '../../ai/models/chat.dart';
 import '../../ai/models/provider.dart';
 import '../../ai/providers/openai_compatible_provider.dart'
     show OpenAICompatibleProvider;
+import '../../ai/providers/rwkv_cloud_provider.dart'
+    show
+        RwkvCloudConfiguration,
+        RwkvCloudProvider,
+        kHeaderCfAccessClientId,
+        kHeaderCfAccessClientSecret;
+import '../../ai/rwkv/g1k_model_preset.dart';
+import '../../ai/rwkv/g1k_writing_profile.dart';
 import '../../ai/rwkv/rwkv_sampling.dart' show isRwkvFamilyProvider;
 import '../../ai/runtime_settings.dart';
 import '../../ai/utils/output_sanitizer.dart';
@@ -57,32 +67,36 @@ const Uuid _uuid = Uuid();
 /// 生产环境由 [MultiAgentBookGenerationService.writingProvider] 构建
 /// （provider.chat + AIOutputSanitizer + RWKV 防复读采样参数）；
 /// 测试注入脚本化假执行器即可驱动全链路。
-typedef AgentChatExecutor = Future<String> Function(
-  String systemPrompt,
-  List<ChatMessage> messages, {
-  required int maxTokens,
-  double temperature,
-});
+typedef AgentChatExecutor =
+    Future<String> Function(
+      String systemPrompt,
+      List<ChatMessage> messages, {
+      required int maxTokens,
+      double temperature,
+    });
 
 /// 写作档案钩子：level = `project` / `volume` / `chapter`。
 ///
 /// metadata 携带档案四段描述（timeRange/themeTask/gainsLosses/safeguards）
 /// 与归属 id（volumeId/chapterId）；实现方落 KVStore project_archive。
-typedef TeamArchiveHook = Future<void> Function({
-  required String level,
-  required String? projectId,
-  required String title,
-  required String content,
-  required Map<String, String> metadata,
-});
+typedef TeamArchiveHook =
+    Future<void> Function({
+      required String level,
+      required String? projectId,
+      required String title,
+      required String content,
+      required Map<String, String> metadata,
+    });
 
 /// 验收后更新分派回调：组长罗列的待更新项按固定模板接口分派给 9 位写手
 /// 产出最终条目并防幻觉应用（由 TeamUpdateDispatchService 提供）。
-typedef TeamUpdatesDispatcher = Future<List<String>> Function({
-  required String projectId,
-  required List<Map<String, Object?>> items,
-  required Future<String> Function(int writerSlot, String prompt) writerChat,
-});
+typedef TeamUpdatesDispatcher =
+    Future<List<String>> Function({
+      required String projectId,
+      required List<Map<String, Object?>> items,
+      required Future<String> Function(int writerSlot, String prompt)
+      writerChat,
+    });
 
 /// 章节写作阶段（矩阵化实时进度展示用）。
 enum MultiAgentChapterPhase {
@@ -410,9 +424,10 @@ class _AgentChannel {
     final List<ChatMessage> history = !keepHistory
         ? const <ChatMessage>[]
         : (entry.history.length > _kMaxHistoryMessages
-            ? entry.history
-                .sublist(entry.history.length - _kMaxHistoryMessages)
-            : entry.history);
+              ? entry.history.sublist(
+                  entry.history.length - _kMaxHistoryMessages,
+                )
+              : entry.history);
     final List<ChatMessage> messages = <ChatMessage>[
       ...history,
       ChatMessage.user(userPrompt),
@@ -445,21 +460,38 @@ class MultiAgentBookGenerationService {
     required this.volumes,
     required this.chapters,
     required this.writingProvider,
+    this.planningProvider,
     this.postProcess,
     AgentStateManager? stateManager,
     this.chatExecutor,
+    this.planningChatExecutor,
+    this.mainModel = '',
+    this.subModel = '',
     this.archiveHook,
     this.updateDispatch,
     this.exportService,
+    this.promptTemplates,
   }) : stateManager = stateManager ?? AgentStateManager();
 
   final ProjectRepository projects;
+  final WritingPromptTemplates? promptTemplates;
+
+  String _renderPrompt(String stage, Map<String, String> values) =>
+      (promptTemplates ?? WritingPromptTemplates.defaults()).render(
+        stage,
+        values,
+      );
   final PlotRepository plots;
   final VolumeRepository volumes;
   final ChapterRepository chapters;
 
   /// 写作 provider（双代理配置的 SubAgent provider；本地或云端均可）。
   final IModelProvider? Function() writingProvider;
+
+  /// 主编模型；未配置时兼容旧流程，复用写手模型。
+  final IModelProvider? Function()? planningProvider;
+  final String mainModel;
+  final String subModel;
 
   /// 每章落库后的联动同步（可空 —— 离线测试不装配）。
   final ChapterPostProcessService? postProcess;
@@ -469,6 +501,7 @@ class MultiAgentBookGenerationService {
 
   /// 注入式聊天执行器（测试打桩；为空时按 writingProvider 构建）。
   final AgentChatExecutor? chatExecutor;
+  final AgentChatExecutor? planningChatExecutor;
 
   /// 写作档案钩子（项目/分卷/章节三档；失败只记 warning）。
   final TeamArchiveHook? archiveHook;
@@ -487,8 +520,8 @@ class MultiAgentBookGenerationService {
     MultiAgentChapterListener? onChapterEvent,
   }) async {
     final List<String> warnings = <String>[];
-    final ({String? error, MultiAgentBookConfig normalized}) norm =
-        config.normalize();
+    final ({String? error, MultiAgentBookConfig normalized}) norm = config
+        .normalize();
     if (norm.error != null) {
       return MultiAgentBookResult(
         isSuccess: false,
@@ -503,30 +536,114 @@ class MultiAgentBookGenerationService {
     // ---- 0. 聊天执行器（注入优先；否则按 provider 构建并先探活）----
     onProgress?.call('正在检查写作模型服务…', null);
     final AgentChatExecutor chat;
+    final AgentChatExecutor planningChat;
+    bool useG1kPair = false;
+    RwkvCloudProvider? temporaryWriter;
+    String resolvedMainModel = mainModel;
+    String resolvedSubModel = subModel;
     if (chatExecutor != null) {
       chat = chatExecutor!;
+      planningChat = planningChatExecutor ?? chat;
     } else {
       final IModelProvider? provider = writingProvider();
       if (provider == null) {
-        return _fail(cfg, 'provider', '没有配置双代理 SubAgent 写作模型，请先在「AI 配置」完成配置并注册。');
+        return _fail(
+          cfg,
+          'provider',
+          '没有配置双代理 SubAgent 写作模型，请先在「AI 配置」完成配置并注册。',
+        );
       }
       if (!(await provider.testConnection()).isSuccess) {
-        return _fail(cfg, 'provider', '写作模型服务不可用（testConnection 失败），请检查「AI 配置」。');
+        return _fail(
+          cfg,
+          'provider',
+          '写作模型服务不可用（testConnection 失败），请检查「AI 配置」。',
+        );
       }
-      chat = _buildProviderExecutor(provider);
+      final IModelProvider planner = planningProvider?.call() ?? provider;
+      if (!identical(planner, provider) &&
+          !(await planner.testConnection()).isSuccess) {
+        return _fail(cfg, 'provider', 'MainAgent 大纲模型服务不可用，请检查「AI 配置」。');
+      }
+      final bool requestedPair =
+          identical(planner, provider) &&
+          provider is RwkvCloudProvider &&
+          RegExp(r'g1k.*7\.2b', caseSensitive: false).hasMatch(mainModel) &&
+          RegExp(r'g1k.*2\.9b', caseSensitive: false).hasMatch(subModel);
+      if (requestedPair) {
+        final RwkvCloudProvider cloud = provider;
+        if (Uri.tryParse(cloud.configuration.baseUrl)?.host !=
+            'api-7b.rwkvos.com') {
+          return _fail(cfg, 'provider', 'MainAgent 必须配置到官方 api-7b 端点。');
+        }
+        resolvedMainModel =
+            resolveG1kModel(
+              mainModel,
+              (await cloud.getAvailableModels()).map((m) => m.id),
+            ) ??
+            '';
+        if (resolvedMainModel.isEmpty) {
+          return _fail(cfg, 'provider', '7B 端点无法唯一匹配 MainAgent 模型 $mainModel。');
+        }
+        final headers = cloud.configuration.customHeaders;
+        temporaryWriter = RwkvCloudProvider();
+        final bool ready = await temporaryWriter.initialize(
+          RwkvCloudConfiguration(
+            baseUrl: kG1kWriterBaseUrl,
+            defaultModel: subModel,
+            cfAccessClientId: headers[kHeaderCfAccessClientId] ?? '',
+            cfAccessClientSecret: headers[kHeaderCfAccessClientSecret] ?? '',
+            timeoutSeconds: cloud.configuration.timeoutSeconds,
+          ),
+        );
+        if (!ready) {
+          temporaryWriter.dispose();
+          return _fail(cfg, 'provider', 'SubAgent 2.9B 云端服务不可用，请检查 3B 端点及鉴权。');
+        }
+        resolvedSubModel =
+            resolveG1kModel(
+              subModel,
+              (await temporaryWriter.getAvailableModels()).map((m) => m.id),
+            ) ??
+            '';
+        if (resolvedSubModel.isEmpty) {
+          temporaryWriter.dispose();
+          return _fail(cfg, 'provider', '3B 端点未找到 SubAgent 模型 $subModel。');
+        }
+      }
+      final IModelProvider writer = temporaryWriter ?? provider;
+      chat = _buildProviderExecutor(writer, model: resolvedSubModel);
+      planningChat = _buildProviderExecutor(planner, model: resolvedMainModel);
+      useG1kPair =
+          writer is RwkvCloudProvider &&
+          planner is RwkvCloudProvider &&
+          RegExp(r'g1k.*2\.9b', caseSensitive: false).hasMatch(
+            subModel.isEmpty ? writer.configuration.defaultModel : subModel,
+          ) &&
+          RegExp(r'g1k.*7\.2b', caseSensitive: false).hasMatch(
+            mainModel.isEmpty ? planner.configuration.defaultModel : mainModel,
+          );
     }
 
     // ---- 1. 规划组 state + 主线大纲（规划组组长）----
-    final AgentStateGroup planning =
-        stateManager.activateGroup(label: '${cfg.bookTitle}·大纲规划组');
+    final AgentStateGroup planning = stateManager.activateGroup(
+      label: '${cfg.bookTitle}·大纲规划组',
+    );
     try {
-      final _AgentChannel mainAgent = _planningLeaderChannel(chat, planning);
-      final List<_AgentChannel> planners =
-          _planningWriterChannels(chat, planning);
+      final _AgentChannel mainAgent = _planningLeaderChannel(
+        planningChat,
+        planning,
+      );
+      final List<_AgentChannel> planners = _planningWriterChannels(
+        planningChat,
+        planning,
+      );
 
       onProgress?.call('主智能体正在规划主线大纲…', 0.02);
-      final String mainOutline =
-          await mainAgent.send(_mainOutlinePrompt(cfg), maxTokens: 6000);
+      final String mainOutline = await mainAgent.send(
+        _mainOutlinePrompt(cfg),
+        maxTokens: 6000,
+      );
       if (mainOutline.isEmpty) {
         return _fail(
           cfg,
@@ -542,22 +659,26 @@ class MultiAgentBookGenerationService {
       final String projectId = created.id;
       final String projectName = created.name;
       if (created.revived) {
-        warnings.add('检测到已被删除的同名项目「${created.name}」，已复活复用该条目'
-            '（原关联数据在删除时已清理）');
+        warnings.add(
+          '检测到已被删除的同名项目「${created.name}」，已复活复用该条目'
+          '（原关联数据在删除时已清理）',
+        );
       } else if (created.adjusted) {
         warnings.add('已存在同名项目「${cfg.bookTitle}」，本次创建为「${created.name}」');
       }
       try {
-        await plots.create(PlotsCompanion.insert(
-          id: _uuid.v4(),
-          title: '${cfg.bookTitle}·主线大纲',
-          type: '主线',
-          projectId: projectId,
-          status: const Value('进行中'),
-          priority: const Value('高'),
-          description: Value('作者：${cfg.authorName}'),
-          outline: Value(mainOutline),
-        ));
+        await plots.create(
+          PlotsCompanion.insert(
+            id: _uuid.v4(),
+            title: '${cfg.bookTitle}·主线大纲',
+            type: '主线',
+            projectId: projectId,
+            status: const Value('进行中'),
+            priority: const Value('高'),
+            description: Value('作者：${cfg.authorName}'),
+            outline: Value(mainOutline),
+          ),
+        );
       } on Object catch (e) {
         warnings.add('主线大纲落库失败：$e');
       }
@@ -569,7 +690,8 @@ class MultiAgentBookGenerationService {
         content: mainOutline,
         metadata: <String, String>{
           'timeRange': _fmtDate(DateTime.now()),
-          'themeTask': '《${cfg.bookTitle}》主线大纲编制'
+          'themeTask':
+              '《${cfg.bookTitle}》主线大纲编制'
               '（目标 ${cfg.targetVolumes} 卷 × ${cfg.chaptersPerVolume} 章）',
           'gainsLosses': '主线大纲 ${mainOutline.length} 字定稿，项目与团队编制（1组长+9写手）建立',
           'safeguards': '分卷/章节创作须贴合主线大纲，冲突时以主线为准并在档案中记录取舍',
@@ -578,14 +700,23 @@ class MultiAgentBookGenerationService {
 
       // ---- 3. 分卷大纲（写手并行 + 空结果重试，修复「未按预期写入全部大纲」）----
       onProgress?.call(
-          '规划组 $kWriterCount 位写手并行规划 ${cfg.targetVolumes} 卷大纲'
-          '（空结果自动重试）…', 0.12);
-      final int outlineWorkers =
-          AgentStateManager.quantizeConcurrency(cfg.concurrency);
+        '规划组 $kWriterCount 位写手并行规划 ${cfg.targetVolumes} 卷大纲'
+        '（空结果自动重试）…',
+        0.12,
+      );
+      final int outlineWorkers = AgentStateManager.quantizeConcurrency(
+        cfg.concurrency,
+      );
       final List<String> volumeOutlines = await _runPool<int, String>(
         outlineWorkers,
         [for (int i = 1; i <= cfg.targetVolumes; i++) i],
-        (int i) => _volumeOutlineWithRetry(chat, planners, cfg, mainOutline, i),
+        (int i) => _volumeOutlineWithRetry(
+          planningChat,
+          planners,
+          cfg,
+          mainOutline,
+          i,
+        ),
       );
 
       // ---- 4. 分卷落库 + 分卷档案 ----
@@ -594,14 +725,16 @@ class MultiAgentBookGenerationService {
       for (int i = 0; i < volumeOutlines.length; i++) {
         final String outline = volumeOutlines[i];
         final String vid = _uuid.v4();
-        await volumes.create(VolumesCompanion.insert(
-          id: vid,
-          title: '第${_cn(i + 1)}卷',
-          projectId: projectId,
-          orderIndex: Value(i + 1),
-          status: const Value('Planning'),
-          description: Value(outline.isEmpty ? '' : _truncate(outline, 950)),
-        ));
+        await volumes.create(
+          VolumesCompanion.insert(
+            id: vid,
+            title: '第${_cn(i + 1)}卷',
+            projectId: projectId,
+            orderIndex: Value(i + 1),
+            status: const Value('Planning'),
+            description: Value(outline.isEmpty ? '' : _truncate(outline, 950)),
+          ),
+        );
         final VolumeRow? row = await volumes.getById(vid);
         if (row != null) volumeRows.add(row);
         await _emitArchive(
@@ -624,9 +757,11 @@ class MultiAgentBookGenerationService {
           },
         );
         if (outline.isEmpty) {
-          warnings.add('第 ${i + 1} 卷大纲生成失败（已重试 3 次）：'
-              '${lastChatDiagnostic.isEmpty ? '模型返回为空' : lastChatDiagnostic}'
-              '；已创建空卷（可手动补写大纲）。');
+          warnings.add(
+            '第 ${i + 1} 卷大纲生成失败（已重试 3 次）：'
+            '${lastChatDiagnostic.isEmpty ? '模型返回为空' : lastChatDiagnostic}'
+            '；已创建空卷（可手动补写大纲）。',
+          );
         }
       }
       if (volumeRows.isEmpty) {
@@ -640,17 +775,18 @@ class MultiAgentBookGenerationService {
         for (final VolumeRow v in volumeRows)
           for (int c = 1; c <= cfg.chaptersPerVolume; c++) (v, c),
       ];
-      final List<String> chapterOutlines = await _runPool<(VolumeRow, int), String>(
-        outlineWorkers,
-        chapterSlots,
-        ((VolumeRow, int) slot) => _chapterOutlineChat(
+      final List<String> chapterOutlines =
+          await _runPool<(VolumeRow, int), String>(
+            outlineWorkers,
+            chapterSlots,
+            ((VolumeRow, int) slot) => _chapterOutlineChat(
               planners,
               cfg,
               mainOutline,
               volumeOutlines[volumeRows.indexOf(slot.$1)],
               slot.$2,
             ),
-      );
+          );
 
       // ---- 6. 章节大纲落库（查重：同卷同序号/同标题复用既有行，不重复创建）----
       onProgress?.call('正在写入章节大纲…', 0.55);
@@ -682,15 +818,17 @@ class MultiAgentBookGenerationService {
           continue;
         }
         final String cid = _uuid.v4();
-        await chapters.create(ChaptersCompanion.insert(
-          id: cid,
-          volumeId: vol.id,
-          title: title,
-          projectId: Value(projectId),
-          orderIndex: Value(cIdx),
-          status: const Value('Draft'),
-          summary: Value(brief),
-        ));
+        await chapters.create(
+          ChaptersCompanion.insert(
+            id: cid,
+            volumeId: vol.id,
+            title: title,
+            projectId: Value(projectId),
+            orderIndex: Value(cIdx),
+            status: const Value('Draft'),
+            summary: Value(brief),
+          ),
+        );
         final ChapterRow? row = await chapters.getById(cid);
         if (row != null) outlineRows.add(row);
         if (outline.isEmpty) {
@@ -707,134 +845,202 @@ class MultiAgentBookGenerationService {
         MultiAgentChapterPhase phase,
         double progress,
         String detail,
-      ) =>
-          onChapterEvent?.call(MultiAgentChapterEvent(
-            chapterId: ch.id,
-            chapterTitle: ch.title,
-            volumeTitle: volumeTitleById[ch.volumeId] ?? '',
-            phase: phase,
-            progress: progress,
-            detail: detail,
-          ));
+      ) => onChapterEvent?.call(
+        MultiAgentChapterEvent(
+          chapterId: ch.id,
+          chapterTitle: ch.title,
+          volumeTitle: volumeTitleById[ch.volumeId] ?? '',
+          phase: phase,
+          progress: progress,
+          detail: detail,
+        ),
+      );
       // 矩阵初始态：全部章节入队
       for (final ChapterRow ch in outlineRows) {
         emitChapter(ch, MultiAgentChapterPhase.queued, 0, '排队等待写作团队');
       }
-      final int lanes = cfg.concurrency.clamp(1, outlineRows.isEmpty ? 1 : outlineRows.length);
+      final int lanes = cfg.concurrency.clamp(
+        1,
+        outlineRows.isEmpty ? 1 : outlineRows.length,
+      );
       onProgress?.call(
-          '激活 $lanes 个章节团队并行写作'
-          '（每队 1 组长 + 9 偏向写手，state 独享）…', 0.56);
+        '激活 $lanes 个章节团队并行写作'
+        '（每队 1 组长 + 9 偏向写手，state 独享）…',
+        0.56,
+      );
       int written = 0;
       int teamStarted = 0;
       final List<({int order, String title, String status, int wordCount})>
-          exportedChapters = <({int order, String title, String status, int wordCount})>[];
+      exportedChapters =
+          <({int order, String title, String status, int wordCount})>[];
       final List<(ChapterRow, int)> teamSlots = <(ChapterRow, int)>[
         for (int i = 0; i < outlineRows.length; i++) (outlineRows[i], i),
       ];
-      await _runPool<(ChapterRow, int), void>(lanes, teamSlots,
-          ((ChapterRow, int) slot) async {
+      await _runPool<(ChapterRow, int), void>(lanes, teamSlots, (
+        (ChapterRow, int) slot,
+      ) async {
         final (ChapterRow ch, int seq) = slot;
-        final AgentStateGroup team =
-            stateManager.activateGroup(label: '《${ch.title}》写作团队');
+        final AgentStateGroup team = stateManager.activateGroup(
+          label: '《${ch.title}》写作团队',
+        );
         void emit(MultiAgentChapterPhase phase, double p, String detail) =>
             emitChapter(ch, phase, p, detail);
         try {
           teamStarted++;
           final int started = teamStarted;
           onProgress?.call(
-              '写作团队《${ch.title}》开工'
-              '（${(started / outlineRows.length * 100).round()}% 章节已开队）…',
-              0.56 + 0.42 * ((started - 1) / (outlineRows.isEmpty ? 1 : outlineRows.length)));
+            '写作团队《${ch.title}》开工'
+            '（${(started / outlineRows.length * 100).round()}% 章节已开队）…',
+            0.56 +
+                0.42 *
+                    ((started - 1) /
+                        (outlineRows.isEmpty ? 1 : outlineRows.length)),
+          );
           final ({
             String? content,
             TeamAcceptance? acceptance,
             bool shortfall,
             String qualityNote,
             List<ChapterExportSection> sections,
-          }) outcome = await switch (cfg.craft) {
+          })
+          outcome = await switch (cfg.craft) {
             WritingCraft.team => _writeChapterWithTeam(
-                chat: chat,
-                team: team,
-                cfg: cfg,
-                mainOutline: mainOutline,
-                volumeOutline: volumeOutlines[
-                    volumeRows.indexWhere((VolumeRow v) => v.id == ch.volumeId)],
-                chapterOutline: chapterOutlines[seq],
-                onStep: (String step) => onProgress?.call(step, null),
-                onPhase: emit,
-              ),
+              chat: chat,
+              team: team,
+              cfg: cfg,
+              mainOutline: mainOutline,
+              volumeOutline:
+                  volumeOutlines[volumeRows.indexWhere(
+                    (VolumeRow v) => v.id == ch.volumeId,
+                  )],
+              chapterOutline: chapterOutlines[seq],
+              onStep: (String step) => onProgress?.call(step, null),
+              onPhase: emit,
+            ),
             WritingCraft.beam => _writeChapterBeam(
-                chat: chat,
-                team: team,
-                cfg: cfg,
-                mainOutline: mainOutline,
-                volumeOutline: volumeOutlines[
-                    volumeRows.indexWhere((VolumeRow v) => v.id == ch.volumeId)],
-                chapterOutline: chapterOutlines[seq],
-                onStep: (String step) => onProgress?.call(step, null),
-                onPhase: emit,
-              ),
+              chat: chat,
+              polishChat: useG1kPair ? planningChat : null,
+              team: team,
+              cfg: cfg,
+              mainOutline: mainOutline,
+              volumeOutline:
+                  volumeOutlines[volumeRows.indexWhere(
+                    (VolumeRow v) => v.id == ch.volumeId,
+                  )],
+              chapterOutline: chapterOutlines[seq],
+              onStep: (String step) => onProgress?.call(step, null),
+              onPhase: emit,
+            ),
             WritingCraft.duo => _writeChapterSerial(
-                chat: chat,
-                team: team,
-                cfg: cfg,
-                mainOutline: mainOutline,
-                volumeOutline: volumeOutlines[
-                    volumeRows.indexWhere((VolumeRow v) => v.id == ch.volumeId)],
-                chapterOutline: chapterOutlines[seq],
-                onStep: (String step) => onProgress?.call(step, null),
-                onPhase: emit,
-              ),
+              chat: chat,
+              team: team,
+              cfg: cfg,
+              mainOutline: mainOutline,
+              volumeOutline:
+                  volumeOutlines[volumeRows.indexWhere(
+                    (VolumeRow v) => v.id == ch.volumeId,
+                  )],
+              chapterOutline: chapterOutlines[seq],
+              onStep: (String step) => onProgress?.call(step, null),
+              onPhase: emit,
+            ),
             WritingCraft.solo => _writeChapterSolo(
-                chat: chat,
-                team: team,
-                cfg: cfg,
-                mainOutline: mainOutline,
-                volumeOutline: volumeOutlines[
-                    volumeRows.indexWhere((VolumeRow v) => v.id == ch.volumeId)],
-                chapterOutline: chapterOutlines[seq],
-                onStep: (String step) => onProgress?.call(step, null),
-                onPhase: emit,
-              ),
+              chat: chat,
+              team: team,
+              cfg: cfg,
+              mainOutline: mainOutline,
+              volumeOutline:
+                  volumeOutlines[volumeRows.indexWhere(
+                    (VolumeRow v) => v.id == ch.volumeId,
+                  )],
+              chapterOutline: chapterOutlines[seq],
+              onStep: (String step) => onProgress?.call(step, null),
+              onPhase: emit,
+            ),
           };
-          final String? content = outcome.content;
+          String? content = outcome.content;
+          if (content != null && FictionQuality.issue(content) != null) {
+            onProgress?.call('《${ch.title}》检测到正文污染，正在按段纠偏…', null);
+            final repaired = <String>[];
+            for (final part in content.split(RegExp(r'\n\s*\n'))) {
+              if (FictionQuality.issue(part) == null) {
+                repaired.add(part);
+                continue;
+              }
+              final raw = await chat(
+                _renderPrompt('Book/repairSystem', {}),
+                [
+                  ChatMessage.user(
+                    _renderPrompt('Book/repair', {
+                      'outline': chapterOutlines[seq],
+                      'previous': repaired.isEmpty
+                          ? ''
+                          : _ref(repaired.last, .3),
+                    }),
+                  ),
+                ],
+                maxTokens: 1200,
+                temperature: 1.0,
+              );
+              repaired.add(FictionQuality.clean(raw));
+            }
+            content = repaired.join('\n\n');
+            if (FictionQuality.issue(content) != null) {
+              warnings.add('《${ch.title}》纠偏后仍有正文污染，拒绝覆盖原稿或同步设定。');
+              emit(MultiAgentChapterPhase.failed, 1, '正文质量校验失败，原稿未修改');
+              return;
+            }
+          }
           if (content == null || content.trim().isEmpty) {
             warnings.add('《${ch.title}》团队写作失败（已保留大纲，可重试）。');
             emit(MultiAgentChapterPhase.failed, 1, '团队写作失败（已保留大纲，可重试）');
             return;
           }
           // —— 定稿质量闸：≥ minFinalWords 字才标「已完成」，否则按草稿保存 ——
-          final bool shortfall = outcome.shortfall;
-          await chapters.updateById(ch.id, ChaptersCompanion(
-            content: Value(content),
-            wordCount: Value(content.trim().length),
-            status: Value(shortfall ? 'Draft' : 'Completed'),
-            lastEditedAt: Value(DateTime.now()),
-          ));
+          final bool shortfall = _qualityNote(content, cfg).isNotEmpty;
+          await chapters.updateById(
+            ch.id,
+            ChaptersCompanion(
+              content: Value(content),
+              wordCount: Value(content.trim().length),
+              status: Value(shortfall ? 'Draft' : 'Completed'),
+              lastEditedAt: Value(DateTime.now()),
+              versionNumber: Value(ch.versionNumber + 1),
+            ),
+          );
           if (shortfall) {
-            warnings.add('《${ch.title}》未通过质量闸（'
-                '${outcome.qualityNote.isEmpty ? '质量不达标' : outcome.qualityNote}），'
-                '已按草稿保存（可对草稿手动润色或重新生成）。');
+            warnings.add(
+              '《${ch.title}》未通过质量闸（'
+              '${outcome.qualityNote.isEmpty ? '质量不达标' : outcome.qualityNote}），'
+              '已按草稿保存（可对草稿手动润色或重新生成）。',
+            );
           } else {
             written++;
           }
           final ChapterPostProcessService? post = postProcess;
-          if (post != null) {
+          if (post != null && !shortfall) {
             try {
-              await post.runForChapter(ChapterSyncInput(
-                chapterId: ch.id,
-                volumeId: ch.volumeId,
-                projectId: projectId,
-                title: ch.title,
-                orderIndex: ch.orderIndex,
-                content: content,
-                summary: ch.summary ?? '',
-                tags: ch.tags,
-                notes: ch.notes,
-                status: shortfall ? 'Draft' : 'Completed',
-                versionNumber: ch.versionNumber,
-                eventDate: DateTime.now(),
-              ));
+              final sync = await post.runForChapter(
+                ChapterSyncInput(
+                  chapterId: ch.id,
+                  volumeId: ch.volumeId,
+                  projectId: projectId,
+                  title: ch.title,
+                  orderIndex: ch.orderIndex,
+                  content: content,
+                  summary: ch.summary ?? '',
+                  tags: ch.tags,
+                  notes: ch.notes,
+                  status: shortfall ? 'Draft' : 'Completed',
+                  versionNumber: ch.versionNumber + 1,
+                  eventDate: DateTime.now(),
+                ),
+              );
+              if (!sync.aiApplied) {
+                warnings.add(
+                  '《${ch.title}》设定抽取未完成：${sync.aiNote} ${sync.skippedReason ?? ''}',
+                );
+              }
             } on Object catch (e) {
               warnings.add('《${ch.title}》联动同步未执行：$e');
             }
@@ -843,7 +1049,10 @@ class MultiAgentBookGenerationService {
           // ---- 验收后更新分派（组长罗列待更新项 → 9 写手按模板产出 → 防幻觉应用）----
           final TeamAcceptance? acceptance = outcome.acceptance;
           final TeamUpdatesDispatcher? dispatcher = updateDispatch;
-          if (acceptance != null &&
+          // Production sync extracts from the final prose, not pre-revision verdicts.
+          if (post == null &&
+              !shortfall &&
+              acceptance != null &&
               acceptance.updateItems.isNotEmpty &&
               dispatcher != null) {
             try {
@@ -885,49 +1094,55 @@ class MultiAgentBookGenerationService {
               'gainsLosses': acc.gainsLosses.isNotEmpty
                   ? acc.gainsLosses
                   : '团队协作完成，正文 ${content.trim().length} 字定稿'
-                      '（验收${acc.allAccepted ? '一次通过' : '经返工后通过'}）',
+                        '（验收${acc.allAccepted ? '一次通过' : '经返工后通过'}）',
               'safeguards': acc.safeguards.isNotEmpty
                   ? acc.safeguards
                   : '后续章节保持与本章结尾状态衔接',
             },
           );
           emit(
-            shortfall ? MultiAgentChapterPhase.failed : MultiAgentChapterPhase.done,
+            shortfall
+                ? MultiAgentChapterPhase.failed
+                : MultiAgentChapterPhase.done,
             1,
             shortfall
                 ? '${outcome.qualityNote.isEmpty ? '质量不达标' : outcome.qualityNote}，已按草稿落库'
                 : '定稿落库（${content.trim().length} 字，'
-                    '验收${acc.allAccepted ? '一次通过' : '经返工后通过'}）',
+                      '验收${acc.allAccepted ? '一次通过' : '经返工后通过'}）',
           );
 
           // ---- 结构化导出（Markdown + JSON 落盘，便于离线分析/改良模板）----
           final ChapterExportService? exporter = exportService;
           if (exporter != null) {
             try {
-              await exporter.exportChapter(ChapterExportInput(
-                projectId: projectId,
-                projectName: projectName,
-                volumeTitle: volumeTitleById[ch.volumeId] ?? '',
-                chapterId: ch.id,
-                title: ch.title,
-                orderIndex: ch.orderIndex,
-                status: shortfall ? '草稿' : '落库定稿',
-                wordCount: content.trim().length,
-                content: content,
-                mainOutline: mainOutline,
-                volumeOutline: volumeOutlines[
-                    volumeRows.indexWhere((VolumeRow v) => v.id == ch.volumeId)],
-                chapterOutline: chapterOutlines[seq],
-                minFinalWords: cfg.minFinalWords,
-                concurrency: cfg.concurrency,
-                sections: outcome.sections,
-                archive: ArchiveDescription(
-                  timeRange: acc.timeRange,
-                  themeTask: acc.themeTask,
-                  gainsLosses: acc.gainsLosses,
-                  safeguards: acc.safeguards,
+              await exporter.exportChapter(
+                ChapterExportInput(
+                  projectId: projectId,
+                  projectName: projectName,
+                  volumeTitle: volumeTitleById[ch.volumeId] ?? '',
+                  chapterId: ch.id,
+                  title: ch.title,
+                  orderIndex: ch.orderIndex,
+                  status: shortfall ? '草稿' : '落库定稿',
+                  wordCount: content.trim().length,
+                  content: content,
+                  mainOutline: mainOutline,
+                  volumeOutline:
+                      volumeOutlines[volumeRows.indexWhere(
+                        (VolumeRow v) => v.id == ch.volumeId,
+                      )],
+                  chapterOutline: chapterOutlines[seq],
+                  minFinalWords: cfg.minFinalWords,
+                  concurrency: cfg.concurrency,
+                  sections: outcome.sections,
+                  archive: ArchiveDescription(
+                    timeRange: acc.timeRange,
+                    themeTask: acc.themeTask,
+                    gainsLosses: acc.gainsLosses,
+                    safeguards: acc.safeguards,
+                  ),
                 ),
-              ));
+              );
               exportedChapters.add((
                 order: ch.orderIndex,
                 title: ch.title,
@@ -1022,6 +1237,7 @@ class MultiAgentBookGenerationService {
       );
     } finally {
       stateManager.closeGroup(planning.groupId);
+      temporaryWriter?.dispose();
     }
   }
 
@@ -1030,15 +1246,14 @@ class MultiAgentBookGenerationService {
     String step,
     String message, {
     String projectId = '',
-  }) =>
-      MultiAgentBookResult(
-        isSuccess: false,
-        message: message,
-        bookTitle: cfg.bookTitle,
-        authorName: cfg.authorName,
-        projectId: projectId,
-        failureStep: step,
-      );
+  }) => MultiAgentBookResult(
+    isSuccess: false,
+    message: message,
+    bookTitle: cfg.bookTitle,
+    authorName: cfg.authorName,
+    projectId: projectId,
+    failureStep: step,
+  );
 
   // -----------------------------------------------------------------------
   // 聊天执行器 / 规划组通道
@@ -1079,7 +1294,10 @@ class MultiAgentBookGenerationService {
     return seconds;
   }
 
-  AgentChatExecutor _buildProviderExecutor(IModelProvider provider) {
+  AgentChatExecutor _buildProviderExecutor(
+    IModelProvider provider, {
+    String model = '',
+  }) {
     return (
       String systemPrompt,
       List<ChatMessage> messages, {
@@ -1087,17 +1305,45 @@ class MultiAgentBookGenerationService {
       double temperature = 0.85,
     }) async {
       final int timeoutSec = _callTimeoutSeconds(provider);
+      final String effectiveModel = model.isNotEmpty
+          ? model
+          : provider is OpenAICompatibleProvider
+          ? provider.configuration.defaultModel
+          : '';
+      final bool g1kCloud =
+          provider is RwkvCloudProvider &&
+          effectiveModel.toLowerCase().contains('g1k');
+      final bool g1kDraft =
+          g1kCloud && effectiveModel.toLowerCase().contains('2.9b');
+      final Map<String, dynamic> sampling = g1kCloud
+          ? <String, dynamic>{
+              'top_p': G1kWritingProfile.topP,
+              'presence_penalty': G1kWritingProfile.presencePenalty,
+            }
+          : isRwkvFamilyProvider(provider.providerName)
+          ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
+          : <String, dynamic>{};
+      final double effectiveTemperature = g1kCloud
+          ? G1kWritingProfile.temperature(temperature)
+          : temperature;
       // —— 上下文保护（2026-09-30 实测修正）——
       // 中文 ≈ 1 token/字（旧代码按 1.6 字/token 估算，低估约 60%）：
       // 用户把「最大令牌数」填成接近窗口值时（如 16000 / ctx16384），
       // 直接下发会「提示词 + max_tokens > 窗口」被服务端截断甚至报错。
       // 这里三重钳制：用户值 → 运行时输出预算 → 窗口剩余空间。
-      final int promptChars = systemPrompt.length +
+      final int promptChars =
+          systemPrompt.length +
           messages.fold<int>(0, (int s, ChatMessage m) => s + m.content.length);
       final int promptTokens =
           (promptChars * AiRuntimeSettings.kTokensPerChineseChar).ceil();
-      final int window = aiRuntimeSettings.contextWindowTokens;
+      final int window = g1kCloud
+          ? AiRuntimeSettings.parseContextWindow(effectiveModel)
+          : aiRuntimeSettings.contextWindowTokens;
       int budget = maxTokens;
+      if (g1kCloud &&
+          budget > (g1kDraft ? G1kWritingProfile.draftMaxTokens : 1500)) {
+        budget = g1kDraft ? G1kWritingProfile.draftMaxTokens : 1500;
+      }
       final int runBudget = aiRuntimeSettings.outputBudgetTokens;
       if (budget > runBudget) budget = runBudget;
       if (budget > 12000) budget = 12000;
@@ -1109,18 +1355,17 @@ class MultiAgentBookGenerationService {
       if (budget < 256) budget = 256;
       for (int attempt = 1; attempt <= 2; attempt++) {
         final ChatRequest req = ChatRequest(
+          model: model,
           systemPrompt: systemPrompt,
           messages: messages,
-          temperature: temperature,
+          temperature: effectiveTemperature,
           maxTokens: budget,
           // 流式优先：CF 对非流式请求有 ~120s 代理读超时（HTTP 524，硬限制
           // 不可配置），思考型模型一次生成 5-20 分钟必撞墙；SSE 字节持续
           // 回流则不会触发。流式不可用时回落非流式。
           stream: true,
           // 防复读采样参数只下发 RWKV 家族（DeepSeek/Zhipu 等严格 API 会 400）
-          parameters: isRwkvFamilyProvider(provider.providerName)
-              ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
-              : <String, dynamic>{},
+          parameters: sampling,
         );
         ChatResponse resp;
         try {
@@ -1128,15 +1373,14 @@ class MultiAgentBookGenerationService {
           // 直接压端点会触发 CF 429 / 服务端过载 —— 钳到 32 在途，其余排队。
           await _inFlightGate.acquire();
           try {
-            resp = await provider.chatStream(req, (_) {}).timeout(
-                  Duration(seconds: timeoutSec),
-                );
+            resp = await provider
+                .chatStream(req, (_) {})
+                .timeout(Duration(seconds: timeoutSec));
           } finally {
             _inFlightGate.release();
           }
         } on TimeoutException {
-          lastChatDiagnostic =
-              '单次调用超时（${timeoutSec}s，可在「AI 配置」调整超时秒数）';
+          lastChatDiagnostic = '单次调用超时（${timeoutSec}s，可在「AI 配置」调整超时秒数）';
           _logger.warning('模型调用超时（不重试）：$lastChatDiagnostic');
           return '';
         } on Object catch (e) {
@@ -1146,22 +1390,22 @@ class MultiAgentBookGenerationService {
             await _inFlightGate.acquire();
             try {
               resp = await provider
-                  .chat(ChatRequest(
-                    systemPrompt: systemPrompt,
-                    messages: messages,
-                    temperature: temperature,
-                    maxTokens: budget,
-                    parameters: isRwkvFamilyProvider(provider.providerName)
-                        ? Map<String, dynamic>.of(aiRuntimeSettings.longFormSamplingParams())
-                        : <String, dynamic>{},
-                  ))
+                  .chat(
+                    ChatRequest(
+                      model: model,
+                      systemPrompt: systemPrompt,
+                      messages: messages,
+                      temperature: effectiveTemperature,
+                      maxTokens: budget,
+                      parameters: sampling,
+                    ),
+                  )
                   .timeout(Duration(seconds: timeoutSec));
             } finally {
               _inFlightGate.release();
             }
           } on TimeoutException {
-            lastChatDiagnostic =
-                '单次调用超时（${timeoutSec}s，可在「AI 配置」调整超时秒数）';
+            lastChatDiagnostic = '单次调用超时（${timeoutSec}s，可在「AI 配置」调整超时秒数）';
             return '';
           } on Object catch (e2) {
             lastChatDiagnostic = '调用异常：$e2';
@@ -1170,8 +1414,7 @@ class MultiAgentBookGenerationService {
           }
         }
         if (!resp.isSuccess) {
-          lastChatDiagnostic =
-              '调用失败：${resp.errorMessage ?? '未知错误（未返回错误信息）'}';
+          lastChatDiagnostic = '调用失败：${resp.errorMessage ?? '未知错误（未返回错误信息）'}';
           _logger.warning('模型调用失败（不重试）：$lastChatDiagnostic');
           return '';
         }
@@ -1192,16 +1435,20 @@ class MultiAgentBookGenerationService {
         ).hasMatch(trimmed);
         lastChatDiagnostic = thinkUnclosed
             ? '思考块未闭合：max_tokens=$budget 在 <think> 阶段耗尽'
-                '（finishReason=${resp.finishReason}），正文被剥空 —— 需更大预算'
+                  '（finishReason=${resp.finishReason}），正文被剥空 —— 需更大预算'
             : (trimmed.isEmpty
-                ? '原始响应为空（finishReason=${resp.finishReason}，'
-                    'usage=${resp.usage?.totalTokens ?? '-'} tokens）'
-                : '产出被清洗剥空（finishReason=${resp.finishReason}，'
-                    '原文前 120 字：$head）');
+                  ? '原始响应为空（finishReason=${resp.finishReason}，'
+                        'usage=${resp.usage?.totalTokens ?? '-'} tokens）'
+                  : '产出被清洗剥空（finishReason=${resp.finishReason}，'
+                        '原文前 120 字：$head）');
         _logger.warning(
-            '模型调用产出为空（第 $attempt/2 次，预算 $budget，'
-            '超时 ${timeoutSec}s）：$lastChatDiagnostic');
-        budget = (budget * 2) > 12000 ? 12000 : budget * 2;
+          '模型调用产出为空（第 $attempt/2 次，预算 $budget，'
+          '超时 ${timeoutSec}s）：$lastChatDiagnostic',
+        );
+        final int retryCap = g1kCloud
+            ? (g1kDraft ? G1kWritingProfile.draftMaxTokens : 1500)
+            : 12000;
+        budget = (budget * 2) > retryCap ? retryCap : budget * 2;
       }
       return '';
     };
@@ -1210,34 +1457,25 @@ class MultiAgentBookGenerationService {
   _AgentChannel _planningLeaderChannel(
     AgentChatExecutor chat,
     AgentStateGroup planning,
-  ) =>
-      _AgentChannel(
-        stateManager.stateOf(planning.groupId, 'leader'),
-        '你是 NovelCraft 的主编智能体（MainAgent），负责为长篇小说制定主线大纲，'
-            '并向手下写手分派分卷/章节大纲规划任务。'
-            '只输出大纲正文本身，不要解释、不要 Markdown 包装。',
-        chat,
-      );
+  ) => _AgentChannel(
+    stateManager.stateOf(planning.groupId, 'leader'),
+    _renderPrompt('Book/planningLeader', {}),
+    chat,
+  );
 
   List<_AgentChannel> _planningWriterChannels(
     AgentChatExecutor chat,
     AgentStateGroup planning,
-  ) =>
-      <_AgentChannel>[
-        for (int s = 1; s <= kWriterCount; s++)
-          _AgentChannel(
-            stateManager.stateOf(planning.groupId, 'writer-$s'),
-            '你是 NovelCraft 的大纲规划智能体（SubAgent Planner，writer-$s）。'
-                '按主编分派的任务制定大纲。只输出大纲正文本身，'
-                '不要解释、不要 Markdown 包装。',
-            chat,
-          ),
-      ];
+  ) => <_AgentChannel>[
+    for (int s = 1; s <= kWriterCount; s++)
+      _AgentChannel(
+        stateManager.stateOf(planning.groupId, 'writer-$s'),
+        _renderPrompt('Book/planningWriter', {'slot': '$s'}),
+        chat,
+      ),
+  ];
 
-  _AgentChannel _plannerChannelFor(
-    List<_AgentChannel> planners,
-    int index,
-  ) =>
+  _AgentChannel _plannerChannelFor(List<_AgentChannel> planners, int index) =>
       planners[(index - 1) % planners.length];
 
   /// 分卷大纲：空结果自动重试（最多 3 次尝试），修复「未按预期写入全部大纲内容」。
@@ -1289,14 +1527,17 @@ class MultiAgentBookGenerationService {
   /// ③ 每段刻意取短（[kBeamSegmentChars]）→ 远离退化区；
   /// ④ 服务端并发充足（实测 169 bsz），N 倍调用几乎不增加墙钟时间。
   Future<
-      ({
-        String? content,
-        TeamAcceptance? acceptance,
-        bool shortfall,
-        String qualityNote,
-        List<ChapterExportSection> sections,
-      })> _writeChapterBeam({
+    ({
+      String? content,
+      TeamAcceptance? acceptance,
+      bool shortfall,
+      String qualityNote,
+      List<ChapterExportSection> sections,
+    })
+  >
+  _writeChapterBeam({
     required AgentChatExecutor chat,
+    AgentChatExecutor? polishChat,
     required AgentStateGroup team,
     required MultiAgentBookConfig cfg,
     required String mainOutline,
@@ -1304,8 +1545,16 @@ class MultiAgentBookGenerationService {
     required String chapterOutline,
     void Function(String step)? onStep,
     void Function(MultiAgentChapterPhase phase, double progress, String detail)?
-        onPhase,
+    onPhase,
   }) async {
+    final bool fastDraft = polishChat != null;
+    final int beamWidth = fastDraft ? 1 : kBeamWidth;
+    final int segmentChars = fastDraft
+        ? G1kWritingProfile.draftTargetChars
+        : kBeamSegmentChars;
+    final int segmentTokens = fastDraft
+        ? G1kWritingProfile.draftMaxTokens
+        : kBeamSegmentTokens;
     final String volBrief = volumeOutline.isEmpty
         ? '（见主线大纲）'
         : _ref(volumeOutline, 0.10);
@@ -1320,11 +1569,15 @@ class MultiAgentBookGenerationService {
     );
 
     final int withMargin = (cfg.minFinalWords * 1.2).ceil();
-    final int target =
-        cfg.chapterWordTarget > withMargin ? cfg.chapterWordTarget : withMargin;
-    onStep?.call('续写优选：每轮并发 $kBeamWidth 份候选、择优续写（目标 $target 字）');
+    final int target = cfg.chapterWordTarget > withMargin
+        ? cfg.chapterWordTarget
+        : withMargin;
+    onStep?.call('续写优选：每轮并发 $beamWidth 份候选、择优续写（目标 $target 字）');
     onPhase?.call(
-        MultiAgentChapterPhase.planning, 0.05, '续写优选（并发 $kBeamWidth/轮）');
+      MultiAgentChapterPhase.planning,
+      0.05,
+      '续写优选（并发 $beamWidth/轮）',
+    );
 
     final List<ChapterExportSection> sections = <ChapterExportSection>[];
     final StringBuffer sb = StringBuffer();
@@ -1335,10 +1588,11 @@ class MultiAgentBookGenerationService {
       if (produced >= target) break;
       round++;
       final int remaining = target - produced;
-      final int ask =
-          remaining < kBeamSegmentChars ? remaining : kBeamSegmentChars;
-      onStep?.call('续写优选第 $round 轮（已 $produced / 目标 $target 字），'
-          '并发 $kBeamWidth 份候选…');
+      final int ask = remaining < segmentChars ? remaining : segmentChars;
+      onStep?.call(
+        '续写优选第 $round 轮（已 $produced / 目标 $target 字），'
+        '并发 $beamWidth 份候选…',
+      );
       onPhase?.call(
         MultiAgentChapterPhase.writing,
         0.10 + 0.85 * (round - 1) / kMaxBeamRounds,
@@ -1347,7 +1601,7 @@ class MultiAgentBookGenerationService {
 
       // 并发发起 N 份候选：同一前缀、不同温度与叙事侧重
       final List<String> candidates = await Future.wait(<Future<String>>[
-        for (int k = 0; k < kBeamWidth; k++)
+        for (int k = 0; k < beamWidth; k++)
           lead.send(
             _beamCandidatePrompt(
               chText: chText,
@@ -1356,7 +1610,7 @@ class MultiAgentBookGenerationService {
               targetChars: ask,
               variant: k,
             ),
-            maxTokens: kBeamSegmentTokens,
+            maxTokens: segmentTokens,
             // 官方创作类推荐 Temperature ≈ 1；候选按 0.96→1.12 梯度拉开多样性
             temperature: 0.96 + k * 0.04,
           ),
@@ -1365,35 +1619,66 @@ class MultiAgentBookGenerationService {
       String best = '';
       double bestScore = double.negativeInfinity;
       for (final String raw in candidates) {
-        final String seg = _cleanFinalChapter(raw);
+        final String seg = _cleanFinalChapter(
+          fastDraft ? G1kWritingProfile.safeDraft(raw) : raw,
+        );
         final double score = _scoreCandidate(seg, ask, tail);
         if (score > bestScore) {
           bestScore = score;
           best = seg;
         }
       }
-      if (best.isEmpty) {
+      final int minSegmentChars = ask < G1kWritingProfile.draftMinChars
+          ? (ask * 0.75).ceil()
+          : G1kWritingProfile.draftMinChars;
+      if (fastDraft && best.length < minSegmentChars) {
+        final String retry = _cleanFinalChapter(
+          G1kWritingProfile.safeDraft(
+            await lead.send(
+              '${_beamCandidatePrompt(chText: chText, volBrief: volBrief, tail: tail, targetChars: ask, variant: 0)}'
+              '\n至少写满 $ask 字，情节没写完不要收尾；禁止字数统计和写作说明。',
+              maxTokens: segmentTokens,
+              temperature: 1.0,
+            ),
+          ),
+        );
+        if (_scoreCandidate(retry, ask, tail) >
+            _scoreCandidate(best, ask, tail)) {
+          best = retry;
+        }
+      }
+      if (best.isEmpty || (fastDraft && best.length < minSegmentChars)) {
         if (round >= 3) break;
         continue;
+      }
+      if (polishChat != null) {
+        final String polished = await _polishDraft(polishChat, best);
+        if (polished.length >= (best.length * 0.9).floor() &&
+            _scoreCandidate(polished, ask, tail) >=
+                _scoreCandidate(best, ask, tail) - 1) {
+          best = polished;
+        }
       }
       sb
         ..write(best)
         ..write('\n\n');
       tail = best.length > 400 ? best.substring(best.length - 400) : best;
-      sections.add(ChapterExportSection(
-        slot: round,
-        personaId: 'lead',
-        personaName: '主笔',
-        title: '第 $round 段（$kBeamWidth 选 1）',
-        brief: '',
-        boundary: '',
-        wordTarget: ask,
-        draft: best,
-        accepted: true,
-        problems: '',
-        reworked: false,
-        leaderFixed: false,
-      ));
+      sections.add(
+        ChapterExportSection(
+          slot: round,
+          personaId: 'lead',
+          personaName: '主笔',
+          title: '第 $round 段（$beamWidth 选 1）',
+          brief: '',
+          boundary: '',
+          wordTarget: ask,
+          draft: best,
+          accepted: true,
+          problems: '',
+          reworked: false,
+          leaderFixed: false,
+        ),
+      );
     }
     final String text = _cleanFinalChapter(sb.toString());
     final String note = _qualityNote(text, cfg);
@@ -1411,11 +1696,41 @@ class MultiAgentBookGenerationService {
     );
   }
 
+  Future<String> _polishDraft(AgentChatExecutor editor, String draft) async {
+    final StringBuffer result = StringBuffer();
+    int start = 0;
+    while (start < draft.length) {
+      int end = (start + 850).clamp(0, draft.length);
+      if (end < draft.length) {
+        final int sentence = draft.lastIndexOf('。', end);
+        if (sentence > start + 450) end = sentence + 1;
+      }
+      final String chunk = draft.substring(start, end);
+      final String polished = _cleanFinalChapter(
+        G1kWritingProfile.safeDraft(
+          await editor(
+            _renderPrompt('Book/polishSystem', {}),
+            <ChatMessage>[
+              ChatMessage.user(_renderPrompt('Book/polish', {'chunk': chunk})),
+            ],
+            maxTokens: 1200,
+            temperature: 0.88,
+          ),
+        ),
+      );
+      if (polished.length < (chunk.length * 0.9).floor()) return draft;
+      if (result.isNotEmpty) result.writeln('\n');
+      result.write(polished);
+      start = end;
+    }
+    return result.toString();
+  }
+
   /// 续写候选提示词 —— **刻意极简**。
   ///
   /// 实测：提示词越像「一段被截断的小说」，产出越像小说；指令、大纲、
   /// 约束越多，模型越容易跑去「复述大纲 / 输出元信息」。
-  static String _beamCandidatePrompt({
+  String _beamCandidatePrompt({
     required String chText,
     required String volBrief,
     required String tail,
@@ -1428,14 +1743,20 @@ class MultiAgentBookGenerationService {
       2 => '侧重心理与氛围。',
       _ => '侧重视觉细节与叙事节奏。',
     };
-    return '【本章要点】$chText\n【本卷背景】$volBrief\n\n'
-        '${tail.isEmpty ? '请从本章第一句开始写。' : '【上文结尾】\n$tail\n\n请紧接着上文继续写，不要重复上文。'}\n'
-        '本段约 $targetChars 字，$style\n'
-        '只输出小说正文，不要标题、不要解释、不要 Markdown、不要「（全文完）」。';
+    return _renderPrompt('Book/beamCandidate', <String, String>{
+      'chText': (chText).toString(),
+      'volBrief': (volBrief).toString(),
+      'context3':
+          (tail.isEmpty ? '请从本章第一句开始写。' : '【上文结尾】\n$tail\n\n请紧接着上文继续写，不要重复上文。')
+              .toString(),
+      'targetChars': (targetChars).toString(),
+      'style': (style).toString(),
+    });
   }
 
   /// 候选打分：长度达标 + 段落多样 + 无大纲污染 + 不复读前文。
   static double _scoreCandidate(String seg, int ask, String tail) {
+    if (FictionQuality.issue(seg) != null) return double.negativeInfinity;
     if (seg.trim().isEmpty) return double.negativeInfinity;
     final int len = seg.trim().length;
     double s = (len / ask).clamp(0.0, 1.5) * 4.0;
@@ -1448,7 +1769,9 @@ class MultiAgentBookGenerationService {
   /// 候选与前文尾部的 4-gram 重合率（[0,1]，越高越像在复读前文）。
   static double _tailOverlap(String text, String tail) {
     if (tail.length < 24 || text.length < 24) return 0;
-    final String t = text.length > 2000 ? text.substring(text.length - 2000) : text;
+    final String t = text.length > 2000
+        ? text.substring(text.length - 2000)
+        : text;
     final Set<String> grams = <String>{
       for (int i = 0; i + 4 <= tail.length; i++) tail.substring(i, i + 4),
     };
@@ -1463,13 +1786,15 @@ class MultiAgentBookGenerationService {
   }
 
   Future<
-      ({
-        String? content,
-        TeamAcceptance? acceptance,
-        bool shortfall,
-        String qualityNote,
-        List<ChapterExportSection> sections,
-      })> _writeChapterSolo({
+    ({
+      String? content,
+      TeamAcceptance? acceptance,
+      bool shortfall,
+      String qualityNote,
+      List<ChapterExportSection> sections,
+    })
+  >
+  _writeChapterSolo({
     required AgentChatExecutor chat,
     required AgentStateGroup team,
     required MultiAgentBookConfig cfg,
@@ -1478,7 +1803,7 @@ class MultiAgentBookGenerationService {
     required String chapterOutline,
     void Function(String step)? onStep,
     void Function(MultiAgentChapterPhase phase, double progress, String detail)?
-        onPhase,
+    onPhase,
   }) async {
     onStep?.call('单笔直书：一次调用写出整章…');
     onPhase?.call(MultiAgentChapterPhase.writing, 0.35, '单笔成稿中');
@@ -1539,13 +1864,15 @@ class MultiAgentBookGenerationService {
   /// ② 段间只回灌尾部而非全文，既保证衔接又把「已出现 n-gram 抬概率」压到最小；
   /// ③ 每段 max_tokens 贴近目标，杜绝「给大预算就放飞」。
   Future<
-      ({
-        String? content,
-        TeamAcceptance? acceptance,
-        bool shortfall,
-        String qualityNote,
-        List<ChapterExportSection> sections,
-      })> _writeChapterSerial({
+    ({
+      String? content,
+      TeamAcceptance? acceptance,
+      bool shortfall,
+      String qualityNote,
+      List<ChapterExportSection> sections,
+    })
+  >
+  _writeChapterSerial({
     required AgentChatExecutor chat,
     required AgentStateGroup team,
     required MultiAgentBookConfig cfg,
@@ -1554,7 +1881,7 @@ class MultiAgentBookGenerationService {
     required String chapterOutline,
     void Function(String step)? onStep,
     void Function(MultiAgentChapterPhase phase, double progress, String detail)?
-        onPhase,
+    onPhase,
   }) async {
     final String volText = volumeOutline.isEmpty
         ? '（见主线大纲）'
@@ -1574,8 +1901,9 @@ class MultiAgentBookGenerationService {
     // 目标留 20% 余量：定稿清洗（去 Markdown / 折叠重复段 / 退化截断）会掉字数，
     // +18 实测有 3 章正好卡在 3800 < 4000 —— 就是这份清洗损耗。
     final int withMargin = (cfg.minFinalWords * 1.2).ceil();
-    final int target =
-        cfg.chapterWordTarget > withMargin ? cfg.chapterWordTarget : withMargin;
+    final int target = cfg.chapterWordTarget > withMargin
+        ? cfg.chapterWordTarget
+        : withMargin;
     onStep?.call('主笔分段串行：按字数驱动续写（目标 $target 字）');
     onPhase?.call(MultiAgentChapterPhase.planning, 0.05, '主笔分段串行（按字数驱动）');
 
@@ -1593,8 +1921,9 @@ class MultiAgentBookGenerationService {
       if (produced >= target) break;
       round++;
       final int remaining = target - produced;
-      final int ask =
-          remaining < kSegmentTargetChars ? remaining : kSegmentTargetChars;
+      final int ask = remaining < kSegmentTargetChars
+          ? remaining
+          : kSegmentTargetChars;
       onStep?.call('主笔续写第 $round 段（已 $produced / 目标 $target 字）…');
       onPhase?.call(
         MultiAgentChapterPhase.writing,
@@ -1611,22 +1940,26 @@ class MultiAgentBookGenerationService {
         // 上一段明显偏短 → 本轮明确要求补足，否则模型会一直「礼貌地短」
         shortLast: lastAsk > 0 && lastSegLen < (lastAsk * 0.6).floor(),
       );
-      String seg = _cleanFinalChapter(await lead.send(
-        promptText,
-        maxTokens: kSegmentBudgetTokens,
-        temperature: 0.9,
-      ));
+      String seg = _cleanFinalChapter(
+        await lead.send(
+          promptText,
+          maxTokens: kSegmentBudgetTokens,
+          temperature: 0.9,
+        ),
+      );
       // 段级复读检修：单段重复率过高时换**更高温度**重写一次。
       //（RWKV 的复读靠提高温度比降低温度更容易打断；只采纳更好的一稿。）
       if (seg.isNotEmpty && _repeatRatio(seg) > 0.4) {
         final int bad = (_repeatRatio(seg) * 100).round();
         onStep?.call('第 $round 段复读率 $bad%，换高温重写一次…');
-        final String retrySeg = _cleanFinalChapter(await lead.send(
-          '$promptText\n\n⚠ 上一稿重复严重（同一批句子反复出现）。本轮**必须换用全新的'
-          '句子、动作与意象推进剧情**，严禁重复已写过的表述，也不要复述上文。',
-          maxTokens: kSegmentBudgetTokens,
-          temperature: 0.98,
-        ));
+        final String retrySeg = _cleanFinalChapter(
+          await lead.send(
+            '$promptText\n\n⚠ 上一稿重复严重（同一批句子反复出现）。本轮**必须换用全新的'
+            '句子、动作与意象推进剧情**，严禁重复已写过的表述，也不要复述上文。',
+            maxTokens: kSegmentBudgetTokens,
+            temperature: 0.98,
+          ),
+        );
         if (retrySeg.isNotEmpty && _repeatRatio(retrySeg) < _repeatRatio(seg)) {
           seg = retrySeg;
         }
@@ -1641,20 +1974,22 @@ class MultiAgentBookGenerationService {
         ..write(seg)
         ..write('\n\n');
       tail = seg.length > 300 ? seg.substring(seg.length - 300) : seg;
-      sections.add(ChapterExportSection(
-        slot: round,
-        personaId: 'lead',
-        personaName: '主笔',
-        title: '第 $round 段',
-        brief: '',
-        boundary: '',
-        wordTarget: ask,
-        draft: seg,
-        accepted: true,
-        problems: '',
-        reworked: false,
-        leaderFixed: false,
-      ));
+      sections.add(
+        ChapterExportSection(
+          slot: round,
+          personaId: 'lead',
+          personaName: '主笔',
+          title: '第 $round 段',
+          brief: '',
+          boundary: '',
+          wordTarget: ask,
+          draft: seg,
+          accepted: true,
+          problems: '',
+          reworked: false,
+          leaderFixed: false,
+        ),
+      );
     }
     final String text = _cleanFinalChapter(sb.toString());
     final String note = _qualityNote(text, cfg);
@@ -1673,13 +2008,15 @@ class MultiAgentBookGenerationService {
   }
 
   Future<
-      ({
-        String? content,
-        TeamAcceptance? acceptance,
-        bool shortfall,
-        String qualityNote,
-        List<ChapterExportSection> sections,
-      })> _writeChapterWithTeam({
+    ({
+      String? content,
+      TeamAcceptance? acceptance,
+      bool shortfall,
+      String qualityNote,
+      List<ChapterExportSection> sections,
+    })
+  >
+  _writeChapterWithTeam({
     required AgentChatExecutor chat,
     required AgentStateGroup team,
     required MultiAgentBookConfig cfg,
@@ -1688,7 +2025,7 @@ class MultiAgentBookGenerationService {
     required String chapterOutline,
     void Function(String step)? onStep,
     void Function(MultiAgentChapterPhase phase, double progress, String detail)?
-        onPhase,
+    onPhase,
   }) async {
     final String volText = volumeOutline.isEmpty
         ? '（见主线大纲）'
@@ -1720,10 +2057,15 @@ class MultiAgentBookGenerationService {
       maxTokens: 4000,
       temperature: 0.5,
     );
-    List<SectionPlan> plan =
-        parseSectionPlan(planRaw, expectedWriters: kWriterCount);
+    List<SectionPlan> plan = parseSectionPlan(
+      planRaw,
+      expectedWriters: kWriterCount,
+    );
     if (plan.isEmpty) {
-      plan = fallbackPlan(writers: kWriterCount, targetWords: cfg.chapterWordTarget);
+      plan = fallbackPlan(
+        writers: kWriterCount,
+        targetWords: cfg.chapterWordTarget,
+      );
     }
 
     // 段落 → 偏向写手：组长指定 > 关键词匹配 > 槽位轮转；
@@ -1739,7 +2081,11 @@ class MultiAgentBookGenerationService {
     // ④-2 写手并行成稿（各自独享 state；单段失败留空，由验收环节处置）。
     // 逐段完成即上报（矩阵进度实时刷新）。
     onStep?.call('组长已完成偏向派活（${plan.length} 段），写手并行写作中…');
-    onPhase?.call(MultiAgentChapterPhase.planning, 0.05, '组长偏向派活（${plan.length} 段）');
+    onPhase?.call(
+      MultiAgentChapterPhase.planning,
+      0.05,
+      '组长偏向派活（${plan.length} 段）',
+    );
     final List<String> drafts = List<String>.filled(plan.length, '');
     int draftsDone = 0;
     final List<Future<void>> draftFutures = <Future<void>>[
@@ -1763,7 +2109,11 @@ class MultiAgentBookGenerationService {
 
     // ④-3 组长逐段验收（解析失败按原流程放行，防回归）
     onStep?.call('写手已交稿，组长逐段验收中…');
-    onPhase?.call(MultiAgentChapterPhase.accepting, 0.55, '组长逐段验收（${plan.length} 段）');
+    onPhase?.call(
+      MultiAgentChapterPhase.accepting,
+      0.55,
+      '组长逐段验收（${plan.length} 段）',
+    );
     final String acceptRaw = await leader.send(
       _acceptancePrompt(chText, plan, drafts),
       maxTokens: 3000,
@@ -1773,7 +2123,8 @@ class MultiAgentBookGenerationService {
     // 组长判定 + 确定性字数判定合并：段落清洗后字数低于目标 80% 一律判不合格
     //（防「思考残留 / 复读大纲」类垃圾稿蒙混过关）
     final Map<int, ParagraphVerdict> merged = <int, ParagraphVerdict>{
-      for (final ParagraphVerdict v in acceptance?.verdicts ?? const <ParagraphVerdict>[])
+      for (final ParagraphVerdict v
+          in acceptance?.verdicts ?? const <ParagraphVerdict>[])
         v.agent: v,
     };
     for (int i = 0; i < plan.length && i < drafts.length; i++) {
@@ -1785,7 +2136,8 @@ class MultiAgentBookGenerationService {
         merged[plan[i].agent] = ParagraphVerdict(
           agent: plan[i].agent,
           accepted: false,
-          problems: '段落字数不足（$len / 目标 ${plan[i].wordTarget} 字），'
+          problems:
+              '段落字数不足（$len / 目标 ${plan[i].wordTarget} 字），'
               '疑似混入大纲复述或思考残留',
         );
       }
@@ -1804,24 +2156,32 @@ class MultiAgentBookGenerationService {
       }
       if (verdict == null || verdict.accepted) continue;
       onStep?.call('段落${i + 1}「${plan[i].title}」未通过验收，打回对应写手返工…');
-      onPhase?.call(MultiAgentChapterPhase.rework,
-          0.60 + 0.10 * (i + 1) / plan.length, '段落${i + 1}「${plan[i].title}」返工中');
+      onPhase?.call(
+        MultiAgentChapterPhase.rework,
+        0.60 + 0.10 * (i + 1) / plan.length,
+        '段落${i + 1}「${plan[i].title}」返工中',
+      );
       final _AgentChannel w = channelFor(i);
       final String reworked = await w.send(
         _reworkPrompt(plan[i], verdict.problems, finalDrafts[i]),
         maxTokens: 4000,
         temperature: 0.8,
       );
-      final int threshold =
-          (plan[i].wordTarget * 0.5).floor().clamp(60, 100000);
+      final int threshold = (plan[i].wordTarget * 0.5).floor().clamp(
+        60,
+        100000,
+      );
       if (reworked.trim().length >= threshold) {
         finalDrafts[i] = reworked;
         reworkedFlags[i] = true;
         continue;
       }
       onStep?.call('段落${i + 1}返工仍不合格，组长亲自补写…');
-      onPhase?.call(MultiAgentChapterPhase.leaderFix,
-          0.70 + 0.05 * (i + 1) / plan.length, '段落${i + 1}组长补写中');
+      onPhase?.call(
+        MultiAgentChapterPhase.leaderFix,
+        0.70 + 0.05 * (i + 1) / plan.length,
+        '段落${i + 1}组长补写中',
+      );
       final String fixed = await leader.send(
         _leaderRewritePrompt(plan[i], verdict.problems),
         maxTokens: 4000,
@@ -1865,11 +2225,13 @@ class MultiAgentBookGenerationService {
         ..writeln(draft.isEmpty ? '（该段落缺失：写手未交稿，请依据大纲补写）' : draft)
         ..writeln();
     }
-    String finalText = _cleanFinalChapter(await leader.send(
-      _assemblyPrompt(mainOutline, chText, plan.length, sections.toString()),
-      maxTokens: 8000,
-      temperature: 0.6,
-    ));
+    String finalText = _cleanFinalChapter(
+      await leader.send(
+        _assemblyPrompt(mainOutline, chText, plan.length, sections.toString()),
+        maxTokens: 8000,
+        temperature: 0.6,
+      ),
+    );
     // —— 质量闸：字数不足 / 复读率超阈值 → 放大预算二次删重定稿一次 ——
     // 复读闸的由来：RWKV7-G1J 实测里整章常出现 85%+ 的段落级重复，
     // 而旧闸只看字数 —— 只要凑够 4000 字就标「已完成」，复读稿一路放行。
@@ -1884,18 +2246,20 @@ class MultiAgentBookGenerationService {
             ? '复读率 ${(ratio * 100).round()}%，组长删重重新定稿中…'
             : '字数 ${finalText.length} < ${cfg.minFinalWords}，组长重新定稿中…',
       );
-      onStep?.call(byRepeat
-          ? '定稿复读率 ${(ratio * 100).round()}%（上限 '
-              '${(cfg.maxRepeatRatio * 100).round()}%），组长删重定稿…'
-          : '定稿仅 ${finalText.length} 字（下限 ${cfg.minFinalWords}），组长二次定稿…');
+      onStep?.call(
+        byRepeat
+            ? '定稿复读率 ${(ratio * 100).round()}%（上限 '
+                  '${(cfg.maxRepeatRatio * 100).round()}%），组长删重定稿…'
+            : '定稿仅 ${finalText.length} 字（下限 ${cfg.minFinalWords}），组长二次定稿…',
+      );
       final String retryRaw = await leader.send(
         '${_assemblyPrompt(mainOutline, chText, plan.length, sections.toString())}\n\n'
-            '⚠ 上一稿不合格（${finalText.length} 字，复读率 ${(ratio * 100).round()}%；'
-            '或混入大纲复述/思考残留）。'
-            '本次必须重写，并**大幅删去重复的句子、意象与对白**（同一内容只保留一处，'
-            '换个说法推进剧情而不是重复上一句）；只输出整章正文本身，'
-            '禁止复述大纲、小标题、任何元信息与思考过程，'
-            '正文不得少于 ${cfg.minFinalWords} 字。',
+        '⚠ 上一稿不合格（${finalText.length} 字，复读率 ${(ratio * 100).round()}%；'
+        '或混入大纲复述/思考残留）。'
+        '本次必须重写，并**大幅删去重复的句子、意象与对白**（同一内容只保留一处，'
+        '换个说法推进剧情而不是重复上一句）；只输出整章正文本身，'
+        '禁止复述大纲、小标题、任何元信息与思考过程，'
+        '正文不得少于 ${cfg.minFinalWords} 字。',
         maxTokens: 12000,
         temperature: 0.55,
       );
@@ -1909,9 +2273,9 @@ class MultiAgentBookGenerationService {
     }
     if (finalText.isEmpty) {
       // 组长终稿失败 → 直接拼段兜底（保证有产出）
-      final String joined = _cleanFinalChapter(finalDrafts
-          .where((String d) => d.trim().isNotEmpty)
-          .join('\n\n'));
+      final String joined = _cleanFinalChapter(
+        finalDrafts.where((String d) => d.trim().isNotEmpty).join('\n\n'),
+      );
       final String joinedNote = _qualityNote(joined, cfg);
       return (
         content: joined.isEmpty ? null : joined,
@@ -1925,9 +2289,16 @@ class MultiAgentBookGenerationService {
     final bool shortfall = qualityNote.isNotEmpty;
     if (!shortfall) {
       onPhase?.call(
-          MultiAgentChapterPhase.polishing, 0.95, '定稿 ${finalText.length} 字，通过质量闸');
+        MultiAgentChapterPhase.polishing,
+        0.95,
+        '定稿 ${finalText.length} 字，通过质量闸',
+      );
     } else {
-      onPhase?.call(MultiAgentChapterPhase.polishing, 0.95, '$qualityNote，按草稿保存');
+      onPhase?.call(
+        MultiAgentChapterPhase.polishing,
+        0.95,
+        '$qualityNote，按草稿保存',
+      );
     }
     return (
       content: finalText,
@@ -1940,6 +2311,8 @@ class MultiAgentBookGenerationService {
 
   /// 质量闸判定：返回不合格原因（空串 = 通过）。
   static String _qualityNote(String text, MultiAgentBookConfig cfg) {
+    final issue = FictionQuality.issue(text);
+    if (issue != null) return '正文质量异常：$issue';
     final int len = text.trim().length;
     if (len < cfg.minFinalWords) {
       return '字数不足（$len < ${cfg.minFinalWords}）';
@@ -1969,9 +2342,10 @@ class MultiAgentBookGenerationService {
       if (l.isEmpty) continue;
       if (RegExp(r'^#{1,6}\s').hasMatch(l) ||
           RegExp(r'^[-*+]\s{1,2}\S').hasMatch(l) ||
-          RegExp(r'^(?:地点|时间|人物|事件|主题|冲突|场景|目标|伏笔|钩子|'
-                  r'章节|大纲|要求|设定|简介|概览|说明)[：:]')
-              .hasMatch(l)) {
+          RegExp(
+            r'^(?:地点|时间|人物|事件|主题|冲突|场景|目标|伏笔|钩子|'
+            r'章节|大纲|要求|设定|简介|概览|说明)[：:]',
+          ).hasMatch(l)) {
         hits++;
       }
     }
@@ -1996,8 +2370,11 @@ class MultiAgentBookGenerationService {
   ({int slot, String personaId, String personaName}) _personaMeta(
     SectionPlan s,
   ) {
-    final WriterPersona? persona =
-        matchPersona(s.title, s.brief, assignedPersonaId: s.personaId);
+    final WriterPersona? persona = matchPersona(
+      s.title,
+      s.brief,
+      assignedPersonaId: s.personaId,
+    );
     final int slot = persona?.slot ?? ((s.agent - 1) % kWriterCount) + 1;
     final WriterPersona p = personaForSlot(slot);
     return (slot: slot, personaId: p.id, personaName: p.nameZh);
@@ -2008,13 +2385,20 @@ class MultiAgentBookGenerationService {
   static String _cleanFinalChapter(String raw) {
     String t = raw;
     t = t.replaceAll(
-        RegExp(r'<think>[\s\S]*?</think>|<thinking>[\s\S]*?</thinking>',
-            caseSensitive: false),
-        '');
+      RegExp(
+        r'<think>[\s\S]*?</think>|<thinking>[\s\S]*?</thinking>',
+        caseSensitive: false,
+      ),
+      '',
+    );
     t = t.replaceFirst(
-        RegExp(r'^\s*<(?:think|thinking)>[\s\S]*$', caseSensitive: false), '');
+      RegExp(r'^\s*<(?:think|thinking)>[\s\S]*$', caseSensitive: false),
+      '',
+    );
     t = t.replaceAll(
-        RegExp(r'</?(?:think|thinking)>', caseSensitive: false), '');
+      RegExp(r'</?(?:think|thinking)>', caseSensitive: false),
+      '',
+    );
     t = t.replaceAll(RegExp(r'【段落\d+[^】]*】'), '');
     // 剥掉 chat 模板泄漏标记（实测 RWKV 云端正文首行常是「>」/「>>」，
     // 也会偶发 `<|Assistant|>` 之类的特殊 token 文本）。
@@ -2027,9 +2411,12 @@ class MultiAgentBookGenerationService {
     t = t.replaceAll('**', '');
     // 元信息开场白（「好的，我将…」「以下是…」「第 1/2 段…」）整行丢弃。
     t = t.replaceFirst(
-        RegExp(r'^[ \t]*(?:\*\*)?(?:好的[，,]|我将|以下是|'
-            r'第\s*\d+\s*[/／]\s*\d+\s*段)[^\n]*\n?'),
-        '');
+      RegExp(
+        r'^[ \t]*(?:\*\*)?(?:好的[，,]|我将|以下是|'
+        r'第\s*\d+\s*[/／]\s*\d+\s*段)[^\n]*\n?',
+      ),
+      '',
+    );
     // 收尾语剥离：「（全文完）」「（完）」「全文完」/「THE END」等
     //（模型常把「一章」误当「全书」写完，过早收尾 —— 这些标记与正文无关）。
     t = t.replaceAll(_closingMarkerLineRegExp, '');
@@ -2126,85 +2513,77 @@ class MultiAgentBookGenerationService {
   // 提示词（静态，便于审阅与单测）
   // -----------------------------------------------------------------------
 
-  static String _mainOutlinePrompt(MultiAgentBookConfig cfg) =>
-      '为长篇小说《${cfg.bookTitle}》（作者：${cfg.authorName}）制定主线大纲。\n'
-      '要求：\n'
-      '- 全书共 ${cfg.targetVolumes} 卷，每卷约 ${cfg.chaptersPerVolume} 章；'
-      '主线必须能支撑这个体量并给出明确的终局方向。\n'
-      '- 必须包含：核心冲突、主角成长线、主要人物名单（身份与目标）、'
-      '世界观要点、分卷推进脉络（第 1 卷到第 ${cfg.targetVolumes} 卷每卷两到三句话）、结局方向。\n'
-      '- 1000-1800 字，条目化输出。';
+  String _mainOutlinePrompt(MultiAgentBookConfig cfg) =>
+      _renderPrompt('Book/mainOutline', <String, String>{
+        'cfg_bookTitle': (cfg.bookTitle).toString(),
+        'cfg_authorName': (cfg.authorName).toString(),
+        'cfg_targetVolumes': (cfg.targetVolumes).toString(),
+        'cfg_chaptersPerVolume': (cfg.chaptersPerVolume).toString(),
+      });
 
-  static String _volumeOutlinePrompt(
+  String _volumeOutlinePrompt(
     MultiAgentBookConfig cfg,
     String mainOutline,
     int index,
-  ) =>
-      '以下是长篇小说《${cfg.bookTitle}》（作者：${cfg.authorName}）的主线大纲：\n\n'
-      '$mainOutline\n\n'
-      '请为第 $index/${cfg.targetVolumes} 卷制定本卷大纲（本卷约 '
-      '${cfg.chaptersPerVolume} 章）：\n'
-      '- 承接主线中该卷的推进脉络，明确卷内起承转合、关键事件、新登场人物与伏笔；\n'
-      '- 说明本卷开局状态与卷末状态（即下一卷的起点）；\n'
-      '- 600-1200 字，条目化输出。';
+  ) => _renderPrompt('Book/volumeOutline', <String, String>{
+    'cfg_bookTitle': (cfg.bookTitle).toString(),
+    'cfg_authorName': (cfg.authorName).toString(),
+    'mainOutline': (mainOutline).toString(),
+    'index': (index).toString(),
+    'cfg_targetVolumes': (cfg.targetVolumes).toString(),
+    'cfg_chaptersPerVolume': (cfg.chaptersPerVolume).toString(),
+  });
 
-  static String _chapterOutlinePrompt(
+  String _chapterOutlinePrompt(
     MultiAgentBookConfig cfg,
     String mainOutline,
     String volumeOutline,
     int chapterIndex,
-  ) =>
-      '长篇小说《${cfg.bookTitle}》创作任务。\n\n'
-      '【主线大纲】\n$mainOutline\n\n'
-      '【本卷大纲】\n${volumeOutline.isEmpty ? '（见主线大纲中该卷的推进脉络）' : volumeOutline}\n\n'
-      '请为全卷第 $chapterIndex/${cfg.chaptersPerVolume} 章制定章节大纲：\n'
-      '- **第一行必须输出「标题：《本章正式章节名》」**（8~14 字的文学化章名，'
-      '只写章名本身，不要包含卷号、章号或书名）；\n'
-      '- 本章目标（推进什么）、出场人物、场景与时间线、关键冲突与转折、章末钩子；\n'
-      '- 与前后章自然衔接；200-400 字。';
+  ) => _renderPrompt('Book/chapterOutline', <String, String>{
+    'cfg_bookTitle': (cfg.bookTitle).toString(),
+    'mainOutline': (mainOutline).toString(),
+    'context3': (volumeOutline.isEmpty ? '（见主线大纲中该卷的推进脉络）' : volumeOutline)
+        .toString(),
+    'chapterIndex': (chapterIndex).toString(),
+    'cfg_chaptersPerVolume': (cfg.chaptersPerVolume).toString(),
+  });
 
-  static String _leaderSystemPrompt() =>
-      '你是 NovelCraft 的章节组长智能体（Team Lead），负责把一章切分为前后衔接的'
-          '写作任务、按写手偏向派活、验收稿件并产出整章定稿。\n'
-          '你手下有 9 位各有偏向的写手：\n${describePersonasForPrompt()}\n'
-          '派活时给每段指定最匹配的 persona（用其 id）；验收时逐段判定是否合格并给出问题；'
-          '全程只按要求输出 JSON 或正文本身，不要解释、不要 Markdown 包装。';
+  String _leaderSystemPrompt() => _renderPrompt(
+    'Book/leaderSystem',
+    <String, String>{'context1': (describePersonasForPrompt()).toString()},
+  );
 
-  static String _writerSystemPrompt(int slot) {
+  String _writerSystemPrompt(int slot) {
     final WriterPersona p = personaForSlot(slot);
-    return '你是 NovelCraft 的写手智能体（SubAgent Writer，writer-$slot，'
-        '偏向：${p.nameZh}）。${p.biasPrompt}\n'
-        '按组长分配的任务写出小说正文片段，在自己擅长的维度重点发力。'
-        '只输出正文本身，不要小标题、不要解释、不要 Markdown 包装。';
+    return _renderPrompt('Book/writerSystem', <String, String>{
+      'slot': (slot).toString(),
+      'p_nameZh': (p.nameZh).toString(),
+      'p_biasPrompt': (p.biasPrompt).toString(),
+    });
   }
 
   /// 主笔系统提示（单笔直书 / 分段串行共用）——独立完成整章，不派活。
-  static String _leadWriterSystemPrompt() =>
-      '你是 NovelCraft 的**主笔**智能体，独立完成整章小说的正文创作。\n'
-      '职责：保持通篇文风统一、叙事连贯；只输出正文本身，不要写章节标题、'
-      '不要复述大纲、不要输出任何解释或思考过程。\n'
-      '⚠ 你运行在 RWKV 架构上：**上下文里出现过的句子会被反复采样**，'
-      '因此严禁复述已经写过的句子、意象与对白 —— 推进剧情而不是重复上一句。';
+  String _leadWriterSystemPrompt() =>
+      _renderPrompt('Book/leadWriterSystem', <String, String>{});
 
   /// 单笔直书：一次调用写出整章正文（实测仅适合短章：≤ ~2600 字）。
-  static String _soloChapterPrompt(
+  String _soloChapterPrompt(
     String mainOutline,
     String volumeOutline,
     String chapterOutline, {
     required int targetChars,
-  }) =>
-      '【主线大纲】\n${_ref(mainOutline, 0.20)}\n\n'
-      '【本卷大纲】\n${volumeOutline.isEmpty ? '（见主线大纲）' : _ref(volumeOutline, 0.15)}\n\n'
-      '【本章大纲】\n${chapterOutline.isEmpty ? '（见主线大纲与分卷大纲）' : _ref(chapterOutline, 0.22)}\n\n'
-      '请一次写出本章完整正文，目标 $targetChars 字。\n'
-      '写作纪律（必须严格遵守）：\n'
-      '1. 不要写章节标题，不要复述大纲，不要输出解释、序号或 Markdown 包装；\n'
-      '2. **严禁重复**已写过的句子与句式，同一意象、同一句对白不得反复出现；\n'
-      '3. 写到本章剧情自然收束处即停笔，**绝对不要**出现「（全文完）」「（完）」'
-      '「全文完」「THE END」等收尾语。';
+  }) => _renderPrompt('Book/soloChapter', <String, String>{
+    'context1': (_ref(mainOutline, 0.20)).toString(),
+    'context2': (volumeOutline.isEmpty ? '（见主线大纲）' : _ref(volumeOutline, 0.15))
+        .toString(),
+    'context3':
+        (chapterOutline.isEmpty ? '（见主线大纲与分卷大纲）' : _ref(chapterOutline, 0.22))
+            .toString(),
+    'targetChars': (targetChars).toString(),
+  });
 
   /// 分段串行：第 [index] 段（[tail] 非空时接着上文续写）。
-  static String _serialSegmentPrompt({
+  String _serialSegmentPrompt({
     required String mainOutline,
     required String volText,
     required String chText,
@@ -2214,62 +2593,57 @@ class MultiAgentBookGenerationService {
     required bool shortLast,
   }) {
     final bool first = tail.trim().isEmpty;
-    return '【主线大纲】\n${_ref(mainOutline, 0.20)}\n\n'
-        '【本卷大纲】\n$volText\n\n'
-        '【本章大纲】\n$chText\n\n'
-        '${first ? '请从本章开篇写起。' : '【上文结尾（请接着写，**不要复述**这段内容）】\n$tail\n\n'
-            '请**接着上文继续写**。'}\n'
-        '这是本章第 $index 段，本段目标约 $targetChars 字。\n'
-        '${shortLast ? '⚠ 上一段写得太短，本段必须写足约 $targetChars 字，不要提前收尾。\n' : ''}'
-        '写作纪律（必须严格遵守）：\n'
-        '1. 只写本段正文，不要写章节标题、不要复述大纲、不要输出解释；\n'
-        '2. **严禁重复**上文与已写内容里的句子、意象与对白；\n'
-        '3. 结尾停在剧情推进处，**不要**收束全章，**绝对不要**写'
-        '「（全文完）」「（完）」等收尾语。';
+    return _renderPrompt('Book/serialSegment', <String, String>{
+      'context1': (_ref(mainOutline, 0.20)).toString(),
+      'volText': (volText).toString(),
+      'chText': (chText).toString(),
+      'context4':
+          (first
+                  ? '请从本章开篇写起。'
+                  : '【上文结尾（请接着写，**不要复述**这段内容）】\n$tail\n\n'
+                        '请**接着上文继续写**。')
+              .toString(),
+      'index': (index).toString(),
+      'targetChars': (targetChars).toString(),
+      'context7':
+          (shortLast ? '⚠ 上一段写得太短，本段必须写足约 $targetChars 字，不要提前收尾。\n' : '')
+              .toString(),
+    });
   }
 
-  static String _planPrompt(
+  String _planPrompt(
     MultiAgentBookConfig cfg,
     String mainOutline,
     String volText,
     String chText,
-  ) =>
-      '【主线大纲】\n${_ref(mainOutline, 0.20)}\n\n'
-      '【本卷大纲】\n$volText\n\n'
-      '【本章大纲】\n$chText\n\n'
-      '本章由 $kWriterCount 位偏向写手分段完成。请把本章划分为恰好 $kWriterCount 个前后衔接的'
-      '段落任务，并把每段派给偏向最匹配的写手，输出 JSON 数组（不要任何其它文本），每项格式：\n'
-      '{"agent": 1, "persona": "combat|dialogue|flirt|rogue|comfort|scenery|psych|suspense|humor", '
-      '"title": "本段小标题", "brief": "本段要写的内容：剧情要点、出场人物、情绪节奏", '
-      '"boundary": "本段开始与结束的剧情边界（供前后段衔接）", "wordTarget": 350}\n'
-      '要求：段落按剧情顺序编号 1..$kWriterCount；前一段结束边界与后一段开始边界衔接；'
-      '全部段落合起来覆盖整个章节大纲；总字数约 ${cfg.chapterWordTarget} 字。';
+  ) => _renderPrompt('Book/plan', <String, String>{
+    'context1': (_ref(mainOutline, 0.20)).toString(),
+    'volText': (volText).toString(),
+    'chText': (chText).toString(),
+    'kWriterCount': (kWriterCount).toString(),
+    'cfg_chapterWordTarget': (cfg.chapterWordTarget).toString(),
+  });
 
-  static String _writerPrompt(
+  String _writerPrompt(
     MultiAgentBookConfig cfg,
     String mainOutline,
     String volText,
     String chText,
     SectionPlan plan,
     int total,
-  ) =>
-      '【主线大纲】\n${_ref(mainOutline, 0.20)}\n\n'
-      '【本卷大纲】\n$volText\n\n'
-      '【本章大纲】\n$chText\n\n'
-      '组长分配给你的写作任务（段落 ${plan.agent}/$total）：\n'
-      '- 段落标题：${plan.title}\n'
-      '- 内容要求：${plan.brief}\n'
-      '- 段落边界：${plan.boundary}\n'
-      '- 目标字数：${plan.wordTarget} 字左右\n\n'
-      '写作纪律（必须严格遵守）：\n'
-      '1. 只写这一段正文，不要写章节标题，不要复述或改写上面的任何大纲条目，'
-      '不要输出解释、序号或 Markdown 包装；\n'
-      '2. **严禁重复**：不得复述本段已写过的句子与句式，同一意象、同一句对白'
-      '不得反复出现；\n'
-      '3. 结尾必须停在段落边界处，**绝对不要**出现「（全文完）」「（完）」'
-      '「全文完」「THE END」等收尾语 —— 本章在你之后还有后续段落。';
+  ) => _renderPrompt('Book/writer', <String, String>{
+    'context1': (_ref(mainOutline, 0.20)).toString(),
+    'volText': (volText).toString(),
+    'chText': (chText).toString(),
+    'plan_agent': (plan.agent).toString(),
+    'total': (total).toString(),
+    'plan_title': (plan.title).toString(),
+    'plan_brief': (plan.brief).toString(),
+    'plan_boundary': (plan.boundary).toString(),
+    'plan_wordTarget': (plan.wordTarget).toString(),
+  });
 
-  static String _acceptancePrompt(
+  String _acceptancePrompt(
     String chText,
     List<SectionPlan> plan,
     List<String> drafts,
@@ -2277,75 +2651,66 @@ class MultiAgentBookGenerationService {
     final StringBuffer sb = StringBuffer();
     for (int i = 0; i < plan.length && i < drafts.length; i++) {
       sb
-        ..writeln('【段落${i + 1} · ${plan[i].title}（agent=${plan[i].agent}，'
-            '目标 ${plan[i].wordTarget} 字）】')
-        ..writeln(drafts[i].trim().isEmpty ? '（未交稿）' : _truncate(drafts[i], 900))
+        ..writeln(
+          '【段落${i + 1} · ${plan[i].title}（agent=${plan[i].agent}，'
+          '目标 ${plan[i].wordTarget} 字）】',
+        )
+        ..writeln(
+          drafts[i].trim().isEmpty ? '（未交稿）' : _truncate(drafts[i], 900),
+        )
         ..writeln();
     }
-    return '【本章大纲】\n$chText\n\n'
-        '以下是写手提交的段落（按剧情顺序）：\n\n'
-        '$sb\n'
-        '请以组长身份逐段验收，输出 JSON（不要任何其它文本）：\n'
-        '{"paragraphs":[{"agent":1,"accepted":true,"problems":"不合格时给出具体问题，合格留空"}'
-        '],"report":{"timeRange":"本章剧情的时间范围","themeTask":"本章主题任务一句话",'
-        '"gains":"本章得失总结（剧情推进与遗留问题）","safeguards":"规避措施（后续章节写作要注意什么）"},'
-        '"updates":[{"target":"character|world|faction|plot|timeline",'
-        '"action":"update|create","name":"实体准确名称","field":"status|history|notes|content|description",'
-        '"content":"需要登记的设定/履历变化（每条独立成句）"}]}\n'
-        '要求：accepted=false 必须给出可执行的具体问题；updates 只登记确有必要的变更，'
-        '没有就给空数组。';
+    return _renderPrompt('Book/acceptance', <String, String>{
+      'chText': (chText).toString(),
+      'sb': (sb).toString(),
+    });
   }
 
-  static String _reworkPrompt(
+  String _reworkPrompt(
     SectionPlan plan,
     String problems,
     String previousDraft,
-  ) =>
-      '你写的段落《${plan.title}》未通过组长验收。\n'
-      '组长指出的问题：${problems.isEmpty ? '内容与边界不符' : problems}\n'
-      '原任务要求：${plan.brief}\n段落边界：${plan.boundary}\n'
-      '${previousDraft.trim().isEmpty ? '' : '你上一稿的问题是「重复拖沓」，上一稿内容（供你避开，'
-          '不要照抄其句式）：\n${_truncate(previousDraft.trim(), 300)}\n\n'}'
-      '请重写这一段（目标 ${plan.wordTarget} 字左右），解决全部问题。\n'
-      '要求：**严禁重复**上一稿的句子与句式；结尾停在段落边界处；'
-      '不要出现「（全文完）」「（完）」等收尾语。只输出重写后的完整段落。';
+  ) => _renderPrompt('Book/rework', <String, String>{
+    'plan_title': (plan.title).toString(),
+    'context2': (problems.isEmpty ? '内容与边界不符' : problems).toString(),
+    'plan_brief': (plan.brief).toString(),
+    'plan_boundary': (plan.boundary).toString(),
+    'context5':
+        (previousDraft.trim().isEmpty
+                ? ''
+                : '你上一稿的问题是「重复拖沓」，上一稿内容（供你避开，'
+                      '不要照抄其句式）：\n${_truncate(previousDraft.trim(), 300)}\n\n')
+            .toString(),
+    'plan_wordTarget': (plan.wordTarget).toString(),
+  });
 
-  static String _leaderRewritePrompt(SectionPlan plan, String problems) =>
-      '写手返工后仍不合格，请你亲自补写段落《${plan.title}》。\n'
-      '任务要求：${plan.brief}\n段落边界：${plan.boundary}\n'
-      '遗留问题：${problems.isEmpty ? '内容与边界不符' : problems}\n'
-      '目标 ${plan.wordTarget} 字左右，**严禁重复**已写过的句子，'
-      '不要写「（全文完）」「（完）」等收尾语，只输出该段正文。';
+  String _leaderRewritePrompt(SectionPlan plan, String problems) =>
+      _renderPrompt('Book/leaderRewrite', <String, String>{
+        'plan_title': (plan.title).toString(),
+        'plan_brief': (plan.brief).toString(),
+        'plan_boundary': (plan.boundary).toString(),
+        'context4': (problems.isEmpty ? '内容与边界不符' : problems).toString(),
+        'plan_wordTarget': (plan.wordTarget).toString(),
+      });
 
-  static String _assemblyPrompt(
+  String _assemblyPrompt(
     String mainOutline,
     String chText,
     int count,
     String sections,
-  ) =>
-      '【主线大纲】\n${_ref(mainOutline, 0.20)}\n\n'
-      '【本章大纲】\n$chText\n\n'
-      '以下是 $count 位写手提交的章节段落（已验收/补写，按剧情顺序）：\n\n'
-      '$sections\n'
-      '请完成：\n'
-      '1. 按顺序把全部段落拼接为整章正文；\n'
-      '2. 消除段落衔接的生硬处，统一叙事视角与文风，去除重复与前后矛盾；\n'
-      '3. 修正错别字与标点，统一段落排版；\n'
-      '4. 不得删减关键情节，不得新增情节；标注缺失的段落请依据大纲补写。\n'
-      '写作纪律（必须严格遵守）：\n'
-      '- **必须删重**：段落之间凡有重复的句子、意象或对白，一律只保留一处，'
-      '其余删去或改写；\n'
-      '- 不得输出章节标题、不得复述大纲、不得写任何解释或思考过程；\n'
-      '- **绝对不要**出现「（全文完）」「（完）」「全文完」「THE END」等收尾语，'
-      '整章结尾停在剧情叙述上。\n'
-      '只输出润色排版后的整章正文。';
+  ) => _renderPrompt('Book/assembly', <String, String>{
+    'context1': (_ref(mainOutline, 0.20)).toString(),
+    'chText': (chText).toString(),
+    'count': (count).toString(),
+    'sections': (sections).toString(),
+  });
 
   // -----------------------------------------------------------------------
   // 落库 / 归档 / 工具
   // -----------------------------------------------------------------------
 
   Future<({String id, String name, bool adjusted, bool revived})>
-      _createProject(MultiAgentBookConfig cfg) async {
+  _createProject(MultiAgentBookConfig cfg) async {
     // 重名解决统一交给仓储层（曾因只查「未删除」同名项目而漏判，
     // 直接插入炸 UNIQUE constraint failed: projects.name）。
     final ProjectNameResolution res = await projects.createResolvingName(
@@ -2353,15 +2718,17 @@ class MultiAgentBookGenerationService {
         id: _uuid.v4(),
         name: cfg.bookTitle,
         type: '其他',
-        settings: Value(jsonEncode(<String, Object?>{
-          'author': cfg.authorName,
-          'targetVolumes': cfg.targetVolumes,
-          'chaptersPerVolume': cfg.chaptersPerVolume,
-          'subAgentCount': cfg.subAgentCount,
-          'concurrency': cfg.concurrency,
-          'enableAI': true,
-          'template': 'AI多智能体协同',
-        })),
+        settings: Value(
+          jsonEncode(<String, Object?>{
+            'author': cfg.authorName,
+            'targetVolumes': cfg.targetVolumes,
+            'chaptersPerVolume': cfg.chaptersPerVolume,
+            'subAgentCount': cfg.subAgentCount,
+            'concurrency': cfg.concurrency,
+            'enableAI': true,
+            'template': 'AI多智能体协同',
+          }),
+        ),
       ),
     );
     return (
@@ -2432,8 +2799,8 @@ class MultiAgentBookGenerationService {
   static int _refBudgetChars(double share) {
     final int tokens = aiRuntimeSettings.referenceBudgetTokens;
     if (tokens <= 0) return 1500;
-    final int chars =
-        (tokens * share / AiRuntimeSettings.kTokensPerChineseChar).floor();
+    final int chars = (tokens * share / AiRuntimeSettings.kTokensPerChineseChar)
+        .floor();
     return chars.clamp(600, 24000);
   }
 
@@ -2485,16 +2852,16 @@ class MultiAgentBookGenerationService {
   static String _chapterBrief(String outline, String name) {
     if (outline.trim().isEmpty) return name;
     final String first = _firstLine(outline, 120);
-    final String cleaned =
-        first.replaceAll(RegExp(r'^(?:标题|本章目标)[：:]\s*'), '');
+    final String cleaned = first.replaceAll(RegExp(r'^(?:标题|本章目标)[：:]\s*'), '');
     final String brief = cleaned.trim().isEmpty ? name : cleaned.trim();
     return brief.length > 120 ? '${brief.substring(0, 120)}…' : brief;
   }
 
   static String _firstLine(String text, int max) {
-    final String line =
-        text.trim().split(RegExp(r'\r?\n')).firstWhere((String l) => l.trim().isNotEmpty,
-            orElse: () => '');
+    final String line = text
+        .trim()
+        .split(RegExp(r'\r?\n'))
+        .firstWhere((String l) => l.trim().isNotEmpty, orElse: () => '');
     return _truncate(line.trim(), max);
   }
 
@@ -2503,7 +2870,17 @@ class MultiAgentBookGenerationService {
 
   static String _cn(int n) {
     const List<String> cn = <String>[
-      '零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+      '零',
+      '一',
+      '二',
+      '三',
+      '四',
+      '五',
+      '六',
+      '七',
+      '八',
+      '九',
+      '十',
     ];
     if (n <= 10) return cn[n];
     if (n < 20) return '十${cn[n - 10]}';
@@ -2544,14 +2921,16 @@ class MultiAgentBookGenerationService {
       final String brief = (item['brief'] ?? '').toString();
       final String boundary = (item['boundary'] ?? '').toString();
       if (brief.trim().isEmpty && boundary.trim().isEmpty) continue;
-      plans.add(SectionPlan(
-        agent: (item['agent'] as num?)?.toInt() ?? plans.length + 1,
-        title: title,
-        brief: brief,
-        boundary: boundary,
-        wordTarget: (item['wordTarget'] as num?)?.toInt() ?? 350,
-        personaId: ((item['persona'] ?? item['personaId']) ?? '').toString(),
-      ));
+      plans.add(
+        SectionPlan(
+          agent: (item['agent'] as num?)?.toInt() ?? plans.length + 1,
+          title: title,
+          brief: brief,
+          boundary: boundary,
+          wordTarget: (item['wordTarget'] as num?)?.toInt() ?? 350,
+          personaId: ((item['persona'] ?? item['personaId']) ?? '').toString(),
+        ),
+      );
     }
     return plans;
   }
@@ -2567,7 +2946,8 @@ class MultiAgentBookGenerationService {
         SectionPlan(
           agent: i,
           title: '第$i段',
-          brief: '按章节大纲顺序推进剧情的第 $i/$writers 部分：'
+          brief:
+              '按章节大纲顺序推进剧情的第 $i/$writers 部分：'
               '从上一段结束处继续，完成该部分的关键事件与人物互动，'
               '保持情绪节奏递进。',
           boundary: i == writers
@@ -2603,11 +2983,13 @@ class MultiAgentBookGenerationService {
     if (rawVerdicts is List) {
       for (final Object? item in rawVerdicts) {
         if (item is! Map) continue;
-        verdicts.add(ParagraphVerdict(
-          agent: (item['agent'] as num?)?.toInt() ?? 0,
-          accepted: item['accepted'] == true,
-          problems: (item['problems'] ?? item['issue'] ?? '').toString(),
-        ));
+        verdicts.add(
+          ParagraphVerdict(
+            agent: (item['agent'] as num?)?.toInt() ?? 0,
+            accepted: item['accepted'] == true,
+            problems: (item['problems'] ?? item['issue'] ?? '').toString(),
+          ),
+        );
       }
     }
 
@@ -2625,9 +3007,11 @@ class MultiAgentBookGenerationService {
     if (rawUpdates is List) {
       for (final Object? item in rawUpdates) {
         if (item is Map) {
-          updates.add(item.map(
-            (Object? k, Object? v) => MapEntry<String, Object?>('$k', v),
-          ));
+          updates.add(
+            item.map(
+              (Object? k, Object? v) => MapEntry<String, Object?>('$k', v),
+            ),
+          );
         }
       }
     }

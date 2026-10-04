@@ -14,24 +14,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../ai/models/chat.dart';
+import '../../application/services/selection_edit_service.dart';
 import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 
-/// 选节 AI 操作类型。
-enum ChapterAiAction {
-  /// 润色（保持原意，提升文笔）。
-  polish,
-
-  /// 去重润色 —— 专治选中片段内的重复句式 / 复读段落。
-  dedupePolish,
-
-  /// 扩写（结合写作大纲与上下文）。
-  expand,
-
-  /// 续写（紧接选区结尾）。
-  continueWrite,
-}
+export '../../application/services/selection_edit_service.dart' show ChapterAiAction;
 
 /// 选节 AI 助手面板：由阅读页传入当前选中文本（SelectionArea.onSelectionChanged）。
 class ChapterAiPanel extends ConsumerStatefulWidget {
@@ -85,57 +72,8 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
 
   String _selectedText() => widget.selectedText.trim();
 
-  String _buildPrompt(ChapterAiAction action, String selected, L10n l10n) {
-    final extra = _requireCtrl.text.trim();
-    final extraLine =
-        extra.isEmpty ? '' : '\n用户附加要求：$extra\n';
-    final contextHead = widget.fullContent.length > 1200
-        ? '【上文节选】\n${widget.fullContent.substring(widget.fullContent.length - 1200)}\n\n'
-        : (widget.fullContent.isEmpty
-            ? ''
-            : '【上文节选】\n${widget.fullContent}\n\n');
-    final String outlineBlock = _outlineBlock();
-    final String prevTail = widget.prevChapterTail.trim().isEmpty
-        ? ''
-        : '【前一章结尾】\n${widget.prevChapterTail.trim()}\n\n';
-    switch (action) {
-      case ChapterAiAction.polish:
-        return '你是资深网文编辑。请润色以下正文片段：保持原意、人物与情节'
-            '完全不变，提升文笔流畅度与画面感，禁止新增情节或设定。$extraLine'
-            '【待润色片段】\n$selected\n\n只输出润色后的片段本身。';
-      case ChapterAiAction.dedupePolish:
-        return '你是资深网文编辑。以下片段存在重复内容（重复句式、复读段落或'
-            '语义雷同的表述）。请先去重：每层意思只保留表达最自然、信息量最足'
-            '的一处，删除其余；再对保留文本做轻度润色，使行文连贯自然。保持原意、'
-            '人物与情节完全不变，禁止新增情节或设定，篇幅只减不增。$extraLine'
-            '【待处理片段】\n$selected\n\n只输出去重润色后的片段本身。';
-      case ChapterAiAction.expand:
-        return '你是资深网文作者。请结合写作大纲与上下文，对以下正文片段进行'
-            '扩写：补充环境细节、动作拆解与心理描写，篇幅扩至约 2-3 倍；'
-            '人物性格与既定情节不得改变，不得与大纲冲突或提前泄露后续情节。'
-            '$outlineBlock$prevTail$extraLine'
-            '【待扩写片段】\n$selected\n\n只输出扩写后的片段。';
-      case ChapterAiAction.continueWrite:
-        return '你是资深网文作者。请紧接以下片段自然续写约 600 字：保持'
-            '叙事视角与文风连贯，推进情节但不要在本轮结束故事。'
-            '$outlineBlock$contextHead$extraLine【待续写片段（结尾处续写）】\n$selected\n\n'
-            '只输出续写的新增内容。';
-    }
-  }
-
-  /// 组装【写作大纲】块：本章梗概 + 卷宗大纲（都为空时返回空串）。
-  String _outlineBlock() {
-    final List<String> parts = <String>[
-      if (widget.chapterOutline.trim().isNotEmpty)
-        '本章梗概：${widget.chapterOutline.trim()}',
-      if (widget.volumeOutline.trim().isNotEmpty)
-        '卷宗大纲：${widget.volumeOutline.trim()}',
-    ];
-    if (parts.isEmpty) return '';
-    return '【写作大纲（创作须贴合，不得冲突）】\n${parts.join('\n')}\n\n';
-  }
-
   String _actionLabel(ChapterAiAction a, L10n l10n) => switch (a) {
+        ChapterAiAction.rewrite => l10n.t('RAI.Rewrite', '重写'),
         ChapterAiAction.polish => l10n.t('RAI.Polish', '润色'),
         ChapterAiAction.dedupePolish =>
           l10n.t('RAI.Dedupe', '去重润色'),
@@ -218,6 +156,7 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
   }
 
   Future<void> _run(ChapterAiAction action) async {
+    if (_runningAction != null) return;
     final l10n = ref.read(l10nProvider);
     final selected = _selectedText();
     if (selected.isEmpty) {
@@ -226,7 +165,10 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
       return;
     }
 
-    final provider = ref.read(modelManagerProvider).getDefaultProvider();
+    final settings = ref.read(dualAgentSettingsProvider);
+    final provider = settings.enableDualAgentWorkflow
+        ? ref.read(agentProviderResolverProvider)(settings.mainAgentProvider)
+        : ref.read(modelManagerProvider).getDefaultProvider();
     if (provider == null || !provider.isAvailable) {
       setState(() => _error = l10n
           .t('RAI.NoProvider', '没有可用的 AI 服务，请先到「AI 配置」注册并设置默认模型'));
@@ -241,19 +183,21 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
     });
 
     try {
-      final resp = await provider.chat(
-        ChatRequest(
-          systemPrompt: '你是 NovelCraft 的章节 AI 助手，严格按用户指令处理'
-              '小说正文片段，只输出结果文本本身，不要解释、不要 Markdown 包装。',
-          messages: <ChatMessage>[ChatMessage.user(_buildPrompt(action, selected, l10n))],
-          temperature: 0.8,
-          maxTokens: 2048,
-        ),
+      final text = await SelectionEditService.edit(
+        provider: provider,
+        model: settings.enableDualAgentWorkflow ? settings.mainAgentModel : '',
+        action: action,
+        selected: selected,
+        fullContent: widget.fullContent,
+        instruction: _requireCtrl.text.trim(),
+        chapterOutline: widget.chapterOutline,
+        volumeOutline: widget.volumeOutline,
+        prevChapterTail: widget.prevChapterTail,
       );
-      final text = resp.content.trim();
-      if (!resp.isSuccess || text.isEmpty) {
+      if (!mounted) return;
+      if (_selectedText() != selected) {
         setState(() {
-          _error = resp.errorMessage ?? l10n.t('RAI.EmptyResult', 'AI 返回空结果');
+          _error = '选区已改变，已丢弃过期结果，请重新处理。';
           _runningAction = null;
         });
         return;
@@ -263,8 +207,9 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
         _runningAction = null;
       });
     } on Object catch (e) {
+      if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = '处理未通过校验，原文未修改：$e';
         _runningAction = null;
       });
     }
@@ -315,6 +260,8 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : switch (action) {
+                        ChapterAiAction.rewrite =>
+                          const Icon(Icons.edit_note, size: 16),
                         ChapterAiAction.polish =>
                           const Icon(Icons.auto_fix_high, size: 16),
                         ChapterAiAction.dedupePolish =>
