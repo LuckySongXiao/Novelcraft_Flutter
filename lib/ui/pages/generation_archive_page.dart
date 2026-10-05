@@ -222,7 +222,7 @@ class _ArchiveTabState extends ConsumerState<_ArchiveTab> {
                         ),
                         subtitle: Text(
                           '${level.isNotEmpty ? _levelLabel(level, l10n) : _taskTypeLabel(e.taskType, l10n)}'
-                          ' · ${e.characterCount} 字 · '
+                          ' · ${l10n.tf('Common.CharCountFmt', '{0} 字', <Object>[e.characterCount])} · '
                           '${DateTime.fromMillisecondsSinceEpoch(e.createdAtMs).toString().substring(0, 19)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -482,7 +482,8 @@ class _ArchiveDetailPage extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            '${_taskTypeLabel(entry.taskType, l10n)} · ${entry.characterCount} 字 · '
+            '${_taskTypeLabel(entry.taskType, l10n)} · '
+            '${l10n.tf('Common.CharCountFmt', '{0} 字', <Object>[entry.characterCount])} · '
             '${DateTime.fromMillisecondsSinceEpoch(entry.createdAtMs).toString().substring(0, 19)}',
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),

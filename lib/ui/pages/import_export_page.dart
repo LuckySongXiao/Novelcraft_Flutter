@@ -171,7 +171,8 @@ class _ImportExportPageState extends ConsumerState<ImportExportPage> {
         epubChapters.add(EpubChapter(
           title: (chapter.title as String?)?.trim().isEmpty == false
               ? chapter.title as String
-              : '第 ${epubChapters.length + 1} 章',
+              : l10n.tf('IE.EpubChapterN', '第 {0} 章',
+                  <Object>[epubChapters.length + 1]),
           content: content,
           volumeTitle: volumeTitle,
           order: (chapter.orderIndex as num?)?.toInt() ?? 0,

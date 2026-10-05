@@ -188,17 +188,21 @@ class ProjectOverviewPage extends ConsumerWidget {
                     OutlinedButton.icon(
                       onPressed: () => _auditArchive(context, ref),
                       icon: const Icon(Icons.fact_check_outlined),
-                      label: const Text('审查并校准项目档案'),
+                      label: Text(
+                        l10n.t('PO.AuditArchive', '审查并校准项目档案'),
+                      ),
                     ),
                     OutlinedButton.icon(
                       onPressed: () => _reviewBook(context, ref),
                       icon: const Icon(Icons.rate_review_outlined),
-                      label: const Text('7B 全书审查并改进'),
+                      label: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
                     ),
                     OutlinedButton.icon(
                       onPressed: () => _showReviewComments(context, ref),
                       icon: const Icon(Icons.forum_outlined),
-                      label: const Text('查看审查留言'),
+                      label: Text(
+                        l10n.t('PO.ViewReviewComments', '查看审查留言'),
+                      ),
                     ),
                   ],
                 ),
@@ -226,6 +230,7 @@ class ProjectOverviewPage extends ConsumerWidget {
   }
 
   Future<void> _auditArchive(BuildContext context, WidgetRef ref) async {
+    final l10n = ref.read(l10nProvider);
     final service = ref.read(projectArchiveAuditServiceProvider);
     final report = await service.audit(projectId);
     if (report == null || !context.mounted) return;
@@ -234,28 +239,49 @@ class ProjectOverviewPage extends ConsumerWidget {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(report.isConsistent
-          ? '项目与写作档案一致：${report.archiveEntries} 条'
-          : '档案校准完成：修正/移除 $changed 条，剩余异常 ${after?.mismatchCount ?? 0} 条'),
+          ? l10n.tf(
+              'PO.AuditConsistentFmt',
+              '项目与写作档案一致：{0} 条',
+              <Object>[report.archiveEntries],
+            )
+          : l10n.tf(
+              'PO.AuditCalibratedFmt',
+              '档案校准完成：修正/移除 {0} 条，剩余异常 {1} 条',
+              <Object>[changed, after?.mismatchCount ?? 0],
+            )),
     ));
   }
 
   Future<void> _reviewBook(BuildContext context, WidgetRef ref) async {
+    final l10n = ref.read(l10nProvider);
     final chapters = await ref.read(chapterRepositoryProvider).getByProjectId(projectId);
     if (!context.mounted) return;
     if (chapters.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('项目暂无章节正文')),
+        SnackBar(content: Text(l10n.t('PO.NoChapters', '项目暂无章节正文'))),
       );
       return;
     }
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('7B 全书审查并改进'),
-        content: Text('将逐章读取 ${chapters.length} 章正文、大纲和上下文。7B 先写审查留言，发现异常后交给 3B 改写并回写版本。'),
+        title: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
+        content: Text(
+          l10n.tf(
+            'PO.ReviewDialogBodyFmt',
+            '将逐章读取 {0} 章正文、大纲和上下文。7B 先写审查留言，发现异常后交给 3B 改写并回写版本。',
+            <Object>[chapters.length],
+          ),
+        ),
         actions: <Widget>[
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('开始')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.t('PO.Start', '开始')),
+          ),
         ],
       ),
     );
@@ -276,30 +302,50 @@ class ProjectOverviewPage extends ConsumerWidget {
     }
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('审查完成：已审查 $reviewed 章，3B 已改进 $applied 章。留言已保存。'),
+      content: Text(
+        l10n.tf(
+          'PO.ReviewDoneFmt',
+          '审查完成：已审查 {0} 章，3B 已改进 {1} 章。留言已保存。',
+          <Object>[reviewed, applied],
+        ),
+      ),
     ));
     ref.invalidate(projectStatsProvider(projectId));
   }
 
   Future<void> _showReviewComments(BuildContext context, WidgetRef ref) async {
+    final l10n = ref.read(l10nProvider);
     final chapters = await ref.read(chapterRepositoryProvider).getByProjectId(projectId);
     final service = ref.read(bookContentReviewServiceProvider);
     final List<(String, String, String, String)> rows = <(String, String, String, String)>[];
     for (final chapter in chapters) {
       for (final comment in await service.commentsFor(projectId, chapter.id)) {
-        rows.add((chapter.title, comment.author, comment.severity, '${comment.problem}\n建议：${comment.suggestion}'));
+        rows.add((
+          chapter.title,
+          comment.author,
+          comment.severity,
+          l10n.tf(
+            'PO.CommentBodyFmt',
+            '{0}\n建议：{1}',
+            <Object>[comment.problem, comment.suggestion],
+          ),
+        ));
       }
     }
     if (!context.mounted) return;
     await showDialog<void>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('7B 审查留言'),
+        title: Text(l10n.t('PO.ReviewComments', '7B 审查留言')),
         content: SizedBox(
           width: 560,
           height: 420,
           child: rows.isEmpty
-              ? const Center(child: Text('暂无留言，请先运行全书审查'))
+              ? Center(
+                  child: Text(
+                    l10n.t('PO.NoComments', '暂无留言，请先运行全书审查'),
+                  ),
+                )
               : ListView.separated(
                   itemCount: rows.length,
                   separatorBuilder: (BuildContext context, int index) {
@@ -316,7 +362,10 @@ class ProjectOverviewPage extends ConsumerWidget {
                 ),
         ),
         actions: <Widget>[
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(l10n.t('Common.Close', '关闭')),
+          ),
         ],
       ),
     );

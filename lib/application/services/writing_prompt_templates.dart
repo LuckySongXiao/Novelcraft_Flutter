@@ -9,32 +9,99 @@ class WritingPromptStage {
     required this.id,
     required this.title,
     required this.defaultBody,
+    this.titleEn,
     this.variables = const {},
+    this.variablesEn = const {},
     this.asset = false,
   });
 
   final String id;
   final String title;
+
+  /// 英文界面下显示的节点名（`null` = 退回 [title]，与 C# 原版一致）。
+  final String? titleEn;
+
   final String defaultBody;
   final Map<String, String> variables;
+
+  /// [variables] 的英文说明（键同名；缺项时退回中文说明）。
+  final Map<String, String> variablesEn;
+
   final bool asset;
 
-  String? validate(String body) {
-    if (body.trim().isEmpty) return '提示词不能为空';
-    if (body.length > 64000) return '提示词不能超过 64000 字符';
+  /// 按当前界面语言取节点名。
+  String titleFor(bool isEnglish) =>
+      isEnglish ? (titleEn ?? title) : title;
+
+  /// 按当前界面语言取变量说明。
+  String variableLabel(String key, bool isEnglish) {
+    if (isEnglish) {
+      final String? en = variablesEn[key];
+      if (en != null && en.isNotEmpty) return en;
+    }
+    return variables[key] ?? key;
+  }
+
+  /// 校验 Prompt 正文。失败时返回**可本地化**的问题对象
+  /// （`key` + 中文兜底 + 参数），由 UI 按当前语言渲染 —— 领域层不依赖 i18n 表。
+  PromptTemplateException? validate(String body) {
+    if (body.trim().isEmpty) {
+      return const PromptTemplateException('WPS.Err.Empty', '提示词不能为空');
+    }
+    if (body.length > 64000) {
+      return const PromptTemplateException(
+        'WPS.Err.TooLong',
+        '提示词不能超过 64000 字符',
+      );
+    }
     final pattern = asset
         ? RegExp(r'\{([A-Za-z]\w*)\}')
         : RegExp(r'\{\{([^{}]+)\}\}');
     final used = pattern.allMatches(body).map((match) => match[1]!).toSet();
     final unknown = used.difference(variables.keys.toSet());
-    if (unknown.isNotEmpty) return '未知变量：${unknown.join('、')}';
+    if (unknown.isNotEmpty) {
+      return PromptTemplateException(
+        'WPS.Err.UnknownVars',
+        '未知变量：{0}',
+        <Object>[unknown.join(', ')],
+      );
+    }
     final missing = variables.keys.toSet().difference(used);
-    if (missing.isNotEmpty) return '请保留动态变量：${missing.join('、')}';
+    if (missing.isNotEmpty) {
+      return PromptTemplateException(
+        'WPS.Err.MissingVars',
+        '请保留动态变量：{0}',
+        <Object>[missing.join(', ')],
+      );
+    }
     if (!asset && body.replaceAll(pattern, '').contains(RegExp(r'\{\{|\}\}'))) {
-      return '变量括号不完整，请使用 {{变量名}}';
+      return const PromptTemplateException(
+        'WPS.Err.BrokenBraces',
+        '变量括号不完整，请使用 {{变量名}}',
+      );
     }
     return null;
   }
+}
+
+/// 模板校验 / 保存失败。
+///
+/// 只携带 `key` + 中文兜底 + 参数，文案由 UI 用 [L10n] 渲染 ——
+/// 这样同一个错误在中英文界面下都能正确显示。
+class PromptTemplateException implements Exception {
+  const PromptTemplateException(
+    this.key,
+    this.fallback, [
+    this.args = const <Object>[],
+  ]);
+
+  final String key;
+  final String fallback;
+  final List<Object> args;
+
+  /// 无 i18n 场景（日志 / toString）下的兜底文案。
+  @override
+  String toString() => fallback;
 }
 
 class WritingPromptVariant {
@@ -54,7 +121,7 @@ class WritingPromptTemplates {
     required List<WritingPromptStage> stages,
     Map<String, List<WritingPromptVariant>> variants = const {},
     Map<String, String> selected = const {},
-    this.loadWarning,
+    this.loadFailed = false,
   }) : stages = List.unmodifiable(stages),
        variants = Map.unmodifiable(
          variants.map(
@@ -70,7 +137,9 @@ class WritingPromptTemplates {
   final List<WritingPromptStage> stages;
   final Map<String, List<WritingPromptVariant>> variants;
   final Map<String, String> selected;
-  final String? loadWarning;
+  /// 已保存的配置损坏/不兼容时为 true —— 文案由 UI 按当前语言渲染
+  /// （领域层不持有 i18n 表）。
+  final bool loadFailed;
 
   WritingPromptStage stage(String id) =>
       stages.firstWhere((item) => item.id == id);
@@ -109,13 +178,19 @@ class WritingPromptTemplates {
           !ids.add(item.id) ||
           item.name.trim().isEmpty ||
           !names.add(item.name.trim())) {
-        throw const FormatException('模板名称和标识不能为空或重复');
+        throw const PromptTemplateException(
+          'WPS.Err.Duplicate',
+          '模板名称和标识不能为空或重复',
+        );
       }
       final error = definition.validate(item.body);
-      if (error != null) throw FormatException(error);
+      if (error != null) throw error;
     }
     if (active.isNotEmpty && !ids.contains(active)) {
-      throw const FormatException('选中的模板不存在');
+      throw const PromptTemplateException(
+        'WPS.Err.ActiveMissing',
+        '选中的模板不存在',
+      );
     }
     return WritingPromptTemplates(
       stages: stages,
@@ -171,7 +246,7 @@ class WritingPromptTemplates {
     } on Object {
       return WritingPromptTemplates(
         stages: stages,
-        loadWarning: '已保存的提示词配置损坏或不兼容，当前使用内置模板；原配置未覆盖。保存新配置会替换原配置。',
+        loadFailed: true,
       );
     }
   }

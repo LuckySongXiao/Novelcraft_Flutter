@@ -14,20 +14,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/services/multi_agent_book_generation_service.dart';
 import '../../core/di.dart';
+import '../../l10n/l10n.dart';
 
-/// 章节阶段中文标签（矩阵/长条共用）。
-String multiAgentPhaseLabel(Object phase) => switch (phase) {
-      MultiAgentChapterPhase.queued => '排队中',
-      MultiAgentChapterPhase.planning => '组长派活',
-      MultiAgentChapterPhase.writing => '写手成稿',
-      MultiAgentChapterPhase.accepting => '组长验收',
-      MultiAgentChapterPhase.rework => '打回返工',
-      MultiAgentChapterPhase.leaderFix => '组长补写',
-      MultiAgentChapterPhase.polishing => '拼接定稿',
-      MultiAgentChapterPhase.done => '已完成',
-      MultiAgentChapterPhase.failed => '失败',
+/// 章节阶段标签（矩阵 / AppBar 长条共用），按当前界面语言渲染。
+String multiAgentPhaseLabel(Object phase, L10n l10n) => switch (phase) {
+      MultiAgentChapterPhase.queued => l10n.t('MAG.Phase.Queued', '排队中'),
+      MultiAgentChapterPhase.planning => l10n.t('MAG.Phase.Planning', '组长派活'),
+      MultiAgentChapterPhase.writing => l10n.t('MAG.Phase.Writing', '写手成稿'),
+      MultiAgentChapterPhase.accepting => l10n.t('MAG.Phase.Accepting', '组长验收'),
+      MultiAgentChapterPhase.rework => l10n.t('MAG.Phase.Rework', '打回返工'),
+      MultiAgentChapterPhase.leaderFix => l10n.t('MAG.Phase.LeaderFix', '组长补写'),
+      MultiAgentChapterPhase.polishing => l10n.t('MAG.Phase.Polishing', '拼接定稿'),
+      MultiAgentChapterPhase.done => l10n.t('MAG.Phase.Done', '已完成'),
+      MultiAgentChapterPhase.failed => l10n.t('MAG.Phase.Failed', '失败'),
       _ => '$phase',
     };
+
+/// 时长文案：`3分05秒` / `3m 05s`（AppBar 长条、生成向导、矩阵对话框共用）。
+String formatElapsed(Duration d, L10n l10n) {
+  final int m = d.inMinutes;
+  final int s = d.inSeconds % 60;
+  final String ss = s.toString().padLeft(2, '0');
+  return m > 0
+      ? l10n.tf('Common.DurationMSFmt', '{0}分{1}秒', <Object>[m, ss])
+      : l10n.tf('Common.DurationSFmt', '{0}秒', <Object>[s]);
+}
 
 /// 单章的实时写作状态。
 class MultiAgentRunChapter {
@@ -104,7 +115,9 @@ class MultiAgentRunController extends Notifier<MultiAgentRunState?> {
     state = MultiAgentRunState(
       running: true,
       bookTitle: config.bookTitle,
-      step: '正在启动多智能体协同写作…',
+      step: ref
+          .read(l10nProvider)
+          .t('MAG.Starting', '正在启动多智能体协同写作…'),
       startedAt: DateTime.now(),
     );
     _run(config);
@@ -127,7 +140,11 @@ class MultiAgentRunController extends Notifier<MultiAgentRunState?> {
       // 服务层承诺不抛异常；兜底转为失败结果，绝不让后台任务静默蒸发。
       final MultiAgentBookResult failed = MultiAgentBookResult(
         isSuccess: false,
-        message: '生成过程出现未预期错误：$err',
+        message: ref.read(l10nProvider).tf(
+              'MAG.UnexpectedErrorFmt',
+              '生成过程出现未预期错误：{0}',
+              <Object>[err],
+            ),
         bookTitle: config.bookTitle,
         authorName: config.authorName,
         projectId: '',

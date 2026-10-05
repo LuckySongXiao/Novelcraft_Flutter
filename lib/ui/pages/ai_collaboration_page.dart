@@ -1120,6 +1120,12 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
     required ValueChanged<String?> onChanged,
     double width = 200,
   }) {
+    // 末道防线：`DropdownButton` 要求 value 必须**恰好命中** items 中的一项，
+    // 否则直接抛断言红屏。候选列表是异步查库来的，任何时序（恢复中途、
+    // 项目/卷/章刚被删）都可能让 value 短暂落在 items 之外 —— 这里统一
+    // 降级为 null（显示 hint），把崩溃收敛成"看起来没选中"。
+    final bool hit = value != null &&
+        items.any((DropdownMenuItem<String> i) => i.value == value);
     return SizedBox(
       width: width,
       child: InputDecorator(
@@ -1130,7 +1136,7 @@ class _AICollaborationPageState extends ConsumerState<AICollaborationPage> {
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
-            value: value,
+            value: hit ? value : null,
             isDense: true,
             isExpanded: true,
             hint: Text(

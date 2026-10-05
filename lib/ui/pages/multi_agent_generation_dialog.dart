@@ -233,7 +233,9 @@ class _MultiAgentWizardDialogState
           // ---- 写作工艺（正文产出方式）----
           TextButton.icon(
             icon: const Icon(Icons.edit_note),
-            label: const Text('配置各工艺节点 Prompt 模板'),
+            label: Text(
+              l10n.t('MAG.ConfigurePrompts', '配置各工艺节点 Prompt 模板'),
+            ),
             onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
               builder: (_) => const WritingPromptSettingsPage(),
             )),
@@ -384,7 +386,7 @@ class _MultiAgentWizardDialogState
     final MultiAgentRunState? run = ref.watch(multiAgentRunProvider);
     final String elapsed = run?.startedAt == null
         ? ''
-        : ' · ${l10n.t('MAG.Elapsed', '已用时')} ${_fmtElapsed(DateTime.now().difference(run!.startedAt!))}';
+        : ' · ${l10n.t('MAG.Elapsed', '已用时')} ${formatElapsed(DateTime.now().difference(run!.startedAt!), l10n)}';
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -409,12 +411,6 @@ class _MultiAgentWizardDialogState
           ),
       ],
     );
-  }
-
-  static String _fmtElapsed(Duration d) {
-    final int m = d.inMinutes;
-    final int s = d.inSeconds % 60;
-    return m > 0 ? '$m分${s.toString().padLeft(2, '0')}秒' : '$s秒';
   }
 
   Widget _buildResult(BuildContext context, L10n l10n, MultiAgentBookResult r) {

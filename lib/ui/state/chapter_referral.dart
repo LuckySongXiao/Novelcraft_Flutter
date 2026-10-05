@@ -317,14 +317,61 @@ class ChapterReferralController extends Notifier<ChapterReferral> {
       );
 
       if (projectId != null) {
-        state = _copy(projects: await _readProjects());
-        state = _copy(volumes: await _readVolumes(projectId));
+        // ── 逐级自愈 ──────────────────────────────────────────────────
+        // 持久化下来的 id 只保证"上次用过"，不保证"现在还在"：项目被删
+        // （`getAll()` 只返回 `is_deleted=0`）、卷被删、章被删都会让 id 悬空。
+        // 悬空 id 一旦传进 `DropdownButton.value` 而 items 里没有它，
+        // Flutter 会直接抛断言红屏（不是可忽略的告警），所以这里必须
+        // 在恢复阶段就把整条链路裁到"列表里真实存在"为止。
+        final List<ProjectRow> projects = await _readProjects();
+        if (!projects.any((ProjectRow p) => p.id == projectId)) {
+          // 项目已不在列表中 → 整条关联链路作废
+          state = _copy(
+            projects: projects,
+            volumes: const <VolumeRow>[],
+            chapters: const <ChapterRow>[],
+            projectId: null,
+            volumeId: null,
+            pickedChapterId: null,
+            linkedChapterId: null,
+          );
+          await _save();
+          return;
+        }
+        state = _copy(projects: projects);
+
+        final List<VolumeRow> volumes = await _readVolumes(projectId);
+        if (volumeId != null &&
+            !volumes.any((VolumeRow v) => v.id == volumeId)) {
+          // 卷已不在 → 清掉卷/章选择，保留书籍选择
+          state = _copy(
+            volumes: volumes,
+            chapters: const <ChapterRow>[],
+            volumeId: null,
+            pickedChapterId: null,
+            linkedChapterId: null,
+          );
+          await _save();
+          return;
+        }
+        state = _copy(volumes: volumes);
+
         if (volumeId != null) {
-          state = _copy(chapters: await _readChapters(volumeId));
+          final List<ChapterRow> chapters = await _readChapters(volumeId);
+          bool hasChapter(String? id) =>
+              id != null && chapters.any((ChapterRow c) => c.id == id);
+          // 自愈：`pickedChapterId` / `linkedChapterId` 指向已被删除的章节
+          state = _copy(
+            chapters: chapters,
+            pickedChapterId:
+                hasChapter(state.pickedChapterId) ? state.pickedChapterId : null,
+            linkedChapterId:
+                hasChapter(state.linkedChapterId) ? state.linkedChapterId : null,
+          );
         }
       }
 
-      // 自愈：关联的章节已不存在（被删/项目被删）→ 不留悬空关联
+      // 兜底自愈：无论上面走到哪一步，只要最终解析不出已关联章节就清干净
       if (state.linkedChapterId != null && state.linkedChapter == null) {
         state = _copy(linkedChapterId: null, pickedChapterId: null);
         await _save();

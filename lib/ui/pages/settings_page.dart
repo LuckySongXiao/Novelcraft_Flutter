@@ -36,8 +36,10 @@ class SettingsPage extends ConsumerWidget {
         const SizedBox(height: 20),
         Card(child: ListTile(
           leading: const Icon(Icons.edit_note),
-          title: const Text('写作工艺 Prompt 模板'),
-          subtitle: const Text('编辑各节点提示词、保存多套模板并选择生效模板'),
+          title: Text(l10n.t('Set.WritingPrompt', '写作工艺 Prompt 模板')),
+          subtitle: Text(
+            l10n.t('Set.WritingPromptDesc', '编辑各节点提示词、保存多套模板并选择生效模板'),
+          ),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => const WritingPromptSettingsPage(),

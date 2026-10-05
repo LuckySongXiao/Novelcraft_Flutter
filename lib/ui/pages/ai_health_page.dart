@@ -390,7 +390,11 @@ class _AiHealthPageState extends ConsumerState<AiHealthPage> {
       _kv(l10n.t('AIH.AgentState.Groups', '活跃分组 / 累计分组'),
           '$activeGroups / $totalGroups', scheme),
       _kv(l10n.t('AIH.AgentState.States', '活跃 state / 每组编制'),
-          '$activeStates / 10（1 组长 + 9 写手）', scheme),
+          l10n.tf(
+            'AIH.AgentState.StatesValueFmt',
+            '{0} / 10（1 组长 + 9 写手）',
+            <Object>[activeStates],
+          ), scheme),
       _kv(l10n.t('AIH.AgentState.StatusCounts', '状态分布'), statusText, scheme),
       _kv(l10n.t('AIH.AgentState.Turns', '累计对话轮次'), '$totalTurns', scheme),
     ];

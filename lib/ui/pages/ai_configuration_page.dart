@@ -1986,8 +1986,14 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
-                      '${gpus.first.name} · 空闲 '
-                      '${(vramFree / (1024 * 1024 * 1024)).toStringAsFixed(1)}GB',
+                      l10n.tf(
+                        'AICfg.GpuFreeFmt',
+                        '{0} · 空闲 {1}GB',
+                        <Object>[
+                          gpus.first.name,
+                          (vramFree / (1024 * 1024 * 1024)).toStringAsFixed(1),
+                        ],
+                      ),
                       style: const TextStyle(fontSize: 12),
                     ),
                   )
@@ -2117,6 +2123,7 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
   /// 用已装好的引擎拉起本地 server
   Future<void> _launch() async {
     if (_launching) return;
+    final L10n l10n = ref.read(l10nProvider);
     setState(() => _launching = true);
     try {
       final bool ok = await _provider.launchLocalServer(
@@ -2126,8 +2133,10 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       if (!mounted) return;
       setState(
         () => _status = ok
-            ? '✅ 内置引擎已启动（/v1/server/status 可查能力与显存）'
-            : '启动失败：\n${diag ?? "无诊断信息"}',
+            ? l10n.t('AICfg.EngineStarted',
+                '✅ 内置引擎已启动（/v1/server/status 可查能力与显存）')
+            : l10n.tf('AICfg.EngineLaunchFailedFmt', '启动失败：\n{0}',
+                <Object>[diag ?? l10n.t('AICfg.NoDiagnostics', '无诊断信息')]),
       );
     } finally {
       if (mounted) setState(() => _launching = false);
@@ -2186,14 +2195,16 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
-                  items: const <DropdownMenuItem<OfficialServerVariant>>[
+                  items: <DropdownMenuItem<OfficialServerVariant>>[
                     DropdownMenuItem<OfficialServerVariant>(
                       value: OfficialServerVariant.cuda13,
-                      child: Text('CUDA 13.2（新驱动推荐）'),
+                      child: Text(l10n.t('AICfg.Cuda13',
+                          'CUDA 13.2（新驱动推荐）')),
                     ),
                     DropdownMenuItem<OfficialServerVariant>(
                       value: OfficialServerVariant.cuda12,
-                      child: Text('CUDA 12.9（兼容旧驱动）'),
+                      child: Text(l10n.t('AICfg.Cuda12',
+                          'CUDA 12.9（兼容旧驱动）')),
                     ),
                   ],
                   onChanged: _running
@@ -2284,29 +2295,30 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
-                  items: const <DropdownMenuItem<String>>[
-                    DropdownMenuItem<String>(
+                  items: <DropdownMenuItem<String>>[
+                    const DropdownMenuItem<String>(
                       value: 'none',
                       child: Text('none'),
                     ),
                     DropdownMenuItem<String>(
                       value: 'fast',
-                      child: Text('fast（默认）'),
+                      child: Text(l10n.t('AICfg.FastDefault', 'fast（默认）')),
                     ),
-                    DropdownMenuItem<String>(
+                    const DropdownMenuItem<String>(
                       value: 'free',
                       child: Text('free'),
                     ),
-                    DropdownMenuItem<String>(
+                    const DropdownMenuItem<String>(
                       value: 'preferChinese',
                       child: Text('preferChinese'),
                     ),
-                    DropdownMenuItem<String>(value: 'en', child: Text('en')),
-                    DropdownMenuItem<String>(
+                    const DropdownMenuItem<String>(
+                        value: 'en', child: Text('en')),
+                    const DropdownMenuItem<String>(
                       value: 'enShort',
                       child: Text('enShort'),
                     ),
-                    DropdownMenuItem<String>(
+                    const DropdownMenuItem<String>(
                       value: 'enLong',
                       child: Text('enLong'),
                     ),
@@ -4260,6 +4272,7 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     if (AgentEndpointRegistry.platform(binding) != 'RWKV Cloud') {
       return const SizedBox.shrink();
     }
+    final L10n l10n = ref.read(l10nProvider);
     final profiles = ref.read(agentEndpointRegistryProvider).profiles;
     final keys = <String>{'RWKV Cloud', ...profiles.keys, binding};
     return Padding(
@@ -4268,14 +4281,19 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
         key: ValueKey('endpoint-$main-$binding'),
         initialValue: binding,
         isExpanded: true,
-        decoration: const InputDecoration(labelText: '端点配置（独立于上方当前端点）'),
+        decoration: InputDecoration(
+          labelText: l10n.t('AICfg.EndpointConfig', '端点配置（独立于上方当前端点）'),
+        ),
         items: [
           for (final key in keys)
             DropdownMenuItem(
               value: key,
               child: Text(key == 'RWKV Cloud'
-                  ? '兼容旧配置：跟随当前端点（建议选择固定配置）'
-                  : profiles[key]?.name ?? '已删除配置：$key',
+                  ? l10n.t('AICfg.FollowCurrentEndpoint',
+                      '兼容旧配置：跟随当前端点（建议选择固定配置）')
+                  : profiles[key]?.name ??
+                      l10n.tf('AICfg.DeletedProfileFmt', '已删除配置：{0}',
+                          <Object>[key]),
                 overflow: TextOverflow.ellipsis),
             ),
         ],

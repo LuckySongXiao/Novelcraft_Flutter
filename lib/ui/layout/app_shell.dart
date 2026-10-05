@@ -95,7 +95,8 @@ class _AppShellState extends ConsumerState<AppShell> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '写作中$pct',
+                    ref.watch(l10nProvider).t('MAG.WritingShort', '写作中') +
+                        pct,
                     style: const TextStyle(
                         fontSize: 12,
                         color: Colors.green,
@@ -213,6 +214,16 @@ class _AppShellState extends ConsumerState<AppShell> {
                 child: Text(l10n.t('Shell.ThemePink', '花漾少女')),
               ),
             ],
+          ),
+          // 设置入口：直达「设置 → 写作工艺 Prompt 模板 / 皮肤 / 语言 / 诊断」。
+          // 此前主 GUI 顶部导航条没有设置按键，用户只能靠手机端的「更多页面」
+          // 弹出菜单进入，桌面/Web 端无处可点。
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: l10n.t('Shell.Settings', '设置'),
+            onPressed: () => ref
+                .read(navigationProvider.notifier)
+                .navigateTo(NavigationTarget.settings),
           ),
           const SizedBox(width: 8),
         ],

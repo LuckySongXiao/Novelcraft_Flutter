@@ -197,7 +197,7 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
       if (!mounted) return;
       if (_selectedText() != selected) {
         setState(() {
-          _error = '选区已改变，已丢弃过期结果，请重新处理。';
+          _error = l10n.t('RAI.StaleSelection', '选区已改变，已丢弃过期结果，请重新处理。');
           _runningAction = null;
         });
         return;
@@ -209,7 +209,11 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
     } on Object catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '处理未通过校验，原文未修改：$e';
+        _error = l10n.tf(
+          'RAI.ValidationFailedFmt',
+          '处理未通过校验，原文未修改：{0}',
+          <Object>[e],
+        );
         _runningAction = null;
       });
     }

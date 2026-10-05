@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/services/multi_agent_book_generation_service.dart'
     show MultiAgentChapterPhase;
+import '../../l10n/l10n.dart';
 import '../state/multi_agent_run.dart';
 
 /// 打开写作动态矩阵对话框（可随时关闭，后台任务不受影响）。
@@ -52,10 +53,11 @@ class _MultiAgentRunMatrixDialogState
   @override
   Widget build(BuildContext context) {
     final MultiAgentRunState? run = ref.watch(multiAgentRunProvider);
+    final L10n l10n = ref.watch(l10nProvider);
     final scheme = Theme.of(context).colorScheme;
     final String elapsed = run?.startedAt == null
         ? ''
-        : _fmtElapsed(DateTime.now().difference(run!.startedAt!));
+        : formatElapsed(DateTime.now().difference(run!.startedAt!), l10n);
 
     return AlertDialog(
       title: Row(
@@ -79,8 +81,12 @@ class _MultiAgentRunMatrixDialogState
           Expanded(
             child: Text(
               run == null
-                  ? '写作动态'
-                  : (run.running ? '写作中 · ${run.bookTitle}' : '写作结束 · ${run.bookTitle}'),
+                  ? l10n.t('MAG.Matrix.Title', '写作动态')
+                  : (run.running
+                      ? l10n.tf('MAG.Matrix.RunningFmt', '写作中 · {0}',
+                          <Object>[run.bookTitle])
+                      : l10n.tf('MAG.Matrix.DoneFmt', '写作结束 · {0}',
+                          <Object>[run.bookTitle])),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 17),
@@ -91,7 +97,7 @@ class _MultiAgentRunMatrixDialogState
       content: SizedBox(
         width: 640,
         child: run == null
-            ? const Text('当前没有进行中的写书任务。')
+            ? Text(l10n.t('MAG.Matrix.None', '当前没有进行中的写书任务。'))
             : Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -100,7 +106,7 @@ class _MultiAgentRunMatrixDialogState
                   const SizedBox(height: 8),
                   Text(
                     '${run.step}'
-                    '${elapsed.isEmpty ? '' : '　·　已用时 $elapsed'}',
+                    '${elapsed.isEmpty ? '' : l10n.tf('MAG.Matrix.ElapsedFmt', '　·　已用时 {0}', <Object>[elapsed])}',
                     style: TextStyle(
                         fontSize: 12, color: scheme.onSurfaceVariant),
                   ),
@@ -109,7 +115,9 @@ class _MultiAgentRunMatrixDialogState
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 24),
                       child: Center(
-                        child: Text('章节规划完成后，此处将实时显示各团队的写作进度',
+                        child: Text(
+                            l10n.t('MAG.Matrix.Hint',
+                                '章节规划完成后，此处将实时显示各团队的写作进度'),
                             style: TextStyle(
                                 fontSize: 12,
                                 color: scheme.onSurfaceVariant)),
@@ -128,7 +136,7 @@ class _MultiAgentRunMatrixDialogState
                         ),
                         itemCount: run.chapters.length,
                         itemBuilder: (BuildContext ctx, int i) =>
-                            _ChapterCell(chapter: run.chapters[i]),
+                            _ChapterCell(chapter: run.chapters[i], l10n: l10n),
                       ),
                     ),
                 ],
@@ -137,24 +145,19 @@ class _MultiAgentRunMatrixDialogState
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('关闭（后台继续）'),
+          child: Text(l10n.t('MAG.Matrix.Close', '关闭（后台继续）')),
         ),
       ],
     );
-  }
-
-  static String _fmtElapsed(Duration d) {
-    final int m = d.inMinutes;
-    final int s = d.inSeconds % 60;
-    return m > 0 ? '$m分${s.toString().padLeft(2, '0')}秒' : '$s秒';
   }
 }
 
 /// 单章矩阵单元：标题 + 阶段徽章 + 进度条 + 明细。
 class _ChapterCell extends StatelessWidget {
-  const _ChapterCell({required this.chapter});
+  const _ChapterCell({required this.chapter, required this.l10n});
 
   final MultiAgentRunChapter chapter;
+  final L10n l10n;
 
   @override
   Widget build(BuildContext context) {
@@ -201,7 +204,7 @@ class _ChapterCell extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  multiAgentPhaseLabel(chapter.phase),
+                  multiAgentPhaseLabel(chapter.phase, l10n),
                   style: TextStyle(fontSize: 10, color: fg),
                 ),
               ),
@@ -241,9 +244,18 @@ class _ChapterCell extends StatelessWidget {
   /// 状态后缀徽章：落库定稿 / 草稿 / 大纲就绪（进行中阶段由阶段徽章表达）。
   Widget _statusSuffix(MultiAgentRunChapter chapter) {
     final (String label, Color color) = switch (chapter.phase) {
-      MultiAgentChapterPhase.done => ('落库定稿', Colors.green),
-      MultiAgentChapterPhase.failed => ('草稿', Colors.orange),
-      MultiAgentChapterPhase.queued => ('大纲就绪', Colors.blueGrey),
+      MultiAgentChapterPhase.done => (
+          l10n.t('MAG.Suffix.Done', '落库定稿'),
+          Colors.green
+        ),
+      MultiAgentChapterPhase.failed => (
+          l10n.t('MAG.Suffix.Draft', '草稿'),
+          Colors.orange
+        ),
+      MultiAgentChapterPhase.queued => (
+          l10n.t('MAG.Suffix.OutlineReady', '大纲就绪'),
+          Colors.blueGrey
+        ),
       _ => ('', Colors.transparent),
     };
     if (label.isEmpty) return const SizedBox.shrink();
