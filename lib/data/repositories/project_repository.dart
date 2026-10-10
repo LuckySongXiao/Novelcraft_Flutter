@@ -71,6 +71,17 @@ class ProjectRepository extends RepositoryBase {
     return rows > 0;
   }
 
+  /// 只写 `progress` 一列，**不碰 `updated_at`**。
+  ///
+  /// 进度是**派生量**（章节完成率），会在打开项目概览时自愈回写；
+  /// 若走 [updateById]（它强制 `updatedAt = now`），「最近编辑」会被刷成
+  /// 「刚刚」，作者再也看不出这本书上次真正写到什么时候。
+  Future<bool> updateProgress(String id, int progress) async {
+    final rows = await (db.update(db.projects)..where((t) => t.id.equals(id)))
+        .write(ProjectsCompanion(progress: Value(progress.clamp(0, 100))));
+    return rows > 0;
+  }
+
   /// 软删除（对齐 EF 把 Remove() 改写成 IsDeleted 标记的行为）
   Future<void> delete(String id) => softDeleteRow(_table, id);
 

@@ -13,6 +13,14 @@ export 'key_value_store_stub.dart'
     if (dart.library.io) 'key_value_store_native.dart'
     if (dart.library.js_interop) 'key_value_store_web.dart';
 
+/// 存储键净化与路径拼接的**唯一真值**在 `store_key.dart`（纯 Dart，可离线自检）。
+///
+/// 这里只做转出，方便既有调用方继续 `import 'key_value_store.dart';` 就能拿到它们。
+/// 注意：本文件条件导出了 native 实现（`dart:io` + `path_provider`），
+/// 离线脚本请直接 import `store_key.dart`，不要 import 本文件。
+export 'store_key.dart'
+    show sanitizeStoreKey, storeFileName, storeFilePath, storeKeyFromFileName;
+
 /// 存储接口：按「作用域 + 键」读写 JSON 文本
 abstract class KeyValueStore {
   Future<void> init();

@@ -41,7 +41,31 @@ class CharacterEventRepository extends RepositoryBase {
   /// 物理删除：软删除查询不生效，故直接硬删。
   Future<void> delete(String id) => hardDeleteRow(_table, id);
 
-  /// 角色事件无 projectId，提供全量读取供实体页聚合展示。
+  /// 角色事件表**没有** project_id 列（C# 实体没有，见
+  /// `content_tables.dart` 的 `CharacterEvents` 注释），所以「本项目的事件」
+  /// 只能经 `characters.project_id` 二次 JOIN 得到。
+  ///
+  /// ⚠ 历史缺陷：实体页与项目导出此前一律走 [getAll]，把**全库**事件都拉了出来
+  /// —— 示例项目的种子事件（`demo-ch-linyue / 林月拜入玄穹剑宗`、
+  /// `demo-ch-yaohuang / 妖皇破关·兵临剑宗`）于是出现在**每一个项目**的
+  /// 「角色事件管理」页与导出目录 `20_人物事件/` 里（用户实测 BUG）。
+  /// 作品间隔离必须走本方法。
+  Future<List<CharacterEventRow>> getByProjectId(String projectId) {
+    return db
+        .customSelect(
+          'SELECT ce.* FROM character_events ce '
+          'INNER JOIN characters c ON c.id = ce.character_id '
+          'WHERE c.project_id = ? AND c.is_deleted = 0 '
+          'ORDER BY ce.order_index',
+          variables: [Variable<String>(projectId)],
+          readsFrom: {db.characterEvents, db.characters},
+        )
+        .map((row) => db.characterEvents.map(row.data))
+        .get();
+  }
+
+  /// 全量读取。**仅供跨项目场景使用**（迁移、审计、去重）。
+  /// 面向「某一个项目」的 UI / 导出一律改用 [getByProjectId]。
   Future<List<CharacterEventRow>> getAll() {
     return (db.select(db.characterEvents)
           ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]))

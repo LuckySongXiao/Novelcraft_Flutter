@@ -22,6 +22,10 @@ import 'chapter_sync_service.dart';
 ///
 /// 输入章节上下文，返回**本地化的人类可读结果说明**（如「AI 抽取：更新 3 项」）；
 /// 返回 null 或抛异常都视为「AI 未产出」，由调用方如实标注跳过。
+///
+/// ⚠ 还有一个容易漏的第三态：**以 [kAiExtractionFailurePrefix] 开头的字符串**
+/// 也是「未产出」（只是带上了失败原因）。调用方必须用该前缀把它与真正的成功
+/// 说明区分开，否则一句失败说明会被当成成功记进防重签名。
 typedef ChapterSyncAiStage = Future<String?> Function(ChapterSyncInput input);
 
 /// 后处理结果摘要。
@@ -168,12 +172,31 @@ class ChapterPostProcessService {
       String aiNote = '';
       if (aiOn) {
         try {
-          final String? note = await _aiStage!.call(input);
-          if (note != null && note.trim().isNotEmpty) {
-            aiApplied = true;
-            aiNote = note.trim();
-          } else {
+          final String note = (await _aiStage!.call(input))?.trim() ?? '';
+          if (note.isEmpty) {
+            // null / 空串 = 没有可应用的产出（正文为空、质量不合格、模型不可用……）
             aiNote = _texts.t('SYN.AIFailFmt', 'AI 抽取失败已跳过');
+          } else if (note.startsWith(kAiExtractionFailurePrefix)) {
+            // ⚠ 「带原因的失败说明」**不是**成功产出。
+            //
+            // 旧实现只看「返回非空」就判成功 —— 于是 `ModuleStateService`
+            // 在严格 JSON 与行式兜底都失败后返回的那句「AI 抽取未产出：…」
+            // 被当成成功，写进 `last_success_v2` 防重签名，此后同版本章节
+            // **再也不会重试**，失败被永久藏起来（用户实测「审核通过后人物 /
+            // 世界观毫无变化」的直接原因之一）。
+            aiApplied = false;
+            aiNote = _texts.tf(
+              'SYN.AIExtractNoOutput',
+              'AI 抽取未产出：{0}',
+              <Object>[
+                note
+                    .substring(kAiExtractionFailurePrefix.length)
+                    .trim(),
+              ],
+            );
+          } else {
+            aiApplied = true;
+            aiNote = note;
           }
         } on Object catch (e) {
           aiNote = _texts.tf('SYN.AIFailFmt', 'AI 抽取失败已跳过', <Object>[e]);

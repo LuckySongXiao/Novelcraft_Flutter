@@ -19,9 +19,11 @@ import 'package:logging/logging.dart';
 
 import '../models/batch_chat.dart';
 import '../models/batch_chat_model.dart';
+import '../models/chat.dart';
 import '../observability/ai_runtime_stats.dart';
 import '../models/provider.dart';
 import '../rwkv/rwkv_batch_client.dart';
+import '../rwkv/rwkv_cloud_state.dart';
 import '../rwkv/rwkv_concurrency.dart';
 import '../workflow/workflow_branch.dart';
 import 'openai_compatible_provider.dart';
@@ -283,6 +285,8 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     super.client,
     super.logger,
     AiRuntimeStats? stats,
+    this.sessionLedger,
+    this.clientStateEnabled = false,
   }) : _stats = stats {
     _batch = RwkvBatchClient(
       client: httpClient,
@@ -298,6 +302,18 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     );
     _batch.concurrency = _concurrency;
   }
+
+  /// 客户端会话台账（BUG 2：把 state 落到客户端）。
+  ///
+  /// null = 未装配 → 不具备客户端 state 能力，`chat()` 与改造前完全一致。
+  final RwkvCloudSessionLedger? sessionLedger;
+
+  /// 是否启用「客户端 state 管理」。
+  ///
+  /// 开启后，凡是带了 `request.parameters['rwkvSessionKey']` 的调用都会走
+  /// `/state/chat/completions` 增量续跑，并把会话身份与转写本持久化在本地；
+  /// **未带 key 的调用一律回落无状态链路**，所以开这个开关不会破坏任何旧路径。
+  final bool clientStateEnabled;
 
   static final Logger _cloudLogger = Logger('RwkvCloud');
 
@@ -439,6 +455,161 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
       _extractFirstContent(json),
       (json['dialogue_idx'] as num?)?.toInt(),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 客户端 state 管理（BUG 2）
+  // ---------------------------------------------------------------------------
+
+  /// 带上「客户端会话身份」的聊天入口。
+  ///
+  /// 判定规则：
+  ///   * 未装配台账 / 未开启开关 / 本次调用没带 `rwkvSessionKey`
+  ///     → 原样走基类无状态链路（与改造前 100% 一致）；
+  ///   * 否则 → `/state/chat/completions` 只发本轮增量，会话 ID 与转写本
+  ///     由客户端持有并持久化；服务端丢了会话时先重放重建再重试。
+  @override
+  Future<ChatResponse> chat(ChatRequest request) {
+    final RwkvCloudSessionLedger? ledger = sessionLedger;
+    final String sessionKey =
+        (request.parameters['rwkvSessionKey'] as String? ?? '').trim();
+    if (!clientStateEnabled || ledger == null || sessionKey.isEmpty) {
+      return super.chat(request);
+    }
+    // 未 initialize 时连 baseUrl 都还是基类默认的 api.openai.com ——
+    // 这条链路必须原样交回基类（保持既有诊断行为），不能拿它去拼 /state 路由。
+    if (_cloudConfig == null) return super.chat(request);
+    // 会话键必须带**端点身份**：state 存在服务端，两个不同端点上的同名
+    // `session_id` 是两条完全不同的状态链。写书链路里规划（7.2B）与正文（2.9B）
+    // 共用同一份客户端台账，前缀命名空间虽然已经分开，这里再以端点兜一层，
+    // 杜绝任何撞键导致「拿 A 端点的 state 去 B 端点续跑」。
+    final String endpoint =
+        Uri.tryParse(_cloudConfig!.baseUrl)?.host.trim() ?? '';
+    final String ledgerKey = endpoint.isEmpty
+        ? sessionKey
+        : '$endpoint::$sessionKey';
+    // ⚠ 同一会话必须串行：`/state/chat/completions` 是有状态写接口，
+    // 并发写同 session_id 会让服务端的 state 互相踩踏。而写书时多章并行、
+    // 同一角色又刻意跨章共用会话 —— 所以在**客户端**把这同一会话的调用排队；
+    // 不同角色（writer-1 / writer-2 / leader）各自独立，仍可并行。
+    return ledger.runExclusive(
+      ledgerKey,
+      () => _chatWithClientState(request, ledgerKey, ledger),
+    );
+  }
+
+  Future<ChatResponse> _chatWithClientState(
+    ChatRequest request,
+    String sessionKey,
+    RwkvCloudSessionLedger ledger,
+  ) async {
+    final Stopwatch sw = Stopwatch()..start();
+    try {
+      final RwkvCloudSessionRecord record = await ledger.resolve(sessionKey);
+      final ({String prompt, bool isFirstTurn}) turn = record.buildTurnPrompt(
+        request,
+      );
+      if (turn.prompt.trim().isEmpty || turn.prompt.trim() == 'Assistant:') {
+        // 没有可发的内容（空 messages）：交回无状态链路，别浪费一次往返。
+        return super.chat(request);
+      }
+
+      String? content = await _postStatefulTurn(record, turn.prompt, request.maxTokens);
+      if (content == null && !turn.isFirstTurn) {
+        // 服务端可能已经把这条会话丢了（进程重启 / L1-L2 被淘汰 / 换端点）。
+        // 客户端手里有转写本 → 重放一次重建 state，再重试本轮。
+        final bool rebuilt = await _replayTranscript(record);
+        if (rebuilt) {
+          content = await _postStatefulTurn(record, turn.prompt, request.maxTokens);
+        }
+      }
+      if (content == null) {
+        // 连重放都不行：清掉本地台账，交回无状态链路 —— 客户端 state 是增强，
+        // 绝不能因为它把「写书」主流程拖死。
+        await ledger.forget(sessionKey);
+        return super.chat(request);
+      }
+
+      final String userText =
+          request.messages.isEmpty ? '' : request.messages.last.content;
+      record.appendTurn(userText, content);
+      await ledger.persist(record);
+
+      sw.stop();
+      _stats?.record(
+        AiRequestSample(
+          provider: registeredProviderName,
+          operation: 'clientStateChat',
+          success: true,
+          latency: sw.elapsed,
+        ),
+      );
+      return ChatResponse(
+        content: content,
+        model: request.model.isNotEmpty
+            ? request.model
+            : (_cloudConfig?.defaultModel ?? ''),
+        finishReason: 'stop',
+        responseTime: sw.elapsed,
+        isSuccess: true,
+      );
+    } on Object catch (e) {
+      sw.stop();
+      _cloudLogger.warning('客户端 state 链路异常，回落无状态调用：$e');
+      return super.chat(request);
+    }
+  }
+
+  /// 向 `/state/chat/completions` 发一轮**增量**；失败返回 null（由调用方决定重放或回落）。
+  Future<String?> _postStatefulTurn(
+    RwkvCloudSessionRecord record,
+    String prompt,
+    int maxTokens,
+  ) async {
+    try {
+      final Map<String, dynamic> json = await _batch.postJson(
+        kRouteRwkvStateChat,
+        <String, dynamic>{
+          'session_id': record.sessionId,
+          // ⚠ 必须**恰好 1 条**：服务端只吃增量，传 2 条直接 400
+          //   `Request must contain exactly one prompt`（PITFALLS §31.6）
+          'contents': <String>[prompt],
+          'stream': false,
+          'max_tokens': maxTokens < 256 ? 256 : maxTokens,
+          'stop_tokens': kRwkvDefaultStopTokens,
+        },
+      );
+      final String text = _extractFirstContent(json).trim();
+      return text.isEmpty ? null : text;
+    } on Object catch (e) {
+      _cloudLogger.fine('客户端 state 增量续跑失败（将尝试重放重建）：$e');
+      return null;
+    }
+  }
+
+  /// 用本地转写本重放一次，重建服务端 state（`max_tokens=1`，只为建 state）。
+  Future<bool> _replayTranscript(RwkvCloudSessionRecord record) async {
+    if (record.transcript.isEmpty) return false;
+    try {
+      await _batch.postJson(
+        kRouteRwkvStateChat,
+        <String, dynamic>{
+          'session_id': record.sessionId,
+          'contents': <String>[record.buildReplayPrompt()],
+          'stream': false,
+          'max_tokens': 1,
+          'stop_tokens': kRwkvDefaultStopTokens,
+        },
+      );
+      _cloudLogger.info(
+        '客户端 state：已重放 ${record.transcript.length} 条转写，'
+        '重建会话 ${record.sessionId}',
+      );
+      return true;
+    } on Object catch (e) {
+      _cloudLogger.fine('客户端 state：重放转写失败：$e');
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------------------

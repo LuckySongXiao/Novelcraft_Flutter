@@ -4,6 +4,7 @@ import '../application/services/writing_prompt_templates.dart';
 import '../application/services/writing_prompt_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
+import 'package:uuid/uuid.dart';
 
 import '../data/database.dart';
 import '../data/storage/key_value_store.dart';
@@ -65,6 +66,11 @@ import '../application/services/chapter_revision_service.dart';
 import '../application/services/module_state_service.dart';
 import '../application/services/chapter_export_service.dart';
 import '../application/services/chapter_post_process_service.dart';
+import '../application/services/chapter_rewrite_service.dart';
+import '../application/services/entity_profile_synthesizer.dart';
+import '../application/services/style_digest_service.dart';
+import '../application/services/style_rule.dart';
+import '../application/services/style_rule_store.dart';
 import '../application/services/model_config_store.dart';
 import '../application/services/agent_endpoint_registry.dart';
 import '../application/services/provider_auto_restore.dart';
@@ -89,6 +95,7 @@ import '../ai/providers/openrouter_provider.dart';
 import '../ai/providers/ollama_provider.dart';
 import '../ai/providers/rwkv_provider.dart';
 import '../ai/providers/rwkv_cloud_provider.dart';
+import '../ai/rwkv/rwkv_cloud_state.dart';
 import '../ai/rwkv/g1k_model_preset.dart';
 import '../ai/rwkv/rwkv_session_archive.dart';
 import '../ai/observability/ai_runtime_stats.dart';
@@ -235,6 +242,8 @@ final appBootstrapProvider = FutureProvider<bool>((ref) async {
   } catch (_) {}
   await ref.read(g1kBookPresetProvider.notifier).load();
   await ref.read(bookReviewSettingsProvider.notifier).load();
+  // 拆书规则集：整书生成每章都要读「当前启用规则」，必须常驻内存。
+  await ref.read(styleRuleLibraryProvider.notifier).load();
   final profileJson = await kv.readJson('ai_config', 'rwkv.cloud_profiles');
   if (profileJson != null) {
     try {
@@ -491,9 +500,40 @@ final rwkvCloudProviderInstanceProvider = Provider<RwkvCloudProvider>((ref) {
   final p = RwkvCloudProvider(
     logger: ref.watch(aiLoggerProvider),
     stats: ref.watch(aiRuntimeStatsProvider),
+    // BUG 2：把 RWKV state 的**会话身份与转写本**交给客户端持有并持久化。
+    sessionLedger: ref.watch(rwkvCloudSessionLedgerProvider),
+    clientStateEnabled: true,
   );
   ref.onDispose(() => p.dispose());
   return p;
+});
+
+/// 云端 RWKV 的**客户端会话台账**（BUG 2 —— 「把 state 做到客户端」的落点）。
+///
+/// 方案：**端点重放 + 本地台账**。
+/// - 会话 ID 由客户端生成，按「作用域 × 智能体角色」粒度持久化在本地
+///   （规划组 `<书名>::plan`；写作组 `<项目 id>::chapter::<章 id>`，
+///   于是**每章每个角色一条独立 state 链**，全书章节并行开队时章间零依赖）；
+/// - 续跑时只把本轮增量发给 `/state/chat/completions`，服务端按 id 接着算
+///   （RWKV 的 O(1) 上下文接续，Transformer 的 KV Cache 做不到）；
+/// - 服务端丢了会话（重启 / 三级缓存淘汰 / 换端点）时，用本地转写本重放重建。
+///
+/// ⚠ native 端 `KeyValueStore` 把 key 直接当文件名（`<scope>/<key>.json`），
+/// 而逻辑会话 key 形如 `<项目 id>::chapter::<章 id>::leader` **含冒号** ——
+/// Windows 文件名不允许冒号，必须经 [RwkvCloudSessionLedger.storageKey] 转义；
+/// 否则会「静默写失败」（[RwkvCloudSessionLedger.persist] 的 try/catch 吞掉），
+/// 现象是「记忆永远不落盘」。
+final rwkvCloudSessionLedgerProvider = Provider<RwkvCloudSessionLedger>((ref) {
+  const String scope = 'rwkv_state';
+  Future<KeyValueStore> kv() => ref.read(keyValueStoreProvider.future);
+  return RwkvCloudSessionLedger(
+    read: (String key) async =>
+        (await kv()).readJson(scope, RwkvCloudSessionLedger.storageKey(key)),
+    write: (String key, String value) async =>
+        (await kv()).writeJson(scope, RwkvCloudSessionLedger.storageKey(key), value),
+    remove: (String key) async =>
+        (await kv()).remove(scope, RwkvCloudSessionLedger.storageKey(key)),
+  );
 });
 
 final deepSeekProviderInstanceProvider = Provider<DeepSeekProvider>((ref) {
@@ -939,6 +979,57 @@ final bookReviewSettingsProvider =
   BookReviewSettingsNotifier.new,
 );
 
+/// 拆书规则集库（全局一份）—— 启动时载入，UI 与整书生成都读它。
+///
+/// 为什么要常驻内存而不是每次 `await store.load()`：整书生成在**每章**都要
+/// 拿一次当前启用的规则去拼提示词，每次都读一遍文件/JSON 是白白浪费；
+/// 而且异步读会让提示词拼装链路多一层 async 传染。
+class StyleRuleLibraryNotifier extends Notifier<StyleRuleLibrary> {
+  @override
+  StyleRuleLibrary build() => const StyleRuleLibrary();
+
+  Future<void> load() async {
+    state = await ref.read(styleRuleStoreProvider).load();
+  }
+
+  Future<void> save(StyleRuleLibrary next) async {
+    await ref.read(styleRuleStoreProvider).save(next);
+    state = next;
+  }
+
+  /// 插入/替换一套规则，并把 [activateForProject] 指向它。
+  Future<StyleRuleSet> upsert(
+    StyleRuleSet set, {
+    String activateForProject = '',
+  }) async {
+    final StyleRuleSet withMeta = set.copyWith(
+      id: set.id.isEmpty ? const Uuid().v4() : set.id,
+      createdAt: set.createdAt > 0
+          ? set.createdAt
+          : DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+    StyleRuleLibrary next = state.upsert(withMeta);
+    if (activateForProject.isNotEmpty) {
+      next = next.activate(activateForProject, withMeta.id);
+    }
+    await save(next);
+    return withMeta;
+  }
+
+  Future<void> remove(String id) async => save(state.remove(id));
+
+  Future<void> activate(String projectId, String setId) async =>
+      save(state.activate(projectId, setId));
+
+  /// 某项目当前启用的规则集（未启用 → null）。
+  StyleRuleSet? activeSetFor(String projectId) => state.activeSetFor(projectId);
+}
+
+final styleRuleLibraryProvider =
+    NotifierProvider<StyleRuleLibraryNotifier, StyleRuleLibrary>(
+  StyleRuleLibraryNotifier.new,
+);
+
 /// 双 Agent 的提供者表：先取 ModelManager 注册表，再用**全部内置单例**兜底。
 ///
 /// 兜底的必要性：`ModelManager` 只在用户进过「AI 配置」并保存/测试后才注册 provider，
@@ -1173,6 +1264,9 @@ final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref
           .build(projectId);
       return context.promptSummary.isEmpty ? chapter.summary ?? '' : context.promptSummary;
     },
+    // 功能 C：审查/审核通过（13B 认可）后自动同步人物管理与世界观子项。
+    // 此前该路径未挂钩子 —— 审查跑完正文回写了，设定档案却纹丝不动。
+    postProcess: ref.watch(chapterPostProcessServiceProvider),
   );
 });
 
@@ -1226,6 +1320,15 @@ final multiAgentBookGenerationServiceProvider =
                 ),
         // 章节结构化导出（Markdown + JSON 落盘，便于离线分析写作问题）。
         exportService: ref.watch(chapterExportServiceProvider),
+        // 分卷档案归纳：全部章节写完后按卷把设定流水收敛成档案。
+        profileSynthesizer: ref.watch(entityProfileSynthesizerProvider),
+        // 失败章自动重写：章节池结束后对质量未达标的章按上下文补写一遍。
+        // 复用「章节管理 → 单章重写」那条链路，保证清洗与质量闸只有一套口径。
+        chapterRewriter: ref.watch(chapterRewriteServiceProvider),
+        // 拆书文风规则：按 id 从全局规则库取。用闭包延迟到「真正要拼提示词」
+        // 那一刻再读，避免规则库为空时也走一遍构建。
+        styleRuleResolver: (String id) =>
+            ref.read(styleRuleLibraryProvider).byId(id),
         // 写作档案：项目建档 / 分卷建档 / 验收通过章节建档（四段描述）。
         archiveHook:
             ({
@@ -1285,6 +1388,68 @@ final chapterPostProcessServiceProvider = Provider<ChapterPostProcessService>((
   );
   post.aiStage = aiState.extractAndApply;
   return post;
+});
+
+/// 单章重写 —— 按上下文（前章结尾 / 大纲 / 下章开头 / 项目设定）把一章从头重写。
+///
+/// 与 [chapterRevisionServiceProvider]（带作者意见的改稿）并列：
+/// 那条链路要求作者先想好「怎么改」，本服务解决的是「这一章生成坏了，按上下文
+/// 重来一遍」。清洗与质量闸与「一键生成书籍」共用同一套实现（见
+/// `MultiAgentBookGenerationService.cleanFinalChapter` / `chapterQualityNote`）。
+final chapterRewriteServiceProvider = Provider<ChapterRewriteService>((ref) {
+  return ChapterRewriteService(
+    chapters: ref.watch(chapterRepositoryProvider),
+    contextAssembler: ref.watch(projectContextAssemblerProvider),
+    texts: ref.watch(aiTextSourceProvider),
+    // 与整书生成同一个主 Agent（7.2B）：整章重写属于「规划级」任务。
+    provider: () => resolveAgentProvider(ref, main: true),
+    rwkv: () => ref.read(rwkvProviderInstanceProvider),
+    postProcess: ref.watch(chapterPostProcessServiceProvider),
+    // 大纲修订要用本卷大纲（`volumes.description`）做定位依据。
+    volumes: ref.watch(volumeRepositoryProvider),
+    // 「规划-续写-润色」落库后刷新 projects.progress（已完成章 / 总章数）。
+    projects: ref.watch(projectRepositoryProvider),
+  );
+});
+
+/// 分卷档案归纳 —— 把逐章累积的设定流水收敛成「读得懂的档案」。
+///
+/// 与 [chapterPostProcessServiceProvider] 里的设定抽取是**互补**关系：
+/// 抽取负责「这一章发生了什么变化」（按章、增量、写进 `history` 流水），
+/// 归纳负责「到这一卷为止，这个角色/势力/设定是什么样」（按卷、收敛、写进
+/// 结构化档案字段）。前者是证据链，后者是档案。
+final entityProfileSynthesizerProvider =
+    Provider<EntityProfileSynthesizer>((ref) {
+      return EntityProfileSynthesizer(
+        db: ref.watch(databaseProvider),
+        promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
+        texts: ref.watch(aiTextSourceProvider),
+        // 与设定抽取同源（主 Agent / 7.2B）：归纳是「规划级」任务，
+        // 而且这样档案口径与设定抽取口径一致。
+        provider: () => resolveAgentProvider(ref, main: true),
+      );
+    });
+
+/// 文风规则集存储 —— 拆书产物是**可复用素材**，全局一份，按项目标记启用哪一个。
+///
+/// 与 `ai_config` 分开一个 scope：拆书产物体积大（几十条技法），
+/// 混进 AI 配置的 JSON 里会让那份文件既难读也难手动修。
+final styleRuleStoreProvider = Provider<StyleRuleStore>((ref) {
+  return StyleRuleStore(() => ref.read(keyValueStoreProvider.future));
+});
+
+/// Agent 拆书 —— 把一本写得好的小说拆成一套可复用的写作规则。
+///
+/// 与 [entityProfileSynthesizerProvider] 同源（主 Agent / 7.2B）：拆书是
+/// 「规划级」任务，需要的是归纳能力而不是文笔。
+final styleDigestServiceProvider = Provider<StyleDigestService>((ref) {
+  return StyleDigestService(
+    promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
+    texts: ref.watch(aiTextSourceProvider),
+    // 「已有项目」输入来源要读章节正文。
+    chapters: ref.watch(chapterServiceProvider),
+    provider: () => resolveAgentProvider(ref, main: true),
+  );
 });
 
 /// 「边聊边写」的章节关联改稿（按意见改写 / 续写 → 回写 `Chapter.Content`）。

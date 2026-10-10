@@ -5,7 +5,7 @@
 ![NovelCraft overview: story worlds, writing workflows and content export](docs/images/novelcraft-overview-en.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B35-5C6BC0" alt="Current source version: 1.0.0+35" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B36-5C6BC0" alt="Current source version: 1.0.0+36" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="Primary delivery platforms: Windows and Android" />
@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://github.com/LuckySongXiao/Novelcraft_Flutter">Repository</a> ·
   <a href="https://github.com/LuckySongXiao/Novelcraft_Flutter/releases">Releases</a> ·
-  <a href="docs/功能使用说明-v1.0.0+35.md">User Guide (Chinese)</a> ·
+  <a href="docs/功能使用说明-v1.0.0+36.md">User Guide (Chinese)</a> ·
   <a href="https://github.com/LuckySongXiao/Novelcraft_Flutter/issues">Report an Issue</a>
 </p>
 
@@ -23,7 +23,7 @@
 
 Originally built with C# WPF, the project is being developed in Flutter. Its primary deliverables are a portable Windows desktop package and an Android APK. It is designed for authors managing long-form fiction, creators exploring collaboration between models, and developers studying AI writing workflows.
 
-> Current source version: **1.0.0+35**. This release focuses on multiple selectable prompt templates per writing stage. Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations). The diagrams illustrate features and workflows; see [Screenshots](#screenshots) for actual screenshots of the running application.
+> Current source version: **1.0.0+36**. This release focuses on multiple selectable prompt templates per writing stage. Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations). The diagrams illustrate features and workflows; see [Screenshots](#screenshots) for actual screenshots of the running application.
 
 ## Contents
 
@@ -97,7 +97,7 @@ The app also provides model connection tests, AI health tools and concurrency se
 
 ## Screenshots
 
-All screenshots below were captured from the **1.0.0+35 Windows desktop build running with the English interface** (sample content is the built-in sample project). Equivalent captures of the Simplified Chinese interface are available in [README.md](README.md).
+All screenshots below were captured from the **1.0.0+36 Windows desktop build running with the English interface** (sample content is the built-in sample project). Equivalent captures of the Simplified Chinese interface are available in [README.md](README.md).
 
 ### Projects
 
@@ -246,7 +246,7 @@ This is an example of additional style instructions, not a complete replacement 
 | Built-in templates | Read-only, available for duplication and restoration |
 | Output contracts | Assignment, acceptance and review stages still require their expected JSON structure |
 
-Use the exact variable names provided by the stage; do not translate or rename them. Variable validation does not assess literary quality or restore a JSON output contract removed from the prompt. The detailed [User Guide](docs/功能使用说明-v1.0.0+35.md) is currently in Chinese.
+Use the exact variable names provided by the stage; do not translate or rename them. Variable validation does not assess literary quality or restore a JSON output contract removed from the prompt. The detailed [User Guide](docs/功能使用说明-v1.0.0+36.md) is currently in Chinese.
 
 ## Model Integrations and Agent Roles
 
@@ -303,7 +303,7 @@ flowchart LR
 - **13B senior reviewer:** Approves existing advice or proposes further revisions.
 - **Writer:** Revises based on comments, with results passing through existing prose quality checks.
 
-**This workflow is still being developed and should not be treated as a reliable unattended whole-book revision system.** Known limitations include context coverage for long chapters, rewrite length protection, enforcement of review decisions and comment history. Export a copy of important manuscripts before automatic revision and inspect the result. See the [Release Handoff](docs/项目交接-v1.0.0+35.md) (Chinese) for technical details.
+**This workflow is still being developed and should not be treated as a reliable unattended whole-book revision system.** Known limitations include context coverage for long chapters, rewrite length protection, enforcement of review decisions and comment history. Export a copy of important manuscripts before automatic revision and inspect the result. See the [Release Handoff](docs/项目交接-v1.0.0+36.md) (Chinese) for technical details.
 
 ## Quick Start
 
@@ -385,7 +385,7 @@ flutter build apk --release
 - Windows output: `build/windows/x64/runner/Release/`. Distribute the entire directory.
 - Android output: `build/app/outputs/flutter-apk/app-release.apk`.
 - Android signing uses a local `android/key.properties` file and private key. Without this configuration, the current build script may use debug signing. Verify signatures before publishing to avoid upgrade incompatibilities.
-- The Android toolchain has encountered an issue where the `integration_test` plugin is incorrectly registered in release builds. The verified temporary workaround and dependency restoration procedure are described in the [Release Handoff](docs/项目交接-v1.0.0+35.md) (Chinese).
+- The Android toolchain has encountered an issue where the `integration_test` plugin is incorrectly registered in release builds. The verified temporary workaround and dependency restoration procedure are described in the [Release Handoff](docs/项目交接-v1.0.0+36.md) (Chinese).
 
 If Windows build tools cannot handle a path containing Chinese characters, use an ASCII project path or map an unused drive letter:
 
@@ -464,18 +464,19 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows --dart-define
 
 Live endpoint tests make network requests and depend on deployment, quotas and service availability. Do not put actual credentials in this README or test source files.
 
-**Latest recorded verification for 1.0.0+35, dated 2026-10-04:**
+**Latest recorded verification for 1.0.0+36, dated 2026-10-07:**
 
 | Check | Result |
 | --- | --- |
-| Static analysis | Passed |
-| New prompt tests | 7 passed, covering persistence, variables, actual service input and reopening the editor |
-| Full unit / widget suite | 392 passed, 1 skipped, 1 failed |
+| Type check (`tools/analyze_inprocess.dart`) | 263 files, 0 error / 0 warning |
+| Output sanitizer self-test (`tools/sanitizer_selftest.dart`) | 25 passed / 0 failed |
+| Full unit / widget suite | 416 passed, 1 skipped, 0 failed |
+| English string coverage scan | 0 missing keys |
 | Windows release build | Successful |
 | Android release build and signature verification | Successful; signature matches the previous version |
 | Physical Android device testing and live cloud writing evaluation | Not performed in this verification round |
 
-The single failure is an existing multi-agent end-to-end test whose highly repetitive final-draft fixture triggers the current prose quality checks. The checks were not relaxed to accept that fixture. This is a record of local verification, not a claim that continuous integration is fully green.
+This release fixes the three issues found in on-device testing (contaminated output from the serial writing path, cloud RWKV session cross-talk, and settings not synced after a chapter passed review), and restructures whole-book orchestration into "main outline serial / branch outlines parallel / single chapter serial / all chapters parallel". The previously failing end-to-end test (a repetitive final-draft fixture tripping the prose quality gate) is resolved by rewriting that fixture, without relaxing the gate. This is a record of local verification, not a claim that continuous integration is fully green.
 
 ## Current Status and Known Limitations
 
@@ -490,7 +491,7 @@ The single failure is an existing multi-agent end-to-end test whose highly repet
 | General agent module routing | Contract and routing foundations exist; execution connections for all business modules remain incomplete |
 | Platform compatibility | Windows and Android are the main delivery targets; other platforms need further verification |
 
-See the [Release Handoff](docs/项目交接-v1.0.0+35.md) (Chinese) for implementation details, build issues and outstanding work.
+See the [Release Handoff](docs/项目交接-v1.0.0+36.md) (Chinese) for implementation details, build issues and outstanding work.
 
 ## Documentation and Contributions
 
@@ -498,8 +499,8 @@ The reference documents below are currently in Chinese. This English README cove
 
 | Document | Contents |
 | --- | --- |
-| [User Guide · 1.0.0+35](docs/功能使用说明-v1.0.0+35.md) | Installation, upgrades, prompt configuration, variables, scope and limitations |
-| [Release Handoff · 1.0.0+35](docs/项目交接-v1.0.0+35.md) | Implementation, integration points, builds, tests and remaining work |
+| [User Guide · 1.0.0+36](docs/功能使用说明-v1.0.0+36.md) | Installation, upgrades, prompt configuration, variables, scope and limitations |
+| [Release Handoff · 1.0.0+36](docs/项目交接-v1.0.0+36.md) | Implementation, integration points, builds, tests and remaining work |
 | [Historical Handoff Notes](HANDOFF.md) | Migration history and progress records; use current release documents for present status |
 | [Troubleshooting Notes](PITFALLS.md) | Toolchain, model interfaces and historical issue investigation |
 | [RWKV G1K Writing Workflow](docs/RWKV-G1K-双模型写作工艺.md) | Two-model role allocation and implementation notes |

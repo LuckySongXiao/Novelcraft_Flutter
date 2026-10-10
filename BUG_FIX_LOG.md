@@ -1,8 +1,37 @@
 # BUG 修复记录
 
-更新时间：2026-10-02
+更新时间：2026-10-07
 
-## 本轮修复
+## 2026-10-07 修复
+
+用户实测反馈三项 BUG（G1K 串行写书 / 云端 RWKV state / 审核后未同步设定）。
+
+### BUG 3（最重要）：章节正文审核通过后，人物管理与世界观子项**完全不更新**
+
+| 编号 | 现象 | 根因 | 修复与验证 |
+|---|---|---|---|
+| NC-20261007-01 | 审核通过后 `人物管理`/`世界观` 的角色信息与状态履历没有任何变化 | 多智能体服务的「验收后更新分派」被 `post == null && …` 门控**永久关死** —— 生产环境 `chapterPostProcessServiceProvider` 恒被注入（`core/di.dart`），该条件恒为假 | 去掉 `post == null` 门控，改为只要求 `acceptance.updateItems` 非空 + `dispatcher` 非空 |
+| NC-20261007-02 | G1K **串行**写书（`WritingCraft.duo/solo/beam`）从不更新设定 | 三种工艺的返回体 `acceptance` 恒为 `null` → 天然没有 `updateItems` | 新增 `_extractAcceptanceFromProse()`：正文定稿后用**独立** `_AgentChannel(keepHistory:false)` 调组长，渲染新增的 `Book/stateUpdates` 节点（zh/en 双语）产出与组长验收同接口的 `{"updates":[…]}`；三处 `return` 改为定稿后抽取，失败返回空 `TeamAcceptance` 不阻断落库 |
+| NC-20261007-03 | 7B 全书审查通过并回写正文后仍是零同步 | `BookContentReviewService.reviewChapter` 的 `applyComments` 之后**没有**任何后处理钩子 | 构造参新增 `ChapterPostProcessService? postProcess`（`di.dart` 注入）；新增 `_syncAfterReview()`：重读章节 → `seniorApproved` 且状态非 `Completed` 则推进为 `Completed`（`ModuleStateService.extractAndApply` 以此为前提）→ `post.runForChapter(...)` |
+| NC-20261007-04 | 章内任一分段抽取失败 → 整章静默零更新 | `module_state_service.dart` 里 `if (valid == null) return null;` 直接放弃整章 | 改为跳过错块 `failedChunks++ / continue`，全部失败才放弃；返回文案追加「（N 个分段未产出，其余照常写入）」 |
+
+### BUG 1：写书输出需要正则提纯（真机样本 = **正文前的元话语 / 元信息抬头**）
+
+用户重发 3 张真机截图后，实际形态与初判不同：泄漏在**正文之前**（元话语 / 元信息抬头），
+不是尾部状态块。三种真实形态（均已抄进 `tools/sanitizer_selftest.dart` 当回归用例）：
+
+| 编号 | 现象 | 根因 | 修复与验证 |
+|---|---|---|---|
+| NC-20261007-05 | 正文末尾混入「线性状态更新参考素材履历」类的状态登记文本 | 模型按隐含约定在正文后补一段供上游登记用的文本（`{"updates":[…]}` / `【设定更新】` / `设定更新：…`），无清洗 | 新增 `AIOutputSanitizer.stripStateUpdateBlocks()`：围栏代码块 → 含 `updates` 键的裸 JSON（括号配平 + `jsonDecode` 校验）→ **尾部整块**剥离（`_stripTrailingStateBlock`：取最后一个锚点行，要求其后每行均为状态块形态，否则整块放弃；全篇皆状态块则返回空串）→ 逐行兜底 → 清 `---` 与多余空行。已接入 `_cleanFinalChapter`（四种书稿工艺都经过）。**⚠ 绝不并入 `extractCleanOutput`** —— 设定抽取链路正是要拿那个 `updates` JSON |
+| NC-20261007-07 | 章节正文被 AI 元话语污染（三种形态，截图实测）| ①`你好，我是NovelCraft的主编智能体。我将严格保留原文中的人物对话……---润色后版本：“你们到底是谁？”……`（**自我介绍 + 处理说明，正文紧随同一段**）②`【主编修订稿】---第一章北极圈基地（正式）*目标：…*1991年，……`（修订稿抬头 + 星号字段，**正文紧跟同一行**）③`---【本章正式章名】《…》【出场人物】…【场景与时间线】…【关键冲突与转折】…【章末钩子】…`（**整行章节元信息区块**，字段后还跟着元信息散文）| 新增 `AIOutputSanitizer.stripMetaPreambles()`：①**整行元信息**丢弃（整行是元信息小标题，或一行内塞了 ≥2 个元信息字段）；②**整行元话语**丢弃（句子级判定：`我是…智能体` / `我将…原文/措辞` / `字数统计：…`）；③**行内标记切前缀**（`---润色后版本：`、`*目标：…*` —— 取行内最后一个标记的收尾，保留其后的正文）；④开头残留的名单条目 / 分隔线 / 小标题清理。已**并入 `extractCleanOutput`**（它只吃元信息、绝不碰 JSON 载荷，故设定抽取链路安全）+ `_cleanFinalChapter`，覆盖全部正文出口。新增 `tools/sanitizer_selftest.dart` **22 用例全过**（含三张截图的原文、以及「我会保留这份记忆」等防误删回归） |
+
+### BUG 2：云端 RWKV 的 state 没有落在客户端
+
+| 编号 | 现象 | 根因 | 修复与验证 |
+|---|---|---|---|
+| NC-20261007-06 | 云端模型只能靠调提示词提升上下文一致性，服务端不知道哪个 state 对应哪个并发 | ①`RwkvCloudProvider` 未覆写 `chat()`/`chatStream()` → 走 `/v1/chat/completions` **每轮重发全量 messages**；②`statefulChat()` 零调用方；③客户端没有会话台账。且 `rwkv_lightning` **没有 state 导出端点**（`POST/GET /state` 实测 404，`RwkvState.bytes` 恒为空）→「存 state 字节」物理不可行 | 落地「**端点重放 + 本地台账**」：新增 `lib/ai/rwkv/rwkv_cloud_state.dart`（`RwkvCloudSessionRecord` + `RwkvCloudSessionLedger`，session_id **客户端生成**、转写本本地持久化、断线重放重建 state）；`RwkvCloudProvider` 覆写 `chat()` 按 `parameters['rwkvSessionKey']` 分流到 `/state/chat/completions` 增量续跑，任何失败都回落无状态链路；`MultiAgentBookGenerationService` 的 `_AgentChannel` 新增 `sessionKeyPrefix`（规划组 `<书名>::plan` / 章节组 `<projectId>::chapter`，最终 key = `'$prefix::${agentId}'`）。**两条铁律**：`storageKey()` 必须把 `:` 转 `_`（native KVStore 拿 key 当文件名）；同 session 用 `ledger.runExclusive()` 在客户端排队（多章并行 + 同角色跨章共会话）|
+
+## 2026-10-02 修复（历史）
 
 | 编号 | 现象 | 根因 | 修复与验证 |
 |---|---|---|---|

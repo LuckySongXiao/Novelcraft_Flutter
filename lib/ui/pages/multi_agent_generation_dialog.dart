@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../ai/workflow/concurrency_planner.dart';
 import '../../application/services/multi_agent_book_generation_service.dart';
+import '../../application/services/style_rule.dart';
+import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 import '../state/multi_agent_run.dart';
 import '../widgets/readonly_prose_view.dart';
@@ -49,6 +51,9 @@ class _MultiAgentWizardDialogState
 
   /// 写作工艺（正文产出方式）：续写优选 / 单笔直书 / 主笔分段串行 / 组长+9 写手。
   WritingCraft _craft = WritingCraft.beam;
+
+  /// 本次生成注入的文风规则集 id（空 = 不注入）。
+  String _styleRuleSetId = '';
 
   String? _formError;
   bool _running = false;
@@ -90,6 +95,7 @@ class _MultiAgentWizardDialogState
         reservedTeams: reserved,
         mode: _mode,
       ),
+      styleRuleSetId: _styleRuleSetId,
     );
     final ({String? error, MultiAgentBookConfig normalized}) norm = config
         .normalize();
@@ -292,6 +298,8 @@ class _MultiAgentWizardDialogState
               '1 组长 + 9 写手并行 + 组长拼接：每章 12+ 次调用、成本约 8 倍，仅特殊需求时使用。',
             ),
           }, style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+          const SizedBox(height: 12),
+          _buildStyleRulePicker(l10n, scheme),
           const SizedBox(height: 10),
           TextField(
             controller: _reservedCtrl,
@@ -379,6 +387,74 @@ class _MultiAgentWizardDialogState
           ],
         ],
       ),
+    );
+  }
+
+  /// 拆书文风规则选择器。
+  ///
+  /// 规则集是**本次生成**的参数（一键生成会新建项目，那时还没有「项目启用规则」），
+  /// 所以这里直接从全局规则库选，而不是读项目设置。
+  Widget _buildStyleRulePicker(L10n l10n, ColorScheme scheme) {
+    final StyleRuleLibrary lib = ref.watch(styleRuleLibraryProvider);
+    final List<StyleRuleSet> usable = <StyleRuleSet>[
+      for (final StyleRuleSet s in lib.sets)
+        if (s.isUsable) s,
+    ];
+    // ⚠ 夹取：规则集被删掉后当前选中值必须回落到「不注入」，否则
+    // DropdownButton 会因为在 items 里找不到 value 而断言红屏。
+    final String current = usable.any((StyleRuleSet s) => s.id == _styleRuleSetId)
+        ? _styleRuleSetId
+        : '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        DropdownButtonFormField<String>(
+          key: ValueKey<String>('styleRule::$current'),
+          initialValue: current,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: l10n.t('MAG.StyleRule', '文风规则（拆书产物，可选）'),
+            isDense: true,
+            border: const OutlineInputBorder(),
+          ),
+          items: <DropdownMenuItem<String>>[
+            DropdownMenuItem<String>(
+              value: '',
+              child: Text(
+                l10n.t('MAG.StyleRule.None', '不注入（按模型自己的文风写）'),
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            for (final StyleRuleSet s in usable)
+              DropdownMenuItem<String>(
+                value: s.id,
+                child: Text(
+                  l10n.tf(
+                    'MAG.StyleRule.ItemFmt',
+                    '{0}（{1} 条技法）',
+                    <Object>[s.name, s.techniques.length],
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+          ],
+          onChanged: (String? v) =>
+              setState(() => _styleRuleSetId = v ?? ''),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          usable.isEmpty
+              ? l10n.t(
+                  'MAG.StyleRule.Empty',
+                  '还没有拆书产物：先从「文风研读」拆一本书，再回到这里选择。',
+                )
+              : l10n.t(
+                  'MAG.StyleRule.Hint',
+                  '选中的规则会注入章节大纲、派活与正文提示词，逐章生效。',
+                ),
+          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+        ),
+      ],
     );
   }
 

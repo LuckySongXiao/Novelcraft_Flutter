@@ -1,12 +1,15 @@
 import 'package:drift/drift.dart' as d;
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/di.dart';
 import '../../core/enums/pseudo_enums.dart';
 import '../../data/database.dart';
 import '../layout/navigation.dart';
+import 'chapter_rewrite_dialog.dart';
 import 'entity_page.dart';
 import 'chapter_preview_page.dart';
+import 'volume_profile_dialog.dart';
 import 'world_system_page.dart' show SystemFieldDef, SystemFieldType;
 
 /// 数据库实体页配置表
@@ -310,6 +313,18 @@ final volumeEntityConfig = EntityPageConfig(
       onDelete: svc.delete,
     );
   },
+  // 手动入口：把本卷逐章登记的设定流水收敛成档案。
+  //
+  // 自动入口在整书生成流程里（每卷写完各跑一次），但两种情况必须能手动补：
+  //   ① 归纳当次失败或模型不可用；② 用户事后又改了本卷的章节内容。
+  // 归纳是幂等的（属性只填空、关键事件同卷段替换），重复点不会写坏档案。
+  rowActionBuilder: (context, ref, row, reload) {
+    final String? id = row['id'] as String?;
+    if (id == null || id.isEmpty) return const <Widget>[];
+    return <Widget>[
+      VolumeProfileButton(volumeId: id, onDone: reload),
+    ];
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -403,6 +418,37 @@ final chapterEntityConfig = EntityPageConfig(
   },
   // 功能 A：章节只读结构化预览（对齐 C# ChapterPreviewDialog）
   previewBuilder: (context, values) => ChapterPreviewPage(values: values),
+  // B2 入口②：草稿章在列表行尾给一个「重写」按钮 —— 实测里生成坏掉被降级为
+  // Draft 的章节，此前没有任何地方能让作者重写它（只能整本书重跑）。
+  rowActionBuilder: (context, ref, row, reload) {
+    final String status = '${row['status'] ?? ''}';
+    if (status != 'Draft') return const <Widget>[];
+    final String? id = row['id'] as String?;
+    if (id == null || id.isEmpty) return const <Widget>[];
+    return <Widget>[
+      ChapterRewriteButton(
+        chapterId: id,
+        compact: true,
+        labelKey: 'CRW.ButtonRowDraft',
+        labelFallback: '重写',
+        onDone: reload,
+      ),
+    ];
+  },
+  // B2 入口③：选中章节后，表单顶部提供「按上下文整章重写」。
+  formActionBuilder: (context, ref, row, reload) {
+    final String? id = row['id'] as String?;
+    if (id == null || id.isEmpty) return const <Widget>[];
+    return <Widget>[
+      ChapterRewriteButton(
+        chapterId: id,
+        labelKey: 'CRW.ApplyWhole',
+        labelFallback: '按上下文整章重写',
+        icon: Icons.refresh,
+        onDone: reload,
+      ),
+    ];
+  },
 );
 
 // ---------------------------------------------------------------------------
@@ -1598,10 +1644,14 @@ final characterEventEntityConfig = EntityPageConfig(
   sourceBuilder: (ref) {
     final svc = ref.read(characterEventServiceProvider);
     return CallbackEntityDataSource(
-      onList: (_) async =>
-          (await svc.getAll()).map(_characterEventToMap).toList(),
-      onSearch: (_, kw) async => _kwFilter(
-        (await svc.getAll()).map(_characterEventToMap).toList(),
+      // ⚠ 必须按 projectId 过滤：character_events 表无 project_id 列，
+      // 服务层的 getByProjectId 会 JOIN characters 做作品隔离。历史上这里
+      // 用的是 getAll()，导致示例项目的种子事件泄漏进每个项目
+      // （用户实测：导出目录 20_人物事件/ 里出现别的书的「林月拜入玄穹剑宗」）。
+      onList: (pid) async =>
+          (await svc.getByProjectId(pid)).map(_characterEventToMap).toList(),
+      onSearch: (pid, kw) async => _kwFilter(
+        (await svc.getByProjectId(pid)).map(_characterEventToMap).toList(),
         kw,
       ),
       onCreate: (_, v) => svc.create(

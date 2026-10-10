@@ -45,12 +45,19 @@ class NativeKeyValueStore implements KeyValueStore {
     return dir;
   }
 
+  /// 作用域目录下的目标文件。
+  ///
+  /// 路径拼接一律走 [storeFilePath]（纯函数、有离线自检）。
+  /// ⚠ 绝不要在这里内联写 `'...${Platform.pathSeparator}$_fileOf(key)'`：
+  /// `$identifier` 只插值简单标识符，`$_fileOf` 插进去的是**函数对象**，
+  /// `(key)` 会退化成字面文本 → 启动即 `PathNotFoundException errno 123`。
+  File _file(String scope, String key) =>
+      File(storeFilePath(_scopeDir(scope).path, key, Platform.pathSeparator));
+
   @override
   Future<String?> readJson(String scope, String key) async {
     await init();
-    final f = File(
-      '${_scopeDir(scope).path}${Platform.pathSeparator}$key.json',
-    );
+    final f = _file(scope, key);
     if (!f.existsSync()) return null;
     return f.readAsString();
   }
@@ -58,18 +65,14 @@ class NativeKeyValueStore implements KeyValueStore {
   @override
   Future<void> writeJson(String scope, String key, String json) async {
     await init();
-    final f = File(
-      '${_scopeDir(scope).path}${Platform.pathSeparator}$key.json',
-    );
+    final f = _file(scope, key);
     await f.writeAsString(json);
   }
 
   @override
   Future<void> remove(String scope, String key) async {
     await init();
-    final f = File(
-      '${_scopeDir(scope).path}${Platform.pathSeparator}$key.json',
-    );
+    final f = _file(scope, key);
     if (f.existsSync()) await f.delete();
   }
 
@@ -81,7 +84,9 @@ class NativeKeyValueStore implements KeyValueStore {
         .listSync()
         .whereType<File>()
         .where((f) => f.path.endsWith('.json'))
-        .map((f) => f.uri.pathSegments.last.replaceAll('.json', ''))
+        // 只剥结尾那一个 `.json`，且必须与 writeJson 的命名互为逆运算 ——
+        // 否则返回的键走 readJson 会命中另一个文件（见 storeKeyFromFileName）。
+        .map((f) => storeKeyFromFileName(f.uri.pathSegments.last))
         .toList();
   }
 }

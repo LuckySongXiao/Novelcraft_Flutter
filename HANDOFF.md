@@ -1,6 +1,1010 @@
 # NovelCraft Flutter 版 — 交接文档（HANDOFF）
 
-## 最新交接：1.0.0+35（2026-10-04）
+## 最新交接：1.0.0+46（2026-10-11）—— 复读问题修复 + 外援交接
+
+**用户报「遇到个大问题」：严格惩罚重复输出的参数设定下，大纲修订仍整段复读并持久化
+进 notes（截图铁证：「本章目标：本章目标：」双层前缀）；要求先修复读，再整理测试记录、
+编写交接文档给外援。**
+
+### 1. 取证结论（用户假设「停止符被正则过滤掉」的验证）
+
+停止符不是被剥掉，而是**根本没发给无状态路由**：`kRwkvDefaultStopTokens=[0,261,24281]`
+之前只在有状态路由（`/state/*`、`/v1/batch/*`）下发；无状态 `/v1/chat/completions`
+（大纲修订走的就是它）从不携带。另有两个既有事实：`alpha_presence` 被
+`longFormSamplingParams` 夹到 [0,0.5]（用户设的 strong 3.0 从未真正生效，实测更激进会
+「被罚得不敢写」）；`dry_*` 在 RWKV Cloud 服务端被静默忽略。完整取证表见
+`docs/交接-复读问题-外援接入指南.md` §3。
+
+### 2. 实现
+
+- **`lib/ai/rwkv/rwkv_sampling.dart`**：`kRwkvAntiRepeatSampling` 补
+  `'stop_tokens': kRwkvDefaultStopTokens`（import batch_chat，纯 Dart 链不破），
+  经 `_buildExtraFields` 白名单展平顶层 → 无状态路由与有状态路由行为对齐。
+- **新增 `lib/ai/utils/repetition_guard.dart`（纯 Dart）**：三层退化复读检测 ——
+  字符级 12-gram 重复率（阈值 0.30）/ 紧邻重复行 / 段落级重复率；
+  `isDegenerate()` 综合判定 + `diagnose()` 诊断串。
+- **`lib/ai/utils/outline_repair_text.dart`**：`parse()` 循环剥净复读标签
+  （修「本章目标：本章目标：」双层前缀 —— 此前只剥一层，`render` 又包一层）；
+  新增 `stripFieldLabels()` 供兜底路径使用。
+- **`chapter_rewrite_service.repairOutlineAndRewrite` 复读闸**：落库前对
+  `notesOutline` / `cleanedRaw` 跑 `isDegenerate`，命中 → **如实失败、绝不写库**
+  （新 i18n 键 `CRW.OutlineRepeatBlocked`）—— 复读大纲一旦落 notes 会传染后续每次重写。
+- **文档进源码树**：`docs/交接-复读问题-外援接入指南.md`（难点/开放问题/文件索引）、
+  `docs/测试记录-v1.0.0+42-+46.md`（五轮测试记录与验证结果）。
+
+### 3. 验证
+
+- `lib/` **235 文件** `error: 0 warning: 0`。
+- **新增第 13 个离线自检 `tools/repetition_guard_selftest.dart`（16 例）**；
+  `outline_repair_selftest` 扩到 **52 例**（F 组锁双层前缀）；**13 个自检全绿**。
+- i18n：**1163 调用点 / 0 缺失**（+1 条）。
+- 复读样本（模拟截图形态）ngram=0.655 命中拦截；正常散文/结构化大纲 0.00 不误杀。
+
+### 4. 遗留（给外援，见交接文档 §5）
+
+复读根因大概率在服务端采样层（客户端参数空间「压复读 vs 写够长」互斥）；alpha_* 服务端
+生效性待验证；复读触发条件未知；stop_tokens 解码确认。
+
+### 5. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+46_windows_release.zip | 见 `发布清单-v1.0.0+46.md` | 见清单 |
+| novelcraft_1.0.0+46_release.apk | 见 `发布清单-v1.0.0+46.md` | 见清单 |
+| novelcraft_1.0.0+46_source.zip | 见 `发布清单-v1.0.0+46.md` | 见清单 |
+
+## 上一版交接：1.0.0+45（2026-10-10）
+
+**用户报两件事：① 「续写的字数依然未达标」；② 「章节预览中对选中文本进行续写或者
+润色、扩写等操作后，没有让用户确认是否应用。通常来说用户采纳之后，续写的文本需要
+被插入到所选文本的下一段，润色和扩写的文本被采纳后需要替换所选文本段。」**
+
+### 1. 根因
+
+- **续写不达标**：`SelectionEditService` 的续写提示词**没有任何字数要求**
+  （「仅输出紧接选区的新增正文」），`maxTokens` 也没传（默认 1800）——
+  模型随手给一两百字就交差。
+- **无采纳环节**：AI 结果卡只有「复制结果」；预览页注释明说「只读快照，
+  不写回正文」—— 用户只能手工复制回编辑表单。
+
+### 2. 实现
+
+- **新增 `lib/ai/utils/selection_apply_text.dart`（纯 Dart 零 import）+
+  `tools/selection_apply_selftest.dart`（15 条断言）**：`applySelectionResult` —
+  替换语义（润色/去重润色/扩写/重写）原地覆盖选区；续写语义插到**所选文本所在
+  段落的末尾之后**作为独立一段（选区停在段中时，先把该段剩余部分留在前面，
+  绝不把续写硬插进句子中间）；结果 trim、连续空行归一、选区不在正文/空结果如实抛错。
+- **`SelectionEditService` 补字数纪律**：`wordTarget()` —— 续写目标约 1200 字
+  （下限 600，validate 里 `continuation_too_short` 让 `FictionQuality.generate`
+  带反馈重试一次）；扩写目标 ≈ 选区×2（400~2000）；`maxTokens()` 按动作给足
+  （续写 2400、扩写按目标×2），不再用默认 1800。作者要求里写了字数时优先
+  （提示词顺序保证）。
+- **采纳应用链路**（面板确认 → 预览写库 → 表单回填，三段闭环）：
+  - `ChapterAiPanel`：结果卡增「**采纳应用**」按钮 + 确认对话框
+    （语义说明因动作而异：插入下一段 vs 替换选区 + 版本号 +1；展示两侧字数）；
+    新增 `onApply(result, action)` 回调，null 时退回「仅复制」旧行为；
+    记录 `_resultAction`（采纳时要区分插入/替换）。
+  - `ChapterPreviewPage._applyResult()`：`applySelectionResult` 做文本手术 →
+    `chapterService.updateById` 写库（content/wordCount/lastEditedAt/**versionNumber+1**）
+    → 页面即时刷新（应用结果立刻可见）→ 选区清空 + 面板重建（`_applyTick` 作 key，
+    防重复应用）。**面板 `fullContent` 改传展示态正文 `_displayContent`** ——
+    选区文本来自阅读视图，对同一份串做 indexOf 才永远命中（原传库原文，
+    多段选区会因 \r\n/\n 差异 indexOf 失败）。
+  - **防覆盖闭环**：预览页 `PopScope(canPop:false)` —— 应用过后离页时把最新
+    `_values` 作为路由结果带回；`entity_page` 预览按钮改 `await` 接结果，
+    非 null 时回填表单控制器 —— 否则表单还持有应用前的旧正文，
+    用户一保存就把 AI 结果冲掉。
+
+### 3. 验证
+
+- `lib/` **234 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- **新增第 12 个离线自检 `tools/selection_apply_selftest.dart`（15 条断言）**，
+  合计 **12 个自检 366 条断言全绿**。
+- i18n：**1162 调用点 / 0 缺失**（+8 条）；`dart_interp_lint.py` **278 文件 / 0 命中**。
+- Windows / APK 构建、启动验证见 `发布清单-v1.0.0+45.md`。
+
+### 4. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+45_windows_release.zip | 见 `发布清单-v1.0.0+45.md` | 见清单 |
+| novelcraft_1.0.0+45_release.apk | 见 `发布清单-v1.0.0+45.md` | 见清单 |
+| novelcraft_1.0.0+45_source.zip | 见 `发布清单-v1.0.0+45.md` | 见清单 |
+
+> ⚠ 哈希以发布根目录的 `发布清单-v1.0.0+45.md` 为准（HANDOFF 自身在源码包里）。
+
+### 5. 遗留
+
+- 应用链路（写库 / 回填 / PopScope 返回值）需真机实测：选中 → 续写 → 采纳 →
+  检查插入位置；替换 → 采纳 → 返回表单确认已回填。
+- 续写目标 1200 字是选节级缺省；作者可在「附加要求」里写字数覆盖。
+- B / C / D 旧遗留不变；+44 管线的批量效果待跑完整本 NG 书。
+
+## 上一版交接：1.0.0+44（2026-10-10）
+
+**用户报：草稿按要求重写后「正文总篇幅未达预期」且「章节状态未做变更」，并给出新工艺：
+调纲之后要规划正文续写切片数与目标字数 → 按规划逐片续写 → 达标后由 7B 模型结合上下文
+逐段审查润色 → 审毕变更状态 → 更新素材履历 → 同步刷新项目进度。本轮把 +43 的单发重写
+升级为这条完整管线。**
+
+### 1. 根因（代码级）
+
+- **篇幅不足**：`ChapterRewriteService.rewrite()` 是**单发生成**——「约 4200 字」只写在
+  提示词里，输出预算一次押完；7B 单发实际只出 1200~3100 字 → 过不了 3200 字质量闸。
+- **状态不变**：质量闸不过 → 整稿**不落库**（坏稿绝不覆盖原稿的安全设计）→
+  `status` 停在 Draft，履历/时间线因「先过闸才落库」被一起卡住。
+- **进度不同步**：重写落库路径从不调 `projects.updateProgress`——只有整书生成收尾会刷。
+
+### 2. 实现（三个口径均经用户确认）
+
+- **达标口径**：规划总目标锚定 4200 字；写完规划片仍 <3200 自动补片（至多 2 片）；
+  **≥3200 过闸即达标**进入润色（4200 是尽力目标，3200 是硬底线）。
+- **续写起点**：程序判据 —— 原稿非空且过质量检查（`chapterQualityNote(minWords: 0)`，
+  只查质量不查字数）→ 从原稿末尾续写；原稿为空 / 复读 / 大纲体 → 第一片从开篇重写。
+- **润色通道**：主 Agent（`resolveAgentProvider(main: true)`，即用户配置的 7B 主模型），
+  与写作同上下文口径，不新增配置。
+
+### 3. 改动清单
+
+- **新增 `lib/ai/utils/chapter_plan_text.dart`（纯 Dart 零 import）**：
+  `ContinuationSlice`；`parseSlicePlan`（宽容解析「片N|1400|要点」等行形态，先全量解析
+  → 验总量 ≥ 缺口七成 → 再按 `maxSlices` 截断——**顺序反了会把合法规划误判为不足**）；
+  `fallbackSlices`（程序兜底均分，单片 ≤2200，绝不回到「押一次输出」）；
+  `chunkForPolish`（句子边界分块，移植 `_polishDraft`）；`trimSliceEcho`（回声去重：
+  剥 `【前文末尾】`标记回抄 + 逐字重叠 ≥12 字切掉 + 从句界重启）。
+- **新增第 11 个离线自检 `tools/chapter_plan_selftest.dart`（42 条断言）**。
+- **`ChapterRewriteService.rewriteWithPlan()`**：底座判据 → `plan`（模型规划 +
+  兜底）→ `write`（逐片串行续写，每片带前文末尾 500 字 + 大纲 + 本片要点，末片收
+  章末钩子；单片失败且底座为空 → 如实失败）→ 补片循环 → `polish`（900 字块逐段
+  润色，temperature 0.5，单块塌缩 <85% 保留原块，整体 <90% 放弃润色）→ `gate`
+  （润色后复检）→ 落库（`_persistAndSync` 负责 Draft → Completed + 履历/时间线含
+  故事时间）→ `progress`（**新增** `_refreshProjectProgress` 刷新 `projects.progress`）。
+- `repairOutlineAndRewrite` 改调 `rewriteWithPlan`（自动触发「智能修复全部草稿章」、
+  矩阵批量按钮、单章重写对话框三条入口**自动全部升级**，无需改调用方）。
+- 构造器增 `ProjectRepository? projects`（DI 注入 `projectRepositoryProvider`）。
+- `chapter_rewrite_dialog._phaseLabel` 增 `plan` / `write` / `polish` / `progress` 四阶段。
+- i18n +12 条（`tools/add_l10n_keys_2026_10_10.py` 追加第二批，幂等）。
+
+### 4. 验证
+
+- `lib/` **233 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- **11 个离线自检 351 条断言全绿**（新增 `chapter_plan` 42 条）。
+- i18n：**1151 调用点 / 0 缺失**（enStrings 4616 条）；`dart_interp_lint.py`
+  **277 文件 / 0 命中**；`dart format --output=none` 无语法错误。
+- Windows / APK 构建、启动验证见 `发布清单-v1.0.0+44.md`。
+
+### 5. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+44_windows_release.zip | 见 `发布清单-v1.0.0+44.md` | 见清单 |
+| novelcraft_1.0.0+44_release.apk | 见 `发布清单-v1.0.0+44.md` | 见清单 |
+| novelcraft_1.0.0+44_source.zip | 见 `发布清单-v1.0.0+44.md` | 见清单 |
+
+> ⚠ 哈希以发布根目录的 `发布清单-v1.0.0+44.md` 为准（HANDOFF 自身在源码包里）。
+
+### 6. 遗留
+
+- **管线需真机带模型实测**：规划质量 / 补片次数 / 润色耗时（每章 ≈ N 片 + M 块润色
+  次调用）需实际跑一本 NG 书验证；离线只锁了纯文本规则。
+- B（章名/梗概解析源头修复）、C（存量 9 章污染清洗）、D（空正文不落库语义）仍未开工。
+- 润色与写作共用主 Agent：若模型慢，修复一章的调用次数 ≈ 1 规划 + N 片 + 补片 + M 块
+  润色（N≤6+2，M≈4200/900≈5）——用户侧可感知变慢，属工艺换质量的预期代价。
+
+## 上一版交接：1.0.0+43（2026-10-10）
+
+**用户报：一键写书「章节 NG 率变高」；对失败章手动 agent 重写「一直失败，原因是质量或上下文不达标」。要求：先按前后章节调整大纲、再按流程重写本章节，且由 agent 主动完成；完成后自动在角色管理 / 世界观设定中插入该章对应时间节点的素材履历。**
+
+### 1. 取证（只读用户真实数据库，`novelcraft.sqlite`）
+
+- `夜闯寡妇村` 30 章 = 21 Completed / **9 Draft（NG 30%）**：其中 6 章 `content` 为 NULL
+  且 `version_number=1`（写作团队失败、`multi_agent_book_generation_service.dart` 失败分支
+  **不落库直接返回**），另 3 章字数不足（1176 / 2231 / 3075，闸门 `minFinalWords=3200`）。
+- **污染实锤**：失败章的 `summary` 被「章名 + 字数元信息」污染 ——
+  `第一章：祭祀之夜（700字）##`、`暗流涌动（约500字）##`、`大纲：夜闯寡妇村（全卷第5章）##`；
+  `title` 有半截括号 `《暗流涌动（约600字》`、`《第7/10章》`、`《净化仪式（约700字）开局状态：》`。
+- **「一直重写失败」的真凶**：`ChapterRewriteService` 把污染的 `summary` 原样喂回模型 →
+  模型照「700 字」写 → 过不了 3200 字闸 → 次次 NG。用户「先调大纲再重写」的判断被证实为正解。
+  `ChapterTitleParser` 对上述形态均判 `reliable=true`（漏网：半截括号、`（700字）`、行尾 `##`、
+  中文数字章号），重命名兜底永不触发（Dart 探针喂真实库值逐字复现）。
+- 口径说明：`示例项目·玄穹剑主` 6 章 102~138 字全部 Draft（100% NG），会拉高全库平均 NG 率。
+
+### 2. 修法（用户拍板：只做 A「调大纲 → 重写 → 回写履历」；触发 = 生成收尾自动 + 手动按钮；履历时间 = 故事内时间）
+
+- **新增 `lib/ai/utils/outline_repair_text.dart`（纯 Dart 零 import）**：
+  `RepairedOutline`（目标/承接/冲突/转折/钩子/时间节点/人物 7 字段 + `isUsable`）；
+  `stripMeta`（含 `_dropUnpairedBrackets` 清 `（约600字` 半截括号，兼容繁体 `約` 与全角数字）；
+  `hasMetaDirt`；`parse`（标签须紧跟冒号/空白/右括号，防「目标人物是X」误判）；
+  `render`（可附「不少于 N 字」硬要求；落 notes 用 `targetWords:0` 免得自己成残渣）；`toBrief`。
+- **`ChapterRewriteService.repairOutlineAndRewrite()`**：收集前 800 字 / 后 800 字 /
+  同卷梗概（过 stripMeta）/ 卷大纲（截 900）→ 编辑人格（temperature 0.6）修订大纲（7 字段
+  输出格式 + 「禁止字数提示」「过渡章如实写」纪律）→ `parse`（失败回落 cleanedRaw≥20 字）→
+  `render(targetWords:0)` 幂等写回 `notes`（`_composeNotes` 保留原备注）+ `toBrief` 写 `summary`
+  → 复用 `rewrite()`，`storyTime` 一路透传。
+- **履历回写（诉求④的落点本就存在，此前被「质量闸通过才落库」前置卡死）**：
+  `ChapterSyncService` 全链路接受 `storyTime`，履历条目、`CharacterEvents.storyTime`
+  （该列语义本就是「书籍世界内的时间」）、时间线 `description`（加 `【故事时间：…】`头）
+  均带故事时间；`_cleanStoryTime` 归一化（剥头部标记、「未明确/未知/N/A」归空、限 200）。
+- **自动触发**：一键写书收尾 `_rewriteFailedChapters` 改走 `repairOutlineAndRewrite`，
+  并向矩阵发 `outlineRepair` 阶段事件（紫色「调纲重写」）；失败章重写仍在章节池之后、
+  分卷归纳之前。
+- **手动触发**：矩阵悬浮窗新增「智能修复全部草稿章」批量按钮（确认文案注明先调纲再重写）；
+  单章重写对话框 / 按钮默认 `repairOutline: true`。
+- **悬浮窗保留 + 统计**（用户要求「写完了也要能进悬浮窗」）：`MultiAgentRunState` 增
+  `projectId / finishedAt / completedCount / failedCount / ngRate / hasLastRun`
+  （NG 率分母 = 已出结果章）；矩阵对话新增统计行（总章/定稿/失败/待写/NG 率，NG>0 红色），
+  elapsed 冻结于 `finishedAt`；项目概览页新增「上次写作结果」横幅（匹配 `run.projectId`）
+  可重进矩阵；应用壳「写作结果 · NG N 章」长条常驻入口。
+
+### 3. 验证
+
+- `lib/` **232 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- **新增第 10 个离线自检 `tools/outline_repair_selftest.dart`（45 条断言）**
+  （A 组 12 用库里真实污染值锁 `stripMeta`、B 组 4 锁 `hasMetaDirt`、
+  C 组 10 锁 `parse`、D 组 8 锁 `render`、E 组 4 锁 `toBrief`），
+  合计 **10 个自检 309 条断言全绿**。
+- i18n：**1138 调用点 / 0 缺失**（+18 条）；`dart_interp_lint.py` **276 文件 / 0 命中**。
+- Windows / APK 构建、启动验证见 `发布清单-v1.0.0+43.md`。
+
+### 4. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+43_windows_release.zip | 见 `发布清单-v1.0.0+43.md` | 见清单 |
+| novelcraft_1.0.0+43_release.apk | 见 `发布清单-v1.0.0+43.md` | 见清单 |
+| novelcraft_1.0.0+43_source.zip | 见 `发布清单-v1.0.0+43.md` | 见清单 |
+
+> ⚠ 哈希以发布根目录的 `发布清单-v1.0.0+43.md` 为准（HANDOFF 自身在源码包里）。
+
+### 5. 遗留（用户未要求本轮做）
+
+- **B**：章名 / 梗概解析源头修复（给 `isReliableName` 补半截括号、`（N字）`、行尾 `##`、
+  中文数字章号判据）——本轮只做兜底清洗，不动解析器。
+- **C**：存量 9 章污染数据清洗（`夜闯寡妇村` 6 章 NULL + 3 章字数不足；示例项目 6 章）。
+- **D**：空正文不落库语义（失败分支直接 return，用户看不到「第 N 次尝试失败」痕迹）。
+- 本轮链路（调纲重写 / 履历回写 / 矩阵统计）**需真机带模型实测**。
+
+## 上一版交接：1.0.0+42（2026-10-10）
+
+**用户报：「本次模型上下文支持 25K，但是我没办法设定 25K 上下文」。**
+排查后确认是**两个 bug 叠加 + 一处未同步**，模型侧完全正常。
+
+### 1. 现象与真实数据
+
+用户的模型是 `rwkv7-g1k-7.2b-20260930-ctx25600` —— 模型名里**明确写着 25K**，
+`parseContextWindow()` 也能正确解析出 `25600`（自检 A1 锁死）。但现场
+`%APPDATA%\NovelManagement\ai_config\runtime_settings.json` 落的是
+`contextWindowTokens: 16384` / `maxReferenceLength: 4000`，**与模型名对不上**。
+于是生成链路的 `outputBudgetTokens` 被 `16384 × 55% ≈ 9011` 钳死 —— 滑块怎么拖都上不去。
+
+### 2. 三个根因
+
+| # | 根因 | 后果 |
+| --- | --- | --- |
+| A | 「最大令牌数」档位表 `kMaxTokensSteps` 只有 512/1K/…/16K/**32K**/…，**没有 24K/25K** | 想选 25K 只能吸附到 32K，选不出模型真实支持的档位 |
+| B | 窗口**只在点「保存」provider 时**刷新一次，页面加载读的是 KVStore 旧值 | 模型名 `ctx25600`，窗口却停在默认 16384 |
+| C | `_SamplingThinkingCardState._collectAndPersist` 保存采样参数时**新建 `AiRuntimeSettings` 却漏传 `maxReferenceLength` / `contextWindowTokens`** | 每保存一次采样参数，就把用户设的令牌数与已同步的窗口**静默重置**回 4000 / 16384 |
+
+**C 最隐蔽**：新建实例漏字段 → 回落构造默认值，**类型检查完全看不出来**
+（这也解释了落盘文件里那对可疑的 `4000 / 16384`）。
+
+### 3. 修法（遵守用户「只补档位、不动窗口交互」的要求：不新增任何可编辑控件）
+
+- **A** 档位表插入 `24576`（24K）/ `25600`（25K）两档，标签表同步 → 共 14 档。
+- **B** 新增 `_syncContextWindowFromModel()`，在页面加载（`initState` post-frame，
+  特意排在 provider 配置与默认 provider 都恢复**之后**）按**默认 provider 的模型名**
+  刷新窗口并落盘。窗口仍是**只读派生值**，没有新 UI 控件。配套新增
+  `_kindByRegisteredName()`（注册名 → kind，兼容 `RWKV Cloud` 与 `RWKV Cloud::official-7b`）。
+- **B'** `_persistProviderConfig` 里窗口改为**优先取默认 provider 的模型名**，
+  避免在非默认 tab 上点保存时把窗口改写成别家模型的值（OpenRouter 模型无 ctx → 会被写成 16384）。
+- **C** `_collectAndPersist` 显式继承 `maxReferenceLength` / `contextWindowTokens`。
+- 顺带把「保存 provider」里的 KV 写入抽成 `_persistRuntimeSettings()`，与新增的窗口同步共用。
+
+### 4. 验证
+
+- `lib/` **231 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- **新增第 9 个离线自检 `tools/context_window_selftest.dart`（27 条断言）**，
+  合计 **9 个自检 264 条断言全绿**：
+  - A 组 10 条锁 `parseContextWindow`（用户实际模型 `ctx25600` → 25600；无标记 / `<512` / 非数字 → 回落 16384）；
+  - B 组 10 条锁预算切分：窗口 25K → 参考 10240 / 输出 14080；旧窗口 16K → 参考 6553 / 输出 9011，
+    **B5 直接断言「窗口 25K 的输出预算 > 旧窗口 16K」**（实测差 5069）；
+  - D 组锁死「漏传字段会回落 4000 / 16384」这一坑，提醒后来者必须显式继承。
+- i18n：1120 调用点 / **0 缺失**；`dart_interp_lint.py` 275 文件 / **0 命中**。
+- Windows / APK 构建、真机启动验证见 `发布清单-v1.0.0+42.md`。
+
+### 5. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+42_windows_release.zip | 见 `发布清单-v1.0.0+42.md` | 见清单 |
+| novelcraft_1.0.0+42_release.apk | 见 `发布清单-v1.0.0+42.md` | 见清单 |
+| novelcraft_1.0.0+42_source.zip | 见 `发布清单-v1.0.0+42.md` | 见清单 |
+
+> ⚠ 哈希以发布根目录的 `发布清单-v1.0.0+42.md` 为准（HANDOFF 自身在源码包里）。
+
+## 上一版交接：1.0.0+41（2026-10-09）
+
+**这是 1.0.0+40 的紧急返修（P0）：+40 在 Windows 上「启动即崩」。** 用户实测截图报：
+
+```
+PathNotFoundException: Cannot open file, path =
+'C:\Users\Administrator\AppData\Roaming\NovelManagement\internal\
+ Closure: (String) => String from Function '_fileOf@872141309': static (key)'
+(OS Error: 文件名、目录名或卷标语法不正确。, errno = 123)
+```
+
+### 1. 根因：字符串插值漏写花括号
+
+F1（存储键净化）把路径拼接写成了：
+
+```dart
+final f = File('${_scopeDir(scope).path}${Platform.pathSeparator}$_fileOf(key)');
+```
+
+Dart 的 `$identifier` **只能插值简单标识符** —— `$_fileOf` 插进去的是**函数对象本身**，
+后面的 `(key)` 退化成**字面文本**。于是路径成了
+`...\internal\Closure: (String) => String from Function '_fileOf@...': static (key)`，
+`File.existsSync()` 直接抛 `errno 123`。
+
+**为什么之前四道门禁一道都没拦住**：
+
+| 门禁 | 为什么没用 |
+| --- | --- |
+| `dart analyze` | **插值一个函数是合法 Dart**，0 error 0 warning |
+| 8 个离线自检 | 没有一个覆盖「文件路径拼接」（它需要 `dart:io` + `path_provider`） |
+| 构建 | 编译期同样无从察觉 |
+| 产物版本串核验 | 只证明「新版本进了包」，与能否启动无关 |
+| **真机跑一次** | ← **唯一能拦住的，而 +40 恰恰漏了这一步** |
+
+### 2. 修法：路径拼接下沉成纯函数 + 一道永久防线
+
+- `lib/data/storage/store_key.dart`（纯 Dart 零 import）新增三个纯函数：
+  - `storeFileName(key)` → `'${sanitizeStoreKey(key)}.json'`
+  - `storeFilePath(scopeDir, key, separator)` → **唯一**允许拼路径的地方
+  - `storeKeyFromFileName(fileName)` → `storeFileName` 的逆
+- `key_value_store_native.dart` 收敛为单一私有方法 `_file(scope, key)`，
+  读 / 写 / 删三个入口都走它，内联拼接彻底消失。
+- 顺带修掉 `listKeys` 的 `replaceAll('.json', '')` —— 那会削掉键名**中间**的 `.json`
+  （`a.json.b` → 文件 `a.json.b.json` → 被削成 `a.b`），
+  破坏了「`listKeys` 的返回值能被 `readJson` 原样命中」这条契约。改为只剥结尾一个后缀。
+- **新增 `tools/dart_interp_lint.py`**：扫描「字符串字面量内出现 `$标识符(`」这一模式，
+  自带 `--selftest`。**上线即抓到一个既有 bug**：`ai_configuration_page.dart:1893` 的
+  `$totalMb.toStringAsFixed(1)` —— 界面上会显示成「12.3/45.6.toStringAsFixed(1) MB」，
+  是模型下载进度文案的显示错误，与本轮改动无关但一并修了。
+
+### 3. 验证（这次跑了真机）
+
+- `lib/` **231 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- 8 个离线自检 **237 条断言全绿**；其中 `kv_key_selftest.dart` 增至 **29 条**，
+  新增 D 组锁死路径拼接，含「结果不得含 `Closure` / `Function(` / `static`」的
+  **errno 123 回归断言**。
+- `dart_interp_lint.py --selftest` → OK；全库扫描 **275 个 .dart / 0 命中**。
+- Windows `flutter build windows --release` → **EXIT=0 / 65.3s**；
+  `data/app.so` 含 `1.0.0+41`，旧串 `1.0.0+40` 已消失。
+- **真机启动验证**：脱离 Job Object 拉起 `novelcraft.exe`，18 秒后进程存活
+  （101 MB / 105 MB），截图为「项目管理」正常界面、右下角 `v1.0.0+41`、
+  项目列表只剩示例项目 —— **不再出现错误页**。
+- APK `versionCode='41'`、`Verifies`（v2）、证书 SHA256 与 +34~+40 一致。
+
+### 4. 教训
+
+> **构建成功 + 类型检查 0 error + 自检全绿 ≠ 能启动。**
+> 纯逻辑自检覆盖不到「平台 API 的调用形态」；这类代码只能在真机跑出来。
+> 往后的硬规矩：**凡改动启动路径（存储层 / DI / 打开数据库），出包前必须实际拉起一次
+> 可执行文件并截图确认**，不能只看构建日志与版本串。
+
+### 5. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+41_windows_release.zip | 见 `发布清单-v1.0.0+41.md` | 见清单 |
+| novelcraft_1.0.0+41_release.apk | 见 `发布清单-v1.0.0+41.md` | 见清单 |
+| novelcraft_1.0.0+41_source.zip | 见 `发布清单-v1.0.0+41.md` | 见清单 |
+
+> ⚠ 哈希以发布根目录的 `发布清单-v1.0.0+41.md` 为准（HANDOFF 自身在源码包里）。
+> **1.0.0+40 的交付件请勿使用**（Windows 端启动即崩）。
+
+## 上一版交接：1.0.0+40（2026-10-09）
+
+承接 1.0.0+39 的 C1 拆书。用户实测报了 **4 个缺陷**（附 5 张截图），本轮逐条定位根因并修复。
+
+| # | 用户报障 | 根因 |
+| --- | --- | --- |
+| ① | 项目概览的「7B 全书审查」不生效 | 存储键含 `:` → Windows 非法文件名 → 写盘异常被 `catch` 静默吞掉；解析任一条坏就整章丢弃；无任何进度反馈 |
+| ② | 项目进度不随完成度更新 | 全工程 `projects.progress` **只读不写** |
+| ③ | 章节写完不更新人物卡 / 世界观卡 | evidence 判据要求「连续子串」而 7B 给的是拼接引用 → 条条必败；行式兜底又被 Markdown 表格外壳打垮 |
+| ④ | 质量校验失败的章不自动重写 | 只有「章节管理 → 单章重写」这个手动入口 |
+
+### 1. F1 —— KV 键含冒号导致静默写盘失败【①与③的共同病灶】
+
+`KeyValueStore` 的文件名直接取 key。审查留言用 `'{pid}:{cid}'`、防重签名用
+`'last_success_v2:{cid}'` —— **冒号在 Windows 文件名里非法**，`File.writeAsString` 抛
+`FileSystemException`，被调用方的 `try/catch` 吞掉。现场取证：
+`%APPDATA%\NovelManagement\book_review\` 是**空目录**；`chapter_sync\` 下只有
+`ai.enabled.json` 和一个 C# 时代遗留的 0 字节 `last_version` —— 说明**防重签名从未写进去过**，
+所以同一版本的章节永远在重复抽取。
+
+修法：新增 `lib/data/storage/store_key.dart`（**纯 Dart、零 import**），
+`sanitizeStoreKey` 把 `<>:"/\|?*` 与控制字符换成 `_`，并去掉结尾的 `.` / 空格；
+native 与 web 两个实现都改为经它取键。**必须幂等** —— `listKeys` 返回的已是净化键，
+再走 `readJson` 必须命中同一条（自检 A12 锁死）。
+
+### 2. F2 —— 完成进度 = 已完成章 / 总章数
+
+新增纯函数 `progressFromChapterCounts(completed, total)`（`lib/application/models/stats.dart`）。
+`ProjectStatisticsService.getStats` 读取时**顺带自愈回写** `projects.progress` ——
+「只要打开一次概览页」，项目卡片上的进度就跟着修正，不必重跑生成。
+新增 `ProjectRepository.updateProgress()` **只写 progress 一列、不动 `updated_at`**，
+否则「最近编辑」会被刷成刚刚。生成链路收尾也补刷一次（见 F4）。
+
+### 3. F3 —— 抽取证据校验放宽 + 行式兜底修好
+
+**用真实数据复现过**：拿项目里的第一章正文直连
+`https://api-7b.rwkvos.com/v1/chat/completions`（32.1s 返回 2693 字符）：
+
+- 7B **确实**吐出合法 `updates` JSON，`name` 也是正文原名（林晚、维克拉姆）；
+- 但 `evidence` 写成**一整段拼接引用**且带 `正文：` 前缀 → 旧判据要求「连续子串」
+  → 条条必败 → 3 次重试全废 → **整章 0 条**；
+- 行式兜底同样废：7B 输出的是 **Markdown 表格**（行首 `>` 与 `|`，还有 `|---|---|`
+  分隔线）→ 裸 `split('|')` 切出空首段 → `类别 = ''` → **整行被丢弃**。
+
+数据库侧旁证：`重生之红色警戒…` 30 章只有 **1 个**角色、`重生之我在印度…` 30 章
+**0 个**角色，两本书都只有 0 个世界观设定，却各有 **27 条**时间线事件 ——
+正是「只跑零模型的规则同步、AI 抽取全线失败」的指纹。
+
+修法：新增 `lib/ai/utils/entity_update_text.dart`（纯 Dart）：
+`stripEvidencePrefix` / `evidenceSharesText`（脱前缀 → 整段命中最好，否则按句读切段，
+**任意段 ≥8 字且命中正文**即算有据）/ `pipeRowCells`（剥列表符号与序号、表头、分隔线，
+按 `|` / `｜` 切分后**去掉首尾空段、保留中间空段**）。
+`ModuleStateService` 校验前先做 `_normalizeItem`：`content` 超列宽**截断**而不是拒绝
+（status 列宽 50，7B 几乎必给整句，旧「超长即拒绝」等于 status 永远落不下来），
+evidence 脱前缀。**防幻觉的真闸门保留不动**：`source.contains(name)`。
+
+### 4. F4 —— 全书跑完后自动重写质量失败章
+
+位置在 `MultiAgentBookGenerationService.generate` 里，**章节池之后、分卷档案归纳之前**：
+池子之后（质量失败是「跑完才知道」的，且重写要靠邻居定稿）、归纳之前（补出来的正文
+同样要参与设定抽取与归档）。复用 `ChapterRewriteService` —— 与「章节管理 → 单章重写」
+**同一条链路**，清洗与质量闸只有一套口径。逐章独立 `try/catch`，不过闸**不覆盖原稿**，
+结果如实写进 `warnings`。按用户口径：**全部失败章，各试 1 次**。
+补写成功会 `written += fixed`（`_needsRewrite` 与 `_qualityNote` 同参同源，
+故失败集与已计入 `written` 的集合互斥，不会重复计数）。
+
+### 5. F5 —— 审查链路后端修好 + 进度对话框
+
+- **解析容错**：`_parseComments` 改为**逐条**容错 —— 接受 `List` 或 `Map['comments']`；
+  单条缺 `problem`/`suggestion` 只跳过该条；`quote` 不在正文只清空 quote、**保留该条**；
+  只有拿不到列表才判「未产出」。
+- **`json_scan.dart` 重写**：新增 `parseJsonPayload`，**由文本里最先出现的结构字符**决定顶层。
+  这条是必须的 —— `parseJsonObject(raw) ?? parseJsonArray(raw)` 有陷阱：裸数组 `[{…}]`
+  会被 `parseJsonObject` 命中**内层对象**，于是 `decoded['comments']` 取不到
+  → 整章留言被误判为「审查未产出」。
+- **进度对话框**：`ValueNotifier` + `LinearProgressIndicator`，显示「正在审查第 i/N 章」
+  与章节名，可取消，收工自动关窗并弹汇总 SnackBar。
+  ⚠ 取消时对话框立刻关闭，而「当前那一章」还在飞 —— 必须把后台任务句柄留住、
+  关窗后 `await` 它，否则读到的 `finished.value` 还是 null，取消文案永远出不来。
+
+### 6. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+40_windows_release.zip | 见 `发布清单-v1.0.0+40.md` | 见清单 |
+| novelcraft_1.0.0+40_release.apk | 见 `发布清单-v1.0.0+40.md` | 见清单 |
+| novelcraft_1.0.0+40_source.zip | 见 `发布清单-v1.0.0+40.md` | 见清单 |
+
+> ⚠ 三个交付件的字节数与 SHA256 **以发布根目录的 `发布清单-v1.0.0+40.md` 为准**：
+> HANDOFF.md 本身就在源码包里，在包里写死「包含它自己的这个包的哈希」必然自相矛盾。
+
+### 7. 本轮验证
+
+- `lib/` **231 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- 新增 `tools/entity_update_selftest.dart` 32 / 0、`tools/kv_key_selftest.dart` 19 / 0、
+  `tools/json_scan_selftest.dart` 40 / 0；回归 `chapter_title` 17 / 0、
+  `entity_profile` 24 / 0、`sanitizer` 28 / 0、`style_digest` 27 / 0、`style_rule` 40 / 0
+  —— **共 227 条断言全绿**。
+- i18n：zh / en 各 **4585 条**、严格对称；缺失 key 扫描 **1120 调用点 / 0 缺失**。
+
+### 8. 仍未做 / 需注意
+
+- **修复效果要先清洗旧数据才看得到**：F3 只保证**此后**的抽取能落库；那两本实测书里
+  的 27 条时间线 / 0~1 个角色是**旧数据**，不重跑不会自己变好。批量清洗是破坏性操作
+  （会改写实体档案），须用户确认后再做。
+- B3 抽取结果审核面板、C2–C6、D3 端到端复测仍未开工。
+- C1 拆书链路的真机实测缺口（7 次调用耗时 / 规则注入效果 / 中文 txt 编码边界）与上版一致。
+
+## 上一版交接：1.0.0+39（2026-10-09）
+
+承接 1.0.0+38 的 B4 分卷档案归纳。用户指令为
+**「按原计划执行，`E:\书籍拆分` 目录下有样本书籍」**，
+即按既定顺序进入 **C1 拆书：Agent 拆书 → 写作模板**，本轮完成 C1 全部子项并出包。
+
+### 1. C1 解决什么问题
+
+写作提示词此前全是手工写死的通用指令（「严禁重复」「不要写章节名」「不要输出（全文完）」），
+模型只能凭自己的默认文风落笔。用户手上有一批拆解样本，但那些结论是**人读出来的**，
+进不了生成链路。
+
+C1 把它做成产品内的流水线：**10~18 MB 的小说 → 可塞进上下文的样本 → 两阶段归纳 →
+一套可注入的写作规则**。
+
+### 2. 实现（C1a–C1f）
+
+| 子项 | 文件 | 作用 |
+| --- | --- | --- |
+| C1a | `lib/ai/utils/style_digest_text.dart`（新增，纯 Dart） | 段落切分 / 样本清洗 / 均匀采样 / 多块观察合并 / 分类归一 |
+| C1b | `lib/application/services/style_rule.dart`（新增，纯 Dart） | 规则模型 + `toPromptBlock` 渲染 |
+| C1b | `lib/application/services/style_rule_store.dart`（新增） | 规则库持久化（`KeyValueStore`，scope `style_digest`） |
+| C1b | `lib/application/services/style_digest_service.dart`（新增） | 两阶段拆书服务 |
+| C1c | `multi_agent_book_generation_service.dart` | `styleRuleSetId` + 6 个注入点 |
+| C1d | `writing_prompt_catalog.dart` | `Style/system`、`Style/observe`、`Style/synthesize` |
+| C1e | `lib/ui/pages/style_study_page.dart`（新增） | 文风研读页；设置页新增入口 |
+| C1f | 本文件 + 三交付件 | 验证与打包 |
+
+**两阶段为什么必须两步**：阶段一逐块观察得到的是**并列的描述句**（「多用短句」
+「段落偏短」），直接拼起来是一堆同义反复；阶段二把它们压成**指令式规则**
+（「以短句为主，单句成段，叙述密度高」），并有机会丢掉互相矛盾的观察。
+阶段二失败时**降级**用阶段一的合并结果 —— 可读性差些，但用户拿到的是能用的东西。
+
+### 3. 规则注入点（C1c）
+
+`MultiAgentBookConfig` 新增 `styleRuleSetId`。注入形态**分两档**：
+
+| 工艺 | 节点 | 形态 |
+| --- | --- | --- |
+| 续写优选（默认） | `Book/beamCandidate` | **精简版** ≤700 字（禁忌词 / 句长 / 对白配比 / 视角） |
+| 单笔直书 | `Book/soloChapter` | 完整版 ≤1600 字 |
+| 主笔分段串行 | `Book/serialSegment` | 完整版 |
+| 组长 + 9 写手 | `Book/plan` + `Book/writer` | 完整版 |
+| 全部工艺 | `Book/chapterOutline` | 完整版（大纲阶段就按同一套节奏/结构） |
+
+> ⚠ **`beam` 是默认工艺，而它的正文由 `Book/beamCandidate` 产出**（不是
+> `Book/serialSegment`）。一开始只注入了 serialSegment / soloChapter 等，等于默认工艺下文风
+> 规则**完全没生效**。补 `beamCandidate` 时才发现它不能吃完整版：
+> 那段提示词的注释明确写着「刻意极简 —— 提示词越像一段被截断的小说，产出越像小说」。
+> 所以给它单开了一条 **brief** 路径，并把「禁忌表达」提到维度列表第一位
+> （原本它排最后，一截断就没了）。
+
+规则块为空时注入**空串**而不是空标题。理由：注入一个「【文风要求】」却没有内容，
+模型会把空标题当成约束去猜 —— 比不注入更糟。
+
+### 4. 三个坑（值得记）
+
+- **`_dedupeJoin` 的注释与实现不一致**。注释写「只留信息量大的那条」，实现却是
+  `k.contains(v) || v.contains(k)` 一起 `continue` —— **先到的短句会把后到的长句挤掉**。
+  观察是按块顺序来的，早的块不一定更完整，结果越靠后的信息越容易丢。
+  修法：新值是已有超集时**替换**，并新增自检 D8/D9 锁死两个方向。
+  ⚠ **这条是靠代码审查发现的，不是靠测试失败** —— 「测试全绿」不等于「实现与注释一致」。
+- **中文维度名不能用「连续汉字段」的思路处理**（同 B4 的教训）→ 采样/合并全部按
+  段落与行处理，不做词法切分。
+- **纯函数必须放 `lib/ai/utils/`**。C1b 的模型与渲染一开始想放服务里，
+  但服务依赖导出的 `database.dart` 会把 Flutter framework 拖进来，`dart` 直跑自检
+  直接编译失败（满屏 `Offset isn't defined for the type 'VelocityTracker'`）。
+  与 `profile_synthesis_text.dart` / `output_sanitizer.dart` 同一约定。
+
+### 5. 文件编码的取舍（刻意保守）
+
+网文 txt 相当比例是 GBK。Dart 标准库只自带 UTF-8 / UTF-16，而沙箱环境无法
+`pub get` 拉新依赖（本地 pub 缓存里也没有任何 GBK 包）。
+
+实测用户 4 本长篇样本（`众仙俯首.txt` 10.6 MB、`我的妻子是大乘期大佬.txt` 18.7 MB、
+`读校版《开局合欢宗…》305万字.txt` 9.4 MB、`活儿该/《从 姑 获 鸟 开 始》.txt` 6.3 MB）
+**全部是 UTF-8**，于是决定：**不引入 GBK 解码表**，只做
+BOM 嗅探 + 严格 UTF-8，失败时**明确报错要求另存为 UTF-8**。
+
+关键在于**不用 `allowMalformed: true` 兜底**：那会把 GBK 字节解成一串 U+FFFD，
+模型看到的是乱码样本，却会吐出「貌似正常」的规则 —— **静默错误比报错难查得多**。
+
+### 6. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+39_windows_release.zip | 见 `发布清单-v1.0.0+39.md` | 见清单 |
+| novelcraft_1.0.0+39_release.apk | 见 `发布清单-v1.0.0+39.md` | 见清单 |
+| novelcraft_1.0.0+39_source.zip | 见 `发布清单-v1.0.0+39.md` | 见清单 |
+
+> ⚠ 三个交付件的字节数与 SHA256 **以发布根目录的 `发布清单-v1.0.0+39.md` 为准**：
+> HANDOFF.md 本身就在源码包里，在包里写死「包含它自己的这个包的哈希」必然自相矛盾
+> （改一次 HANDOFF → 哈希变 → 再改 → 再变）。+38 时 Windows / APK 两个包的哈希
+> 不在包内所以可以照写，本版统一改为指向清单，少一处需要二次同步的地方。
+
+### 7. 本轮验证
+
+- `lib/` **229 文件** + `test/` **46 文件** `error: 0 warning: 0`。
+- 新增 `tools/style_digest_selftest.dart` → **27 pass / 0 fail**；
+  新增 `tools/style_rule_selftest.dart` → **40 pass / 0 fail**；
+  回归 `entity_profile_selftest.dart` 24 / 0、`sanitizer_selftest.dart` 28 / 0。
+- 提示词节点变量契约：脚本扫描全部 **39 个节点**，`{{变量}}` 与 `variables` 键集合
+  **0 处不一致**。
+- i18n：zh / en 各 **4583 条**、严格对称无重复；缺失 key 扫描 **1115 调用点 / 0 缺失**。
+- Windows `flutter build windows --release` → **EXIT=0 / 73.9s**；
+  Android `flutter build apk --release`（经 `subst S:`）→ **EXIT=0 / 111.9s / 70.7 MB**。
+- `aapt2 dump badging` → `versionCode='39'`；Windows `data/app.so` 含 `1.0.0+39`、
+  旧串 `1.0.0+38` 已消失；APK 验签 `Verifies`（v2），证书
+  `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`（与 +34~+38 一致）。
+
+### 8. 仍未做 / 需注意
+
+- 未做：B3 抽取审核面板、C2–C6、D3 端到端复测。
+- **拆书链路只做了类型检查与离线自检，尚未真机跑过一次完整拆书**。
+  需要实测的三点：① 6 块样本 + 汇总的 7 次调用的实际耗时；
+  ② 规则注入后正文是否真的更像样本（还是模型直接忽视）；
+  ③ 中文 txt 里偶尔出现的坏字节（实测三本长篇均为合法 UTF-8，但边界情况未穷举）。
+- GBK 编码 txt 不支持（见上文「文件编码的取舍」）。
+- 已落库的脏章节（章名碎片、正文污染）**仍未清洗** —— 只保证「之后写出来的干净」。
+  批量清洗需直读 `C:\Users\Administrator\Documents\novelcraft.sqlite` 原地重写，
+  **破坏性操作，须先确认**（可先只读扫描出清单）。
+- 英文界面「项目概览」统计卡标签折行被轻微裁切（纯外观，未修）。
+- ⚠ `flutter test` 在本机沙箱不可用（Dart VM 无法 spawn 子进程）。C1 的纯逻辑
+  已由两个离线自检覆盖；需要数据库 + 模型打桩的链路**只做了类型检查，未实际运行**。
+
+---
+
+## 上一版交接：1.0.0+38（2026-10-09）
+
+承接 1.0.0+37 的 A 阶段 + B1/B2/B5。用户在「下一步方向」中选了
+**「先继续开发 B4 档案归纳」**，归纳粒度选**「每卷结束自动 + 手动触发」**，
+本轮即按此实现并出包。
+
+### 1. B4 解决什么问题
+
+设定抽取（`ModuleStateService`）每章把变更**追加**成一行
+`[<chapterId>:<版本> <章节标题>] <变化内容>` 写进实体的 `history` 列。
+这让变更可追溯，但代价是：写到第 30 章时点开「人物管理」，看到的是 30 行
+变更日志，而不是「这个角色是谁」—— **档案消失了**。
+
+B4 把「按章的流水」收敛为「按卷的档案」，与抽取形成互补：
+抽取负责「这一章发生了什么变化」（增量、证据链），归纳负责
+「到这一卷为止，这个角色/势力/设定是什么样」（收敛、可读）。
+
+### 2. 实现
+
+| 文件 | 作用 |
+| --- | --- |
+| `lib/application/services/entity_profile_synthesizer.dart`（新增） | 归纳服务：按卷扫描有流水的实体 → 调主 Agent → 写结构化档案 |
+| `lib/ai/utils/profile_synthesis_text.dart`（新增） | 纯文本规则：流水筛选 / 关键事件合并 / 防幻觉判据 / JSON 平衡扫描 / 字段规格 |
+| `lib/ui/pages/volume_profile_dialog.dart`（新增） | 归纳进度弹窗 + 卷宗列表行按钮 |
+| `tools/entity_profile_selftest.dart`（新增） | **24 用例**离线自检（可 `dart` 直跑） |
+
+归纳目标字段（**都是 SQL 列名**，见下文「坑 1」）：
+
+- 人物：`personality` / `background` / `appearance` / `abilities`，外加
+  `key_events` 按卷累积成 `【第N卷】事件A；事件B`；
+- 势力：`description` / `resources` / `special_abilities` / `headquarters` / `territory`；
+- 世界观：`description` / `content` / `rules` / `related_settings`。
+
+**触发方式**：
+
+- **自动** —— `MultiAgentBookGenerationService` 在**章节并发池结束之后**按卷各跑一次。
+  必须放在池子之后：章节是并行写的，池子没结束就无从判断「哪一卷写完了」。
+  该卷正文全空则跳过；归纳失败只记 warning，**不影响**已写好的正文与已落库的设定。
+- **手动** —— 卷宗管理列表每行「归纳本卷档案」，用于补跑
+  （首次失败 / 模型不可用 / 事后又改了章节内容）。
+
+### 3. 五条安全边界（改之前先读）
+
+1. 稳定属性**默认只在字段为空时写入**，绝不覆盖作者手写或前卷已有内容。
+   归纳是「模型意见」，不该抹掉人工成果。（要覆盖式重写时传 `overwriteExisting: true`。）
+2. `history` 列**一字不动** —— 它是可追溯的证据链，也是下次归纳的输入。
+   把归纳结果写回去会让下一卷「归纳的归纳」，信息两三卷内衰减成空话。
+3. `status` 列**不动** —— 由设定抽取按**章**维护，粒度比卷更细，用卷级归纳覆盖是降级。
+4. 文本一律过长度上限（200 字）+ `FictionQuality` 闸 + **n-gram 重叠**依据判据（防编造）。
+5. 归纳**幂等**：属性只填空、关键事件同卷段替换，重复触发不会让字段无限膨胀。
+
+### 4. 踩到的三个坑（值得记）
+
+- **`specialAbilities` 会静默取不到值**。drift 的 `QueryRow.data` 键与
+  `GeneratedColumn.$name` 用的都是 **SQL 列名（snake_case）** —— drift 源码里
+  该字段的注释就是 "The sql name of this column"。字段规格若写成 Dart 属性名
+  （`specialAbilities` / `relatedSettings` / `keyEvents`），读会得到 null、
+  写回会报列不存在。已由自检 E1 锁死。
+- **中文不能用「连续汉字段」当词组**。`isGrounded` 最初用
+  `[\u4e00-\u9fa5A-Za-z]{2,}` 抓 token —— 中文整句话就是一个连续汉字段，
+  于是每次都拿**整句**去 `contains`，**永远不命中**，结果所有字段都被判为幻觉、
+  档案一个字都填不上。已改为 4→2 字 n-gram 重叠。自检 C1/C5 就是这个回归。
+- **纯函数不能留在服务类里**。`entity_profile_synthesizer.dart` 依赖 drift →
+  `database.dart` 会把 Flutter framework 拉进来，`dart` 直跑脚本直接编译失败
+  （报 `Offset isn't defined` 之类满屏 flutter 内部错误）。把这些规则抽到
+  `lib/ai/utils/profile_synthesis_text.dart` 后
+  `dart --disable-dart-dev tools/entity_profile_selftest.dart` 离线跑通，
+  也与 `output_sanitizer.dart` / `chapter_title.dart` 的既有约定一致。
+
+### 5. 顺带改动
+
+- `ModuleContract` 契约表抽为静态 `ModuleStateService.contractsOf(db)` 供归纳复用 ——
+  归纳扫描的表/列必须与抽取落库目标完全一致，否则会出现「抽取写进 A 列、
+  归纳却去 B 列找流水」的**静默错位**。
+- 归纳的 `maxEntities` 默认 **15**（候选按本卷流水条数降序）：归纳挂在整书收尾，
+  40 个实体 × 3 卷 = 120 次模型调用会把主流程拖长十分钟以上；按流水量排序后
+  前 15 个必然是主角与核心势力。
+
+### 6. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+38_windows_release.zip | 15432927 | `B140F96F4B2DA52A541DF687C845026E71F9C10D8A9FAC364A2EEA6095E3A35C` |
+| novelcraft_1.0.0+38_release.apk | 73702825 | `65CB12F1FAC31FDD0F27DDED30682F55ACDEE4553AF034D4216D4667DC1DBCCC` |
+| novelcraft_1.0.0+38_source.zip | 4082487 | 见 `发布清单-v1.0.0+38.md` |
+
+> ⚠ 源码 ZIP 的 SHA256 **以发布根目录的 `发布清单-v1.0.0+38.md` 为准**：
+> HANDOFF.md 本身就在源码包里，在包里写死「包含它自己的这个包的哈希」必然自相矛盾
+> （改一次 HANDOFF → 哈希变 → 再改 → 再变）。Windows / APK 两个包的哈希不在包内，可照写。
+
+### 7. 本轮验证
+
+- `lib/` **223 文件** + `test/` **46 文件** `error: 0 warning: 0`
+  （`dart --disable-dart-dev tools/analyze_inprocess.dart`）。
+- 新增 `tools/entity_profile_selftest.dart` → **24 pass / 0 fail**。
+- i18n 缺失扫描 → **1070 调用点 / 0 缺失**。
+- Windows `flutter build windows --release` → **EXIT=0 / 65.6s**。
+- Android `flutter build apk --release`（经 `subst S:`）→ **EXIT=0 / 87.4s**，70.3 MB。
+- `aapt2 dump badging` → `versionCode='38'`；Windows `data/app.so` 含 `1.0.0+38`、旧串已消失。
+- APK 验签 `Verifies`（v2），证书 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`
+  （与 +34 ~ +37 一致）。
+- 源码包 **510 条目**（+37 为 506），含 4 个新增源码/工具文件与 `备份说明-v1.0.0+38.md`；
+  包内 `pubspec.yaml` / `version.txt` 均为 `1.0.0+38`；零密钥零缓存。
+
+### 8. 仍未做 / 需注意
+
+- 未做：B3 抽取审核面板、C 阶段（C1 `StyleDigestService` Agent 拆书 → 写作模板、C2–C6）、
+  D3 端到端复测。
+- 已落库的脏章节（章名碎片、正文污染）**仍未清洗** —— 只保证「之后写出来的干净」。
+  批量清洗需直读 `C:\Users\Administrator\Documents\novelcraft.sqlite` 原地重写，
+  **破坏性操作，须先确认**（可先只读扫描出清单）。
+- 英文界面「项目概览」统计卡标签折行被轻微裁切（纯外观，未修）。
+- ⚠ `flutter test` 在本机沙箱不可用（Dart VM 无法 spawn 子进程）。B4 的纯逻辑
+  已由离线自检覆盖；需要数据库 + 模型打桩的链路**只做了类型检查，未实际运行**。
+
+---
+
+## 上一版交接：1.0.0+37（2026-10-09）
+
+用户真机实测 1.0.0+36 后报了 5 个问题。先出了一份定位+计划文档
+（`F:\30_Novelcraft_Flutter\完善计划-v1.0.0+36-实测问题定位.md`，三层取证：
+导出产物 + `novelcraft.sqlite` + 源码互相印证），用户确认「按你认可的最佳顺序进行」后，
+本轮完成 **阶段 A（止血）全部 + 阶段 B 的 B1/B2/B5**，并重建三个交付件。
+
+### 1. 阶段 A —— 五个问题的止血（A1–A7）
+
+| 编号 | 问题 | 修法 |
+| --- | --- | --- |
+| A1 | 正文混入 `【上文结尾】` 与被回灌的上文复述、段落重复 | 提示词去掉可被回抄的标记 →「前文末尾（仅供衔接，**不要输出这一段**）」；新增跨段重叠修剪 `_mergeSegment`（残句重起 / 前缀重叠两种形态）；清洗器新增该标记的整行与行内剥离规则 |
+| A2 | 全书 30 章标题全是大纲碎片、梗概是大纲原文截断 | 新增纯函数 `lib/ai/utils/chapter_title.dart`（`ChapterTitleParser.extractName/extractBrief`，含未闭合引号、元信息标签、跨行粘连、中文序号等判据）；不可靠时由 7.2B 走 `Book/chapterNames` 批量命名兜底 |
+| A3 | 单段落解析失败导致**整章**零抽取（且静默） | 抽取链路不再整章放弃：`validate` 的 source 放宽为全章、重试 2→3 次、`okChunks==0` 时走**行式兜底抽取**（`类别\|名称\|字段\|一句话`，名称必须在正文原样出现）、同实体同字段合并后再落库 |
+| A4 | 草稿章（生成坏掉被降级）完全不抽取 | 前置条件从「`status == 'Completed'`」放宽为「正文非空且过质量闸」 |
+| A5 | 导出目录泄漏示例项目的人物事件（林月/妖皇） | `character_events` **表无 `project_id` 列**（C# 原实现疏漏，刻意 1:1 复刻）→ 不改表结构，改用 `customSelect` + `INNER JOIN characters` 隔离 |
+| A6 | 时间线 location 章号 off-by-one | `marker` 由 `第${orderIndex+1}章` 改为 `第${orderIndex}章` |
+| A7 | 全书字数统计显示「0 字」 | 归档前 `chapters.getByProjectId()` 重读数据库聚合 |
+
+### 2. 阶段 B —— 单章重写能力（B1/B2/B5）
+
+- **B1** 新增 `lib/application/services/chapter_rewrite_service.dart`：按上下文
+  （**前章结尾 400 字 + 本章大纲/梗概 + 下章开头 400 字 + 项目设定摘要**）整章重写。
+  清洗与质量闸**直接复用** `MultiAgentBookGenerationService.cleanFinalChapter` /
+  `chapterQualityNote`（本轮把二者开了公开入口）—— 单章重写与整书生成对「什么算合格正文」
+  只能有一套口径，否则又是一处修好另一处照旧。质量闸不过**不覆盖原稿**并如实回报原因。
+- **B2** 三处入口，共用 `lib/ui/pages/chapter_rewrite_dialog.dart`（不可点掉的进度窗 + 结果 SnackBar）：
+  ① 写作动态矩阵：失败格「重写」小徽章 + 底部「重写全部草稿章」（批量串行）；
+  ② 章节列表：`Draft` 行尾「重写」；③ 章节编辑页表单顶部「按上下文整章重写」。
+  为支持①②，`EntityPageConfig` 新增 `rowActionBuilder` / `formActionBuilder` 两个可选钩子。
+- **B5** `ChapterAiStateService` 标注「未被装配的遗留实现」+ `@Deprecated`，并在文件头列出与
+  在用实现（`ModuleStateService`）的**行为级差异**。不删除：其配套的
+  `ai/utils/state_extraction_parser.dart` 与 `tool/verify_state_extraction_parser.dart` 仍在维护。
+
+### 3. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+37_windows_release.zip | 15408116 | `7E05C7ED49898764385F04527B0617B3708F6B2A68FBE619D9506F2DC74C9EC2` |
+| novelcraft_1.0.0+37_release.apk | 73588137 | `1722DC7A8282B43E46E212513CD5AE4B30C7C7CC22A2EE5CE3BA06E0867C4ADB` |
+| novelcraft_1.0.0+37_source.zip | 4060553 | 见 `发布清单-v1.0.0+37.md` |
+
+> ⚠ 源码 ZIP 的 SHA256 **以发布根目录的 `发布清单-v1.0.0+37.md` 为准**：
+> HANDOFF.md 本身就在源码包里，在包里写死「包含它自己的这个包的哈希」必然自相矛盾
+> （改一次 HANDOFF → 哈希变 → 再改 → 再变）。Windows / APK 两个包的哈希不在包内，可照写。
+
+### 4. 本轮验证
+
+- `lib/` **220 文件** + `test/` **45 文件** `error: 0 warning: 0`
+  （`dart --disable-dart-dev tools/analyze_inprocess.dart`）。
+- `tools/sanitizer_selftest.dart` → **28 pass / 0 fail**（新增 B14–B16 三条续写标记用例）。
+- 新增 `tools/chapter_title_selftest.dart` → **17 pass / 0 fail**（样本取自实测碎片）。
+- i18n 缺失扫描 → **1066 调用点 / 0 缺失**。
+- Windows `flutter build windows --release` → **EXIT=0 / 69.1s**；Android
+  `flutter build apk --release`（经 `subst S:`）→ **EXIT=0 / 192.1s**，70.2 MB。
+- `aapt2 dump badging` → `versionCode='37'`；Windows `data/app.so` 含 `1.0.0+37`、旧串已消失。
+- APK 验签 `Verifies`（v2），证书 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`。
+- 源码包 **506 条目**（+36 为 497），含 5 个新增源码/测试/工具文件与 `备份说明-v1.0.0+37.md`；
+  包内 `pubspec.yaml` / `version.txt` 均为 `1.0.0+37`；零密钥零缓存。
+
+### 5. 仍未做 / 需注意
+
+- ⚠ **`flutter test` 在本机沙箱不可用**（Dart VM 无法 spawn 子进程）。本轮新增/修改的
+  `test/module_state_service_test.dart`、`test/chapter_rewrite_service_test.dart`、
+  `test/writing_quality_gate_test.dart` **只做了类型检查，未实际运行** ——
+  请在能跑的环境执行确认。
+- 未做：B3 抽取审核面板、B4 `EntityProfileSynthesizer` 档案归纳、
+  C1 `StyleDigestService`（Agent 拆书 → 写作模板）、C2–C6、D3 端到端复测。
+- 已落库的脏章节（章名碎片、正文污染）**仍未清洗** —— 只保证「之后写出来的干净」。
+  批量清洗需直读 `C:\Users\Administrator\Documents\novelcraft.sqlite` 原地重写，
+  **破坏性操作，须先确认**（可先只读扫描出清单）。
+- 英文界面「项目概览」统计卡标签折行被轻微裁切（纯外观，未修）。
+
+---
+
+## 上一版交接：1.0.0+36（2026-10-07）
+
+在 1.0.0+35 那轮（三个 BUG 修复 + 编排改造）通过全量验证后，按用户要求**升级版本号并重新出包**。
+代码改动与 1.0.0+35 那轮一致（见下一节），本版额外做的是版本号收口与交付件重建。
+
+### 1. 版本号提升到 1.0.0+36
+
+- `pubspec.yaml`、工程根 `version.txt`、`tools/sync_release_snapshot.py` 的
+  `DEFAULT_VERSION`、`tools/package_release.py` 的 `--version` 默认值 → 全部 `1.0.0+36`。
+  `pubspec.yaml` 里已加注释，列出升版本时必须同步的三处。
+- 新增 `lib/core/app_version.dart`（`kAppVersion` / `kAppVersionLabel`），
+  修掉底部状态栏**硬编码 `v1.0.0+23`** 的历史问题（`app_shell.dart` 改引用常量）。
+  用常量而非 `package_info_plus`：本工程还要跑 Web，为一行版本号引入插件不划算。
+- 新增 `docs/功能使用说明-v1.0.0+36.md`、`docs/项目交接-v1.0.0+36.md`；
+  README / README.en.md 的徽章、正文版本号、文档链接、验证记录表全部更新。
+
+### 2. 交付件（`F:\30_Novelcraft_Flutter\`）
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+36_windows_release.zip | 15374348 | `DE6B24D577029A490D53444286443C448627ECEFDA883A6E2D7289C2D09D432D` |
+| novelcraft_1.0.0+36_release.apk | 73244073 | `B3795E2975337C9CC7E1049A13EFD1C761447877294E26405BEBA9C49A3C098A` |
+| novelcraft_1.0.0+36_source.zip | 4002044 | `AFD86B306DEF0569A45A371C5970B5350478FEEBBBDF43B8DA3CDB07472FCC25` |
+
+1.0.0+35 的三个交付件保留未删除。
+
+### 3. 本轮验证
+
+- Windows `flutter build windows --release` → **EXIT=0 / 60.1s**。
+  ⚠ `novelcraft.exe` 本轮**确实重新链接**了（时间戳 23:28:47）——
+  版本资源变化会触发重链接，这与「只改 Dart 代码时 exe 不重链接」的旧经验不同；
+  判断是否真的重构建，仍以 `data/app.so` 时间戳为准。
+- Android `flutter build apk --release`（经 `subst S:` ）→ **EXIT=0 / 82.8s**，69.9 MiB。
+- **版本号落地验证**（不只看构建日志）：
+  - `aapt2 dump badging` → `versionCode='36'`（旧件 `'35'`），`versionName='1.0.0'`。
+  - APK 三个 ABI 的 `libapp.so` 与 Windows `data/app.so` 中均检索到 `1.0.0+36`，
+    旧串 `1.0.0+35` 与 `v1.0.0+23` 均已消失。
+- APK 验签：`Verifies`、v2 方案、证书 `4fc478771c4fc823cbe24b6bd4bd93052660d5a48a3d1382a8c40189b466289d`。
+- 源码包 **497 条目**（+35 为 494），含 `lib/core/app_version.dart` 与两份 +36 文档；
+  包内 `pubspec.yaml` / `version.txt` 均为 `1.0.0+36`；零密钥零缓存。
+
+### 4. 经验
+
+- **版本号是四处独立记录**：`pubspec.yaml`、`version.txt`、`lib/core/app_version.dart`、
+  两个 tools 脚本的默认版本。少改一处就会出现「包名是 36、状态栏还是 23」这类错位。
+- 升版本后**必须重新构建两个产物**（版本号写进可执行文件，不是运行时读的配置）。
+
+---
+
+## 上一版交接：1.0.0+35 迭代（2026-10-07，第二轮）
+
+本轮承接用户真机（**手机端**）实测反馈，做三件事：**打补丁 → 架构编排改造 → 本地全量验证**。
+
+### 1. BUG 1 补丁：串行写书输出提纯（正则清洗器）
+
+用户截图暴露的泄漏**全部在正文之前**，三种真实形态（原文抄录见
+`lib/ai/utils/output_sanitizer.dart` 顶部注释与 `tools/sanitizer_selftest.dart` B1/B2/B3）：
+
+1. 自我介绍 + 处理说明前缀，**与正文同段**：
+   `你好，我是NovelCraft的主编智能体。我将严格保留原文……---润色后版本：“你们到底是谁？”她问道……`
+2. 修订稿抬头 + 星号字段，**正文紧跟同一行**：
+   `【主编修订稿】---第一章北极圈基地（正式）*目标：……*1991年，莫斯科……`
+3. 整行章节元信息区块（4~5 个字段挤一行，字段后还有元信息散文）→ **必须整行丢弃**。
+
+实现：`AIOutputSanitizer.stripMetaPreambles()`（与管尾部的 `stripStateUpdateBlocks`
+分工，**前者可并进 `extractCleanOutput`，后者绝不能**）。接入点两处：
+`extractCleanOutput` 与 `MultiAgentBookGenerationService._cleanFinalChapter`。
+
+**本轮新增长度安全阀** `_kMaxMetaLineChars = 800`：旧判据「一行塞 ≥2 个元信息小标题
+就整行丢」会被**单行长文**满足 —— 章节正文里恰好出现两个 `【人物】`/`【本章】`
+之类小标题时整章被吞。800 字覆盖真实抬头（实测 200~600），又远小于任何一章正文。
+
+### 2. BUG 2 补口：客户端 state 台账
+
+- **G1K 双模型模式下章节写作链路根本没用上客户端 state** —— 章节正文走的是
+  `temporaryWriter`（2.9B 端点），而它是**裸构造**（`sessionLedger = null`、
+  `clientStateEnabled = false`）。现在继承 DI 里 `cloud` 的台账与开关。
+- **`newSessionId()` 会撞 ID** —— 旧实现只用 `microsecond * 7919 % 1000003`，
+  Windows 上紧密循环 200 次**只得到 6 个不同值**；撞 ID 后服务端会把两条独立
+  state 链当成同一条，正是用户报的「服务器不知道哪个 state 对应哪个并发」。
+  现在 = `nc-<毫秒>-<进程内单调序号 base36>-<随机 4 位>`。
+- 台账键加**端点身份前缀**（`<baseUrl host>::<sessionKey>`）。
+- 新增 `test/rwkv_cloud_state_test.dart`（23 例，此前该模块**零覆盖**）。
+
+### 3. 架构编排改造（用户定的拓扑，已落代码）
+
+| 层次 | 编排 | 实现 |
+|---|---|---|
+| 主线大纲 | **串行** | 规划组 `leader` 单链，一次调用产出全书骨架 |
+| 支线大纲（分卷/章节） | **并行** | 9 条规划写手链；`_runPoolIndexed` 让**每个并发道固定绑一条通道** |
+| 单章内容 | **串行** | 每章各自一条 state 链，段与段严格串行 |
+| 全书章节 | **并行** | `lanes = cfg.concurrency`，章间零依赖，同时开工 |
+
+关键决策（**与上一轮会话粒度不同，已改**）：
+
+- 章节会话前缀从「项目级」改为 **`<projectId>::chapter::<章 id>`**。
+  原因：`duo`（默认工艺）只有 `leader` 一个角色，项目级共享链会让台账把所有章节
+  排成一条队 ——「N 章并行」直接退化成**整书严格串行**，`concurrency` 彻底失效。
+  改成章级后跨章一致性改由**提示词 + 章节验收通过后的设定回写**承担（不靠 state）。
+- **支线大纲不能按「任务序号 % 通道数」轮转**：章节大纲的序号是**卷内序号**
+  （每卷从 1 重新数），池宽 9 时第 10 个任务会退回通道 0，与在飞的第 1 个任务
+  **撞同一条会话**。现在改为 lane → 通道一一绑定。
+- **beam 的 N 份候选一律走无状态链路**（`_AgentChannel.send(isolated: true)`）：
+  候选是 `Future.wait` 并发的，共用 lead 的 state 会①候选互相污染
+  ②被台账 `runExclusive` 排成串行白给并发。候选数 == 1（G1K 双模型快写）
+  时是严格串行，**保留** state。
+- `team` 工艺是唯一的「章内并行」（9 写手各独享链），保留兼容但已非默认。
+
+### 4. 本轮验证（全绿）
+
+- `dart --disable-dart-dev tools/analyze_inprocess.dart lib test tools`
+  → **263 文件 / 0 error / 0 warning**
+- `dart --disable-dart-dev tools/sanitizer_selftest.dart` → **25 pass / 0 fail**
+- `flutter test` → **+416 ~1: All tests passed!**
+- `flutter build windows --release` → **EXIT=0 / 53.3s**
+- `flutter build apk --release` → 见发布清单
+
+### 5. 仍未做（需用户确认）
+
+- **已落库的脏章节批量清洗**：本轮只保证「之后写出来的章节干净」，真机截图里
+  那些**已写进数据库**的脏章节还在。可加 `tools/clean_polluted_chapters.dart`
+  直读 `Documents/novelcraft.sqlite` 原地重写 —— **破坏性操作，必须先确认**。
+
+### 6. 调试经验（本轮新增，值得复用）
+
+- **PS 5.1 `*>>` 混合编码陷阱**：`& $flutter test ... *>> $log` 写的是
+  **UTF-16LE**，而首行 `Out-File -Encoding utf8` 是单字节；且 native stdout 先被按
+  **GBK(936)** 解码成 mojibake 再转 UTF-16LE（`[Console]::OutputEncoding` 在无控制台时
+  **静默失效**）。还原配方：
+  `tail -c +95 <log> | iconv -f UTF-16LE -t UTF-8 | iconv -c -f UTF-8 -t GBK`
+- **测试失败原因直接在测试里写 UTF-8 诊断文件**（临时 `import 'dart:io'` +
+  `writeAsStringSync`，跑完 Read，再撤掉）比折腾控制台编码快得多。
+- `.ps1` **必须纯 ASCII**（无 BOM 时 PS 5.1 按 ANSI 解码，中文路径变乱码 →
+  `Set-Location` 失败 → `No pubspec.yaml file found`）。
+
+### 7. 第三轮收尾：交付件重建（2026-10-07）
+
+用户要求「全部完善之后，在本地跑一圈测试」。收尾时发现**打包链路本身已断**，
+属真实缺陷，已一并修掉：
+
+1. **脚本目录名断链**：发布清单第 20 行记的源码快照目录是
+   `Novelcraft_Flutter_source_v1.0.0+35`，但该目录**早已被改名**为
+   `novelcraft_1.0.0+35_source`，而 `package_release.py` 与
+   `sync_release_snapshot.py` 里都还硬编码旧名 →
+   `sync` 只打印「跳过（目录不存在）」（它不创建目录！）、`package_release.py`
+   在第 2 步直接 return 1 中断。
+   现两个脚本统一改为 `find_clean_snapshot()` **自动探测**
+   （`novelcraft_<版本>_source` → `Novelcraft_Flutter_source_v<版本>`），
+   并新增 `--source-snapshot` / 保持 `--release-root` 可显式覆盖。
+2. **快照不纳入新增文件**：`sync()` 原先只遍历**快照已有条目**，工程新建的文件
+   永远进不了对外源码包。实测漏掉 3 个：
+   `lib/ai/rwkv/rwkv_cloud_state.dart`（**BUG 2 的核心模块**）、
+   `test/rwkv_cloud_state_test.dart`、`tools/sanitizer_selftest.dart`。
+   现新增 `NEW_SOURCE_DIRS` 白名单（`lib/ test/ tools/ assets/ docs/ scripts/
+   integration_test/`）自动补入新增手写文件；平台目录（`android/ ios/ windows/`
+   等）**只更新不新增**，签名密钥 `upload-keystore.jks`、`key.properties`、
+   `local.properties`、`GeneratedPluginRegistrant` 等仍严格排除（已逐条验证：
+   源码包 494 条目，零密钥/零 `__pycache__`）。
+
+**交付件（已重建，位于 `F:\30_Novelcraft_Flutter\`）**：
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| novelcraft_1.0.0+35_windows_release.zip | 15374326 | `D5FDE85001FFEC084090AD8C04A59193AF1FD925E58F81808B5DA7554CE18445` |
+| novelcraft_1.0.0+35_source.zip | 3989385 | `D098B3CEB7E5EC388DE85C19A60F57A70744525F1C56B7CD6C216648E7DFFDAE` |
+| novelcraft_1.0.0+35_release.apk | 73244073 | `07A11B0E67F0DF38044EFB2B4F2312668B7457430A4538BD0B7837878A5779FB` |
+
+APK 为 arm64-v8a + armeabi-v7a + x86_64 三 ABI（69.9 MiB），
+包名 `com.novelcraft.novelcraft`，versionName `1.0.0` / versionCode `35`。
+**手机端复测直接装这个 APK。**
+
+---
+
+## 上一版交接：1.0.0+35（2026-10-04）
 
 新增写作工艺节点 Prompt 配置，支持多模板、编辑保存、选择生效与重启恢复。
 详细接入点、测试结果、发布流程及继承的未完成问题见 [本版交接](docs/项目交接-v1.0.0+35.md)；操作见 [功能使用说明](docs/功能使用说明-v1.0.0+35.md)。

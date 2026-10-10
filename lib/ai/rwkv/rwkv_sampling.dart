@@ -17,6 +17,8 @@
 // 调用方必须先用 [isRwkvFamilyProvider] 判断。
 library;
 
+import '../models/batch_chat.dart' show kRwkvDefaultStopTokens;
+
 /// RWKV 家族防复读采样参数（全集）。
 const Map<String, Object?> kRwkvAntiRepeatSampling = <String, Object?>{
   // RWKV 原生（rwkv_lightning）
@@ -25,6 +27,14 @@ const Map<String, Object?> kRwkvAntiRepeatSampling = <String, Object?>{
   'alpha_presence': 2.0,
   'alpha_frequency': 0.2,
   'alpha_decay': 0.996,
+  // 官方默认停止 token（整数 token ID，CUDA 后端约定）。
+  //
+  // ⚠ +46 修复：此前**只有有状态路由**（/state/*、/v1/batch/*）会带这个键，
+  // 无状态 `/v1/chat/completions` 一直没发 → 长文退化复读在停止符层面完全裸奔
+  // （采样惩罚 + 正则清洗都只是「事后补救」，stop token 是「事中止损」）。
+  // 现在经 OpenAI 兼容基类 `_buildExtraFields` 白名单（'stop_tokens' 已在其中）
+  // 展平到请求顶层，对齐有状态路由的既有行为。见交接文档 docs/交接-复读问题。
+  'stop_tokens': kRwkvDefaultStopTokens,
   // llama.cpp DRY 采样器
   'dry_multiplier': 0.8,
   'dry_base': 1.75,

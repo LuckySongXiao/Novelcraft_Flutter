@@ -32,10 +32,11 @@ void main() {
     service = ModuleStateService(db: db, provider: () => model);
   });
   tearDown(() => db.close());
-  ChapterSyncInput input(String source) => ChapterSyncInput(
-    chapterId: 'chapter', volumeId: 'v', projectId: 'p', title: '门后',
-    orderIndex: 1, content: source, status: 'Completed',
-  );
+  ChapterSyncInput input(String source, {String status = 'Completed'}) =>
+      ChapterSyncInput(
+        chapterId: 'chapter', volumeId: 'v', projectId: 'p', title: '门后',
+        orderIndex: 1, content: source, status: status,
+      );
   Map<String, dynamic> update(String target, String name) => {
     'target': target, 'action': 'create', 'name': name,
     'field': 'history', 'content': '$name出现在城中。', 'evidence': '$name出现在城中。',
@@ -86,5 +87,63 @@ void main() {
     expect(ModuleStateService.parse('说明\n{"updates":[]}尾注'), isNotNull);
     expect(ModuleStateService.parse('{"foo":[]}'), isNull);
     expect(ModuleStateService.parse('不需要更新'), isNull);
+  });
+
+  // ---- A4：前置条件放宽（Draft 也抽取） ----
+  test('draft chapter with valid prose is still mined', () async {
+    model.answer = (_) => jsonEncode({
+      'updates': [
+        {
+          'target': 'character', 'action': 'create', 'name': '林轩',
+          'field': 'history', 'content': '林轩走出城门。', 'evidence': '林轩走出城门。',
+        },
+      ],
+    });
+    final String? note =
+        await service.extractAndApply(input('林轩走出城门。', status: 'Draft'));
+    expect(note, contains('更新 1 项'));
+    expect((await db.select(db.characters).get()).single.name, '林轩');
+  });
+
+  test('empty prose is skipped silently', () async {
+    expect(await service.extractAndApply(input('   ')), isNull);
+    expect(model.requests, isEmpty);
+  });
+
+  // ---- A3：严格 JSON 全线失败后不再整章放弃，改走行式兜底 ----
+  test('loose line fallback salvages updates when strict JSON never parses',
+      () async {
+    model.answer = (req) {
+      final String prompt = req.messages.single.content;
+      if (prompt.contains('类别|名称|字段|一句话变化')) {
+        return '人物|林轩|履历|林轩在城门口救下了沈砚。';
+      }
+      return '抱歉，我无法完成这个任务。'; // 严格 JSON 三次全败
+    };
+    final String? note = await service.extractAndApply(input('林轩在城门口救下了沈砚。'));
+    expect(note, contains('更新 1 项'));
+    final rows = await db.select(db.characters).get();
+    expect(rows.single.name, '林轩');
+    expect(rows.single.history, contains('林轩在城门口救下了沈砚。'));
+  });
+
+  test('failure prefix is returned when strict and loose both fail', () async {
+    model.answer = (_) => '抱歉，我无法完成这个任务。';
+    final String? note = await service.extractAndApply(input('林轩在城门口救下了沈砚。'));
+    expect(note, startsWith(kAiExtractionFailurePrefix));
+  });
+
+  // ---- A3：行式兜底的防幻觉闸门（名称必须原样出现在正文里） ----
+  test('loose line whose name never appears in prose is rejected', () async {
+    model.answer = (req) {
+      final String prompt = req.messages.single.content;
+      if (prompt.contains('类别|名称|字段|一句话变化')) {
+        return '人物|赵云|履历|赵云在城门口救下了沈砚。';
+      }
+      return '抱歉，我无法完成这个任务。';
+    };
+    final String? note = await service.extractAndApply(input('林轩在城门口救下了沈砚。'));
+    expect(note, startsWith(kAiExtractionFailurePrefix));
+    expect(await db.select(db.characters).get(), isEmpty);
   });
 }

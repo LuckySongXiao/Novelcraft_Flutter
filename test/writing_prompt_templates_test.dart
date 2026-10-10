@@ -76,7 +76,10 @@ void main() {
       store,
       bookPromptStages,
     );
-    expect(recovered.loadWarning, isNotNull);
+    // 字段名是 `loadFailed`（bool）；UI 侧 `writing_prompt_settings_page.dart`
+    // 就是读它来提示「模板读取失败，已回退默认」。旧测试引用的 `loadWarning`
+    // 早已不存在 —— 属于历史遗留的过期断言。
+    expect(recovered.loadFailed, isTrue);
     expect(recovered.body('Book/mainOutline'), body);
     expect(store.raw, '{broken');
   });
@@ -88,9 +91,12 @@ void main() {
     expect(stage.validate('没有上下文'), isNotNull);
     expect(stage.validate('{{chunk}} {{typo}}'), isNotNull);
     expect(stage.validate('{{chunk}} {{broken'), isNotNull);
+    // 领域层不 import l10n：错误一律抛携带 `key + 中文兜底 + args` 的
+    // `PromptTemplateException`，由 UI 侧用 L10n 渲染。旧的 `FormatException`
+    // 断言是历史遗留（见 `writing_prompt_templates.dart` `withStage` 实现）。
     expect(
       () => settings.withStage(stage.id, [], 'missing'),
-      throwsFormatException,
+      throwsA(isA<PromptTemplateException>()),
     );
   });
 
@@ -147,7 +153,13 @@ void main() {
       writingProvider: () => null,
       promptTemplates: settings,
       chatExecutor:
-          (system, messages, {required maxTokens, temperature = .85}) async {
+          (
+            system,
+            messages, {
+            required maxTokens,
+            temperature = .85,
+            String? sessionKey,
+          }) async {
             sent = messages.last.content;
             return '';
           },

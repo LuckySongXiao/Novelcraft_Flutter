@@ -1,5 +1,23 @@
 // AI 状态抽取服务 —— 功能 C 二级。
 //
+// ⚠⚠ **本实现未被装配，属于历史遗留，请勿在此修复 BUG** ⚠⚠
+//
+// 线上跑的是 `lib/application/services/module_state_service.dart`
+// （DI 见 `lib/core/di.dart` 的 `chapterPostProcessServiceProvider` →
+// `post.aiStage = aiState.extractAndApply`）。两份实现的差异是**行为级**的：
+//
+//   本文件（遗留）                         module_state_service（在用）
+//   ────────────────────────────────────  ──────────────────────────────────────
+//   仅对**已存在**的实体做精确名匹配         `action:create` 会新建缺失实体
+//     → 新角色/新设定永远抽不到（正是实测里「人物/世界观毫无变化」的成因之一）
+//   只写 status / history / notes 三类      覆盖 12 类契约（含 timeline 事件）
+//   无 Draft 章限制说明，实际由调用方过滤   已放宽为「正文非空且过质量闸即可」
+//   失败一律返回 null（无原因）             失败返回带原因前缀的说明（可见、可重试）
+//
+// 保留它的唯一理由：它配套的 `ai/utils/state_extraction_parser.dart` 与
+// `tool/verify_state_extraction_parser.dart` 仍在维护，可作对照参考。
+// 若将来确认不再需要，请连同解析器与验证脚本一并删除（见完善计划 B5）。
+//
 // 章节落库后（可选开关，默认关）让写作模型从正文抽取结构化状态变化，
 // **name 与库内实体精确相等才应用**，防幻觉行污染：
 //   人物   status            ← 抽取（Characters.status）
@@ -25,6 +43,9 @@ import '../../data/repositories/repository_base.dart' show notDeleted;
 import 'chapter_sync_service.dart';
 
 /// AI 状态抽取服务。
+///
+/// 见文件头：**未被装配的遗留实现**，在用实现是 `ModuleStateService`。
+@Deprecated('未被装配（遗留实现）。在用实现见 module_state_service.dart。')
 class ChapterAiStateService {
   ChapterAiStateService({
     required AppDatabase db,

@@ -6,6 +6,33 @@ import '../../ai/utils/fiction_quality.dart';
 enum ChapterAiAction { polish, dedupePolish, expand, continueWrite, rewrite }
 
 abstract final class SelectionEditService {
+  /// 各动作的**字数纪律**（2026-10-10 用户实测「续写的字数依然未达标」后补上
+  /// —— 此前续写提示词没有任何字数要求，模型随手给一两百字就交差）。
+  ///
+  /// * `continueWrite`：目标约 1200 字、下限 600 字 —— 选节级续写要能接出
+  ///   一个完整场面，而不是补一句话；
+  /// * `expand`：目标 ≈ 选区 ×2（扩写本来就是要「变大」）；
+  /// * 其余动作不设字数目标（润色/去重润色长度应与原文相当，重写按选区体量）。
+  /// 「作者要求（优先于默认操作）」里写了字数时以作者要求为准 —— 提示词顺序
+  /// 已保证这一点。
+  static int wordTarget(ChapterAiAction action, int selectedLength) =>
+      switch (action) {
+        ChapterAiAction.continueWrite => 1200,
+        ChapterAiAction.expand =>
+          (selectedLength * 2).clamp(400, 2000),
+        _ => 0,
+      };
+
+  /// 按动作给足输出预算：字数目标 ≈ tokens × 0.55，缺省沿用
+  /// `FictionQuality.generate` 的 1800。
+  static int maxTokens(ChapterAiAction action, int selectedLength) =>
+      switch (action) {
+        ChapterAiAction.continueWrite => 2400,
+        ChapterAiAction.expand =>
+          (wordTarget(action, selectedLength) * 2).clamp(1200, 3200),
+        _ => 1800,
+      };
+
   static String buildPrompt({
     required ChapterAiAction action,
     required String selected,
@@ -36,11 +63,20 @@ abstract final class SelectionEditService {
             ChapterAiAction.continueWrite => '仅输出紧接选区的新增正文，不重复选区，不复述后文。',
             ChapterAiAction.rewrite => '',
           };
+    // 字数纪律：写进提示词的硬要求（作者要求在它之前，写了字数时以作者为准）。
+    final int target = wordTarget(action, selected.length);
+    final String lengthRule = target <= 0
+        ? ''
+        : (action == ChapterAiAction.continueWrite
+            ? '\n篇幅要求：本次续写目标约 $target 字（下限 ${target ~/ 2} 字），'
+                '要写出一个完整的场面，不要一两句话就收。'
+            : '\n篇幅要求：本次扩写目标约 $target 字。');
     return '任务：$operation\n作者要求（优先于默认操作）：$instruction\n'
         '卷大纲：$volumeOutline\n章大纲：$chapterOutline\n'
         '上一章结尾：$prevChapterTail\n'
         '<before>$before</before>\n<selection>$selected</selection>\n<after>$after</after>\n'
-        '只输出本次处理的片段，不输出 before/after、标题、标签、解释或原文对照。';
+        '只输出本次处理的片段，不输出 before/after、标题、标签、解释或原文对照。'
+        '$lengthRule';
   }
 
   static Future<String> edit({
@@ -56,6 +92,7 @@ abstract final class SelectionEditService {
   }) => FictionQuality.generate(
     chat: provider.chat,
     model: model,
+    maxTokens: maxTokens(action, selected.length),
     prompt: buildPrompt(
       action: action, selected: selected, fullContent: fullContent,
       instruction: instruction, chapterOutline: chapterOutline,
@@ -70,6 +107,13 @@ abstract final class SelectionEditService {
           !RegExp(r'重写|无效|精简|缩短|rewrite|shorten', caseSensitive: false).hasMatch(instruction) &&
           text.length < selected.length * .6) {
         return 'truncated_selection';
+      }
+      // 续写下限：目标 1200 字的 50%（600 字）—— 两次尝试都不足即如实报错，
+      // 让用户看到「续写太短」而不是默默收下一段尾巴。
+      if (action == ChapterAiAction.continueWrite &&
+          !RegExp(r'精简|缩短|shorten', caseSensitive: false).hasMatch(instruction) &&
+          text.length < wordTarget(action, selected.length) ~/ 2) {
+        return 'continuation_too_short (${text.length} chars)';
       }
       return null;
     },

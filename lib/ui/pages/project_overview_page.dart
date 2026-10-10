@@ -9,6 +9,7 @@ import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 import '../layout/navigation.dart';
 import '../state/multi_agent_run.dart';
+import 'multi_agent_run_matrix_dialog.dart';
 
 /// 项目概览页 —— 对应 C# 的「项目仪表盘 / 首页」
 ///
@@ -206,6 +207,9 @@ class ProjectOverviewPage extends ConsumerWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                // 上次写作的回看入口（见 _LastRunBanner 的说明）。
+                _LastRunBanner(projectId: projectId),
               ],
             ),
           ),
@@ -286,31 +290,137 @@ class ProjectOverviewPage extends ConsumerWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    int reviewed = 0;
-    int applied = 0;
-    for (final chapter in chapters) {
-      if (!context.mounted) return;
-      final report = await ref.read(bookContentReviewServiceProvider).reviewChapter(
-        projectId: projectId,
-        chapterId: chapter.id,
-        apply: true,
-      );
-      if (report != null) {
-        reviewed++;
-        if (report.applied) applied++;
+
+    // ⚠ 这里必须给进度：一次全书审查是「章数 × (N 位客座读者 + 7B + 13B + 3B)」
+    // 串行模型调用，30 章就是上百次往返、几十分钟。旧实现**没有任何反馈**，
+    // 点下去界面像死掉，用户自然会认为「审查功能没生效」。
+    final ValueNotifier<int> doneCount = ValueNotifier<int>(0);
+    final ValueNotifier<String> currentTitle = ValueNotifier<String>('');
+    final ValueNotifier<({int reviewed, int applied, int failed})?> finished =
+        ValueNotifier<({int reviewed, int applied, int failed})?>(null);
+    bool cancelled = false;
+
+    // 后台逐章跑，句柄留着：关窗后要 await 它，否则「取消」那条分支读到的
+    // `finished.value` 还是 null（当前那一章尚在飞），取消文案与统计都出不来。
+    final Future<void> task = () async {
+      int reviewed = 0;
+      int applied = 0;
+      int failed = 0;
+      final service = ref.read(bookContentReviewServiceProvider);
+      for (final chapter in chapters) {
+        if (cancelled) break;
+        currentTitle.value = chapter.title;
+        try {
+          final report = await service.reviewChapter(
+            projectId: projectId,
+            chapterId: chapter.id,
+            apply: true,
+          );
+          if (report == null) {
+            failed++;
+          } else {
+            reviewed++;
+            if (report.applied) applied++;
+          }
+        } on Object {
+          failed++;
+        }
+        doneCount.value = doneCount.value + 1;
       }
-    }
-    if (!context.mounted) return;
+      finished.value = (reviewed: reviewed, applied: applied, failed: failed);
+    }();
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
+        content: SizedBox(
+          width: 440,
+          child: ValueListenableBuilder<({int reviewed, int applied, int failed})?>(
+            valueListenable: finished,
+            builder: (BuildContext ctx2, r, _) {
+              if (r != null) {
+                // 收工 → 自动关窗（下一帧，避免在 build 里 pop）
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (Navigator.of(ctx2).canPop()) Navigator.of(ctx2).pop();
+                });
+                return Text(
+                  l10n.tf(
+                    'PO.ReviewSummaryFmt',
+                    '已审查 {0} 章，其中 3B 已改进 {1} 章，{2} 章未产出结果。',
+                    <Object>[r.reviewed, r.applied, r.failed],
+                  ),
+                );
+              }
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  ValueListenableBuilder<int>(
+                    valueListenable: doneCount,
+                    builder: (_, int d, _) => LinearProgressIndicator(
+                      value: chapters.isEmpty ? null : d / chapters.length,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ValueListenableBuilder<int>(
+                    valueListenable: doneCount,
+                    builder: (_, int d, _) => Text(
+                      l10n.tf('PO.ReviewProgressFmt', '正在审查第 {0}/{1} 章',
+                          <Object>[d + 1 > chapters.length ? chapters.length : d + 1, chapters.length]),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ValueListenableBuilder<String>(
+                    valueListenable: currentTitle,
+                    builder: (_, String title, _) => Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: <Widget>[
+          ValueListenableBuilder<({int reviewed, int applied, int failed})?>(
+            valueListenable: finished,
+            builder: (BuildContext ctx2, r, _) => r != null
+                ? const SizedBox.shrink()
+                : TextButton(
+                    onPressed: () {
+                      cancelled = true;
+                      Navigator.of(ctx2).pop();
+                    },
+                    child: Text(l10n.t('Common.Cancel', '取消')),
+                  ),
+          ),
+        ],
+      ),
+    );
+
+    // 取消时对话框立刻关闭，但「当前那一章」还在飞 —— 等它落地再读统计。
+    await task;
+
+    ref.invalidate(projectStatsProvider(projectId));
+    final ({int reviewed, int applied, int failed})? r = finished.value;
+    if (!context.mounted || r == null) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(
-        l10n.tf(
-          'PO.ReviewDoneFmt',
-          '审查完成：已审查 {0} 章，3B 已改进 {1} 章。留言已保存。',
-          <Object>[reviewed, applied],
-        ),
+        cancelled
+            ? l10n.tf('PO.ReviewCancelledFmt', '已取消：到停止为止审查了 {0} 章。',
+                <Object>[r.reviewed])
+            : l10n.tf(
+                'PO.ReviewDoneFmt',
+                '审查完成：已审查 {0} 章，3B 已改进 {1} 章。留言已保存。',
+                <Object>[r.reviewed, r.applied],
+              ),
       ),
     ));
-    ref.invalidate(projectStatsProvider(projectId));
   }
 
   Future<void> _showReviewComments(BuildContext context, WidgetRef ref) async {
@@ -553,5 +663,71 @@ class _StatCard extends StatelessWidget {
       if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}k';
     }
     return '$n';
+  }
+}
+
+/// 「上次写作详情」入口 —— 运行结束后仍能回看章节矩阵与 NG 统计。
+///
+/// 以前矩阵悬浮窗写完自动关闭、运行状态被丢弃，作者想再看看「哪几章 NG 了」
+/// 就只能重跑一次（实测痛点）。现在运行状态保留在内存里，这里按 [projectId]
+/// 匹配 —— 只在本项目的概览页出现，A 项目不会显示 B 项目的结果。
+class _LastRunBanner extends ConsumerWidget {
+  const _LastRunBanner({required this.projectId});
+
+  final String projectId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final MultiAgentRunState? run = ref.watch(multiAgentRunProvider);
+    // 只有「已结束且本项目的运行」才显示；运行中交给 AppBar 的绿色长条。
+    if (run == null || !run.hasLastRun) return const SizedBox.shrink();
+    if (run.projectId.trim().isEmpty || run.projectId != projectId) {
+      return const SizedBox.shrink();
+    }
+    final l10n = ref.watch(l10nProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final bool hasNg = run.failedCount > 0;
+    final double? ng = run.ngRate;
+    final String pct = ng == null ? '' : '${(ng * 100).round()}%';
+    final Color tone = hasNg ? scheme.error : scheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: tone.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: tone.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            hasNg ? Icons.error_outline : Icons.check_circle_outline,
+            size: 18,
+            color: tone,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              hasNg
+                  ? l10n.tf('PO.LastRunNgFmt',
+                      '上次写作：{0} 章里 {1} 章 NG（NG 率 {2}）',
+                      <Object>[run.chapters.length, run.failedCount, pct])
+                  : l10n.tf('PO.LastRunOkFmt', '上次写作：{0} 章全部定稿',
+                      <Object>[run.chapters.length]),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: () => showMultiAgentRunMatrixDialog(context),
+            icon: const Icon(Icons.grid_view_outlined, size: 16),
+            label: Text(
+              l10n.t('PO.LastRunOpen', '查看本次写作详情'),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

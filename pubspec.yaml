@@ -16,7 +16,10 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+35
+#
+# ⚠ 升版本号时要同步改三处：这里、根目录 `version.txt`、`lib/core/app_version.dart`
+#   （状态栏显示用），以及 `tools/*.py` 里的 DEFAULT_VERSION。
+version: 1.0.0+46
 
 environment:
   sdk: ^3.10.4

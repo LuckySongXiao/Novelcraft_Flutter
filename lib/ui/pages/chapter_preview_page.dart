@@ -1,10 +1,13 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SelectedContentRange;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../ai/utils/selection_apply_text.dart';
 import '../../application/services/chapter_stats_service.dart';
 import '../../core/di.dart';
 import '../../core/enums/pseudo_enums.dart';
+import '../../data/database.dart';
 import '../../l10n/l10n.dart';
 import '../state/sticky_selection.dart';
 import 'chapter_ai_panel.dart';
@@ -31,6 +34,14 @@ class ChapterPreviewPage extends ConsumerStatefulWidget {
 class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
   double _fontSize = 17;
   bool _aiPanelOpen = false;
+
+  /// 选节 AI 结果是否已应用过 —— 离开本页时据此把最新 `_values` 带回表单
+  ///（防覆盖：应用后表单必须回填，否则旧的表单快照一保存就把结果冲掉）。
+  bool _applied = false;
+  bool _applying = false;
+
+  /// 应用计数 —— 作为面板 key，应用成功后强制重建面板（清掉旧结果与选区状态）。
+  int _applyTick = 0;
 
   /// 粘性选区：SelectionArea 在指针按下其子树之外（含本页 AppBar 的 AI 开关、
   /// 面板输入框）时会清空选区并回调 null —— 直接回写会让「先选中文本再点
@@ -185,6 +196,76 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
     });
   }
 
+  /// **采纳应用**：把选节 AI 结果写回章节正文（用户确认后触发）。
+  ///
+  /// 语义（用户实测拍板）：续写 = 插到所选文本的下一段；润色 / 去重润色 /
+  /// 扩写 / 重写 = 替换所选文本。文本手术走纯规则 `applySelectionResult`，
+  /// 落库后本页即时刷新（应用结果立刻可见），并把 `_values` 标脏 ——
+  /// 离开页面时带回表单回填，防止旧表单快照覆盖已应用的内容。
+  Future<void> _applyResult(String result, ChapterAiAction action) async {
+    final l10n = ref.read(l10nProvider);
+    final String? id = _values['id']?.toString();
+    if (id == null || id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(l10n.t('RAI.ApplyNoId', '本章尚未保存，无法写回正文；请先保存章节后再使用采纳应用')),
+      ));
+      return;
+    }
+    final String selected = _selection.text.trim();
+    if (selected.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(l10n.t('RAI.NeedSelection', '请先在正文中选中一段文字，再使用 AI 操作')),
+      ));
+      return;
+    }
+    final bool insertAfter = action == ChapterAiAction.continueWrite;
+    setState(() => _applying = true);
+    try {
+      final String newContent = applySelectionResult(
+        content: _displayContent,
+        selected: selected,
+        result: result,
+        insertAfter: insertAfter,
+      );
+      final row = await ref.read(chapterServiceProvider).getById(id);
+      if (row == null) throw StateError('章节不存在或已被删除');
+      final DateTime now = DateTime.now();
+      final int newVersion = row.versionNumber + 1;
+      await ref.read(chapterServiceProvider).updateById(
+        id,
+        ChaptersCompanion(
+          content: Value(newContent),
+          wordCount: Value(newContent.length),
+          lastEditedAt: Value(now),
+          versionNumber: Value(newVersion),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _values
+          ..['content'] = newContent
+          ..['wordCount'] = newContent.length
+          ..['versionNumber'] = newVersion
+          ..['lastEditedAt'] = now;
+        _applied = true;
+        _applying = false;
+        _applyTick++;
+        _selection.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(insertAfter
+            ? l10n.t('RAI.AppliedInsert', '已应用：续写内容已插入为所选文本的下一段')
+            : l10n.t('RAI.AppliedReplace', '已应用：所选文本已被 AI 结果替换')),
+      ));
+    } on Object catch (e) {
+      if (!mounted) return;
+      setState(() => _applying = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(l10n.tf('RAI.ApplyFailedFmt', '应用失败，正文未修改：{0}', <Object>[e])),
+      ));
+    }
+  }
+
   /// 智能排版：视口宽度 → 正文列最大宽（最佳阅读行长约 35-45 字）。
   double _contentMaxWidth(double viewportWidth) {
     if (viewportWidth >= 1600) return 960;
@@ -224,7 +305,15 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
 
     final ChapterStats stats = ChapterStatsService.compute(content: content);
 
-    return Scaffold(
+    // 离开本页时把最新快照带回表单（仅当应用过 AI 结果）——
+    // 否则表单还持有应用前的旧正文，用户一保存就把结果冲掉。
+    return PopScope<Object?>(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        Navigator.pop(context, _applied ? _values : null);
+      },
+      child: Scaffold(
       appBar: AppBar(
         // 复用 C# 移植死键：CPV.TitleFmt = '章节预览 - {0}'
         title: Text(l10n.tf('CPV.TitleFmt', '章节预览 - {0}', [title])),
@@ -419,13 +508,21 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
                                 Container(
                                   key: _aiPanelKey,
                                   child: ChapterAiPanel(
+                                    // key 随应用次数递增：应用成功后面板整体重建，
+                                    // 旧结果与旧选区状态一并清空，避免重复应用。
+                                    key: ValueKey<int>(_applyTick),
                                     selectedText: _selection.text,
-                                    fullContent: content,
+                                    // ⚠ 用展示态正文：选区文本来自阅读视图，
+                                    // 对同一份串做 indexOf 才永远命中。
+                                    fullContent: _displayContent,
                                     chapterOutline: _chapterOutline,
                                     volumeOutline: _volumeOutline,
                                     prevChapterTail: _prevChapterTail,
                                     onClearSelection: () =>
                                         setState(_selection.clear),
+                                    onApply: _applying
+                                        ? null
+                                        : _applyResult,
                                   ),
                                 ),
                               ],
@@ -466,6 +563,7 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
                 );
               },
             ),
+      ),
     );
   }
 

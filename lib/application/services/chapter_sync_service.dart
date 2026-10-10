@@ -23,6 +23,18 @@ import 'package:uuid/uuid.dart';
 import '../../data/database.dart';
 import '../../data/repositories/repository_base.dart' show notDeleted;
 
+/// AI 状态抽取「**未产出**」说明的前缀（`ModuleStateService.extractAndApply`
+/// 在严格 JSON 与行式兜底都失败时返回的文本以此开头）。
+///
+/// 为什么要这个约定：`ChapterSyncAiStage` 的返回类型是 `String?`，而
+/// `ChapterPostProcessService` 用「返回非空」判定「AI 抽取成功」。若不区分，
+/// 一条**失败说明**会被当成成功回报并写进「已同步」签名，失败就永远被藏起来了。
+/// 消费方必须用本前缀把「真写了东西」与「带着原因跳过」分开。
+///
+/// 定义在本文件（最底层、无内部依赖）是为了让 `module_state_service.dart`
+/// 与 `chapter_post_process_service.dart` 共用同一个真值，避免两份字面量漂移。
+const String kAiExtractionFailurePrefix = 'AI 抽取未产出：';
+
 /// 同步输入（由落库出口组装，避免依赖 ChapterRow 完整生命周期）。
 class ChapterSyncInput {
   const ChapterSyncInput({
@@ -38,6 +50,7 @@ class ChapterSyncInput {
     this.status = 'Draft',
     this.versionNumber = 1,
     this.eventDate,
+    this.storyTime = '',
     this.characterHints = const <String>{},
   });
 
@@ -59,6 +72,16 @@ class ChapterSyncInput {
   /// 落库后的业务版本号（防重：同章同版本不重复同步）。
   final int versionNumber;
   final DateTime? eventDate;
+
+  /// **故事内时间节点**（如「第三日黄昏」「祭祀当夜」）—— 由「大纲修订」阶段抽出
+  /// （见 `ChapterRewriteService.repairOutlineAndRewrite`）。
+  ///
+  /// 与 [eventDate] 的分工：后者是**现实时间**，只用于时间线排序；前者才是作者
+  /// 在界面上要看的「这一章发生在什么时候」。非空时会：
+  ///   1. 作为角色/势力/世界观**履历条目**的前缀（`第N章《…》（第三日黄昏）：…`）；
+  ///   2. 写进 `character_events.storyTime` 列（该列的既有语义正是「书籍世界内的时间」）；
+  ///   3. 作为时间线事件描述的抬头（`【故事时间：第三日黄昏】…`）。
+  final String storyTime;
 
   /// 关联改稿时可带上作者指名的人物提示（对应 C# relatedCharactersText）。
   final Set<String> characterHints;
@@ -185,7 +208,21 @@ class ChapterSyncService {
       input.notes ?? '',
     ].where((String s) => s.trim().isNotEmpty).join('\n');
     final String summaryText = _summaryText(input);
-    final String marker = '第${input.orderIndex + 1}章《${input.title}》';
+    // ⚠ `orderIndex` 已经是 **1-based**（`chapters.order_index`：第一章 = 1，
+    // 见 `_writeChapterSlots` 落库与 `ChapterDedupGuard` 的约定）。旧实现写成
+    // `input.orderIndex + 1` → 时间线事件的 location 恒比标题多一章
+    // （用户实测：标题「第一卷·第二章·…」而 location 写「第3章」，全书 27 条全错）。
+    // orderIndex 缺失（<=0）时退化为不带章号的 marker，不猜数字。
+    final String marker = input.orderIndex > 0
+        ? '第${input.orderIndex}章《${input.title}》'
+        : '《${input.title}》';
+    // 履历条目用的前缀：在章标记后带上**故事内时间节点**（若有）。
+    //
+    // 用户诉求是「更新该章对应时间节点的相关素材的履历」—— 只有章号、没有时间，
+    // 角色档案里读到的一串变更日志仍然看不出先后发生在什么时候。
+    final String storyLabel = _cleanStoryTime(input.storyTime);
+    final String storyMarker =
+        storyLabel.isEmpty ? marker : '$marker（$storyLabel）';
     final DateTime now = DateTime.now();
 
     // ---- 2. 人物 ----
@@ -198,7 +235,7 @@ class ChapterSyncService {
     ];
     final int currentOrder = orderLookup[input.chapterId] ?? 1 << 30;
     for (final CharacterRow c in matchedCharacters) {
-      final String entry = '$marker：$summaryText';
+      final String entry = '$storyMarker：$summaryText';
       // 首末出场章节（对齐 C# UpdateAppearanceRange）
       // ⚠ firstOrder 为 null 有两种含义：①从未设定首出场 → 应设本章；
       // ②首出场章节已被删除（orderLookup 查不到）→ **保持原值不动**，
@@ -243,7 +280,9 @@ class ChapterSyncService {
                 title: marker,
                 description: Value(summaryText),
                 eventType: const Value('章节更新'),
-                storyTime: Value(marker),
+                // `storyTime` 列的既有语义就是「书籍世界内的时间」——有故事内
+                // 时间节点时用真值，没有时退化回章标记（保持既有行为不变）。
+                storyTime: Value(storyLabel.isEmpty ? marker : storyLabel),
                 orderIndex: Value(events.length),
                 chapterId: Value(input.chapterId),
                 tags: Value(input.tags ?? c.tags),
@@ -255,7 +294,7 @@ class ChapterSyncService {
             .write(CharacterEventsCompanion(
           title: Value(marker),
           description: Value(summaryText),
-          storyTime: Value(marker),
+          storyTime: Value(storyLabel.isEmpty ? marker : storyLabel),
           tags: Value(input.tags ?? existing.tags),
           updatedAt: Value(now),
         ));
@@ -286,10 +325,10 @@ class ChapterSyncService {
           // 噪音收紧：只有正文**确实提到**势力名才追加历史/备注——
           // 「出场角色所属势力」每章必触发追加，会把 notes 刷成噪音墙
           history: Value(mentionedInText
-              ? _appendUnique(f.history, '$marker：$summaryText')
+              ? _appendUnique(f.history, '$storyMarker：$summaryText')
               : f.history),
           notes: Value(mentionedInText
-              ? _appendUnique(f.notes, '$marker：同步更新')
+              ? _appendUnique(f.notes, '$storyMarker：同步更新')
               : f.notes),
           updatedAt: Value(now),
         ),
@@ -309,7 +348,7 @@ class ChapterSyncService {
         final CharacterRow b = uniqueCharacters[j];
         final CharacterRelationshipRow? rel =
             await _characterPair(a.id, b.id);
-        final String entry = '$marker：$summaryText';
+        final String entry = '$storyMarker：$summaryText';
         if (rel == null) {
           await _db.into(_db.characterRelationships).insert(
                 CharacterRelationshipsCompanion.insert(
@@ -318,7 +357,7 @@ class ChapterSyncService {
                   targetCharacterId: b.id,
                   relationshipType: '同章互动',
                   relationshipName: Value('${a.name}-${b.name}'),
-                  description: Value('$marker 中发生了新的同章互动。'),
+                  description: Value('$storyMarker 中发生了新的同章互动。'),
                   developmentHistory: Value(entry),
                   keyEvents: Value(entry),
                   impact: const Value('由章节保存后的自动更新工艺同步生成'),
@@ -332,12 +371,12 @@ class ChapterSyncService {
           await (_db.update(_db.characterRelationships)
                 ..where((t) => t.id.equals(rel.id)))
               .write(CharacterRelationshipsCompanion(
-            description: Value('$marker 中发生了新的同章互动。'),
+            description: Value('$storyMarker 中发生了新的同章互动。'),
             developmentHistory:
                 Value(_appendUnique(rel.developmentHistory, entry)),
             keyEvents: Value(_appendUnique(rel.keyEvents, entry)),
             impact: Value(
-                _appendUnique(rel.impact, '$marker：关系随章节推进自动更新')),
+                _appendUnique(rel.impact, '$storyMarker：关系随章节推进自动更新')),
             importance: Value(_maxOf(rel.importance, a.importance, b.importance)),
             intensity: Value(rel.intensity < 5
                 ? 5
@@ -429,8 +468,8 @@ class ChapterSyncService {
     for (final WorldSettingRow s in matchedSettings) {
       await (_db.update(_db.worldSettings)..where((t) => t.id.equals(s.id))).write(
         WorldSettingsCompanion(
-          content: Value(_appendUnique(s.content, '$marker：$summaryText')),
-          history: Value(_appendUnique(s.history, '$marker：章节推进同步')),
+          content: Value(_appendUnique(s.content, '$storyMarker：$summaryText')),
+          history: Value(_appendUnique(s.history, '$storyMarker：章节推进同步')),
           updatedAt: Value(now),
         ),
       );
@@ -454,7 +493,7 @@ class ChapterSyncService {
         final FactionRow a = chapterFactions[i];
         final FactionRow b = chapterFactions[j];
         final FactionRelationshipRow? rel = await _factionPair(a.id, b.id);
-        final String entry = '$marker：$summaryText';
+        final String entry = '$storyMarker：$summaryText';
         if (rel == null) {
           await _db.into(_db.factionRelationships).insert(
                 FactionRelationshipsCompanion.insert(
@@ -463,7 +502,7 @@ class ChapterSyncService {
                   targetFactionId: b.id,
                   relationshipType: '章节互动',
                   relationshipName: Value('${a.name}-${b.name}'),
-                  description: Value('$marker 中两方产生了新的章节关联。'),
+                  description: Value('$storyMarker 中两方产生了新的章节关联。'),
                   developmentHistory: Value(entry),
                   keyEvents: Value(entry),
                   impact: const Value('由章节保存后的自动更新工艺同步生成'),
@@ -477,12 +516,12 @@ class ChapterSyncService {
           await (_db.update(_db.factionRelationships)
                 ..where((t) => t.id.equals(rel.id)))
               .write(FactionRelationshipsCompanion(
-            description: Value('$marker 中两方产生了新的章节关联。'),
+            description: Value('$storyMarker 中两方产生了新的章节关联。'),
             developmentHistory:
                 Value(_appendUnique(rel.developmentHistory, entry)),
             keyEvents: Value(_appendUnique(rel.keyEvents, entry)),
             impact: Value(_appendUnique(
-                rel.impact, '$marker：势力关系随章节推进自动更新')),
+                rel.impact, '$storyMarker：势力关系随章节推进自动更新')),
             importance: Value(_maxOf(rel.importance, a.importance, b.importance)),
             intensity: Value(rel.intensity < 5
                 ? 5
@@ -521,6 +560,11 @@ class ChapterSyncService {
     final String impact = '人物 ${matchedCharacters.length}；势力 ${matchedFactions.length}；'
         '剧情 ${matchedPlots.length}；设定 ${matchedSettings.length}；'
         '人物关系 $charRelCount；势力关系 $factionRelCount';
+    // 时间线事件描述：故事内时间节点做抬头（有才加）。
+    // `eventDate` 依旧是现实时间（用于排序），剧情时间在这里用文本表达。
+    final String tlDescription = storyLabel.isEmpty
+        ? summaryText
+        : '【故事时间：$storyLabel】$summaryText';
     String eventId;
     if (existingEvent == null) {
       eventId = _uuid.v4();
@@ -534,7 +578,7 @@ class ChapterSyncService {
               location: Value(marker),
               importance: Value(tlImportance),
               status: Value(tlStatus),
-              description: Value(summaryText),
+              description: Value(tlDescription),
               impact: Value(impact),
               chapterId: Value(input.chapterId),
             ),
@@ -550,7 +594,7 @@ class ChapterSyncService {
         location: Value(marker),
         importance: Value(tlImportance),
         status: Value(tlStatus),
-        description: Value(summaryText),
+        description: Value(tlDescription),
         impact: Value(impact),
       ));
     }
@@ -663,6 +707,22 @@ class ChapterSyncService {
       return content.length > 120 ? content.substring(0, 120) : content;
     }
     return '章节内容已更新';
+  }
+
+  /// 清洗故事内时间节点：去空白、限长（`character_events.story_time` 列上限 200）。
+  ///
+  /// 模型偶尔会回吐整段解释（「故事时间：第三日黄昏，也就是祭祀仪式前的那个傍晚」），
+  /// 这里只做安全裁剪、不做改写 —— 时间语义留给上游（大纲修订）约束。
+  static String _cleanStoryTime(String raw) {
+    String t = raw.trim();
+    if (t.isEmpty) return '';
+    t = t.replaceAll(RegExp(r'^[【\[]\s*(?:故事时间|时间节点)?\s*[】\]]\s*'), '');
+    t = t.replaceAll(RegExp(r'^(?:故事时间|时间节点)\s*[：:]\s*'), '');
+    t = t.trim();
+    if (t.isEmpty || t == '未明确' || t == '未知' || t.toLowerCase() == 'n/a') {
+      return '';
+    }
+    return t.length > 200 ? t.substring(0, 200) : t;
   }
 
   /// 对齐 C# `AppendUniqueEntry`：去重追加，换行分隔。

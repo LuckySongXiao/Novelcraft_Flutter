@@ -80,6 +80,9 @@ class _ScriptedChat {
     List<ChatMessage> messages, {
     required int maxTokens,
     double temperature = 0.85,
+    // 客户端 state 会话标识（[AgentChatExecutor] 契约的一部分）：
+    // 打桩不关心，但签名必须对齐。
+    String? sessionKey,
   }) async {
     final String user = messages.isEmpty ? '' : messages.last.content;
     userCalls.add(user);
@@ -251,14 +254,18 @@ void main() {
     final int seg1 =
         chat.userCalls.indexWhere((String u) => u.contains('请从本章开篇写起'));
     final int seg2 =
-        chat.userCalls.indexWhere((String u) => u.contains('接着上文继续写'));
+        chat.userCalls.indexWhere((String u) => u.contains('紧接上文继续写'));
     expect(seg1, isNonNegative);
     expect(seg2, isNonNegative, reason: '每轮 900 字，4500 字章必须续写多轮');
     // 主笔通道 keepHistory=false：每次都只带本轮消息（上文尾部在提示词里）
     expect(chat.messageCounts[seg1], 1);
     expect(chat.messageCounts[seg2], 1);
-    expect(chat.userCalls[seg2], contains('上文结尾'),
+    // A1：上下文标记由 `【上文结尾】` 改为明确「禁止回抄」的
+    // `【前文末尾（仅供衔接上下文，**不要输出这一段**）】`。
+    expect(chat.userCalls[seg2], contains('前文末尾'),
         reason: '续写段必须携带上一段尾部以保证衔接');
+    expect(chat.userCalls[seg2], contains('不要输出这一段'),
+        reason: 'A1：必须显式禁止模型把回灌的尾部抄进正文');
     expect(chat.userCalls[seg2], contains('上一段写得太短'),
         reason: '上一段 900 < 目标 2200×0.6 → 必须明确要求补足字数');
     // 不走组长派活 / 验收（team 工艺独有）

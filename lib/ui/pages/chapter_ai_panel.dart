@@ -6,8 +6,11 @@
 //   * 调用链：走 modelManager 默认 provider（与 AI 协作页同源），
 //     非流式单次请求（长选段 + 指令一次出结果，阅读页不需要打字机）。
 //   * 三种操作各有独立提示词；附加要求来自输入框（可空）。
-//   * 结果以对照卡呈现（原文 / 结果），提供「复制结果」——预览页是
-//     只读快照，不写回章节正文（写回走章节编辑表单，职责分离）。
+//   * 结果以对照卡呈现（原文 / 结果）。
+//   * **采纳应用**（2026-10-10 用户实测补充）：结果先经用户确认，再由阅读页
+//     写回章节正文 —— 续写插到所选段落的下一段，润色 / 扩写 / 重写替换选中文本
+//     （纯文本规则见 `selection_apply_text.dart`）。本面板只负责「确认 + 上报」，
+//     不直接碰数据库；[onApply] 为 null 时不显示采纳按钮（旧行为：仅复制）。
 library;
 
 import 'package:flutter/material.dart';
@@ -30,6 +33,7 @@ class ChapterAiPanel extends ConsumerStatefulWidget {
     this.volumeOutline = '',
     this.prevChapterTail = '',
     this.onClearSelection,
+    this.onApply,
   });
 
   /// 当前选中的正文片段（空 = 未选节，按钮将提示）。
@@ -52,6 +56,13 @@ class ChapterAiPanel extends ConsumerStatefulWidget {
   /// 粘性选区下点击面板按钮不会丢选区，因此提供手动清除让用户重新框选。
   final VoidCallback? onClearSelection;
 
+  /// **采纳应用回调**（null = 不显示采纳按钮，退回「仅复制」旧行为）。
+  ///
+  /// 用户在确认对话框里点了「应用」后触发；写库 / 刷新由宿主页完成。
+  /// 语义：`continueWrite` → 结果插到所选文本的下一段；其余动作 → 结果替换
+  /// 所选文本。
+  final void Function(String result, ChapterAiAction action)? onApply;
+
   @override
   ConsumerState<ChapterAiPanel> createState() => _ChapterAiPanelState();
 }
@@ -60,6 +71,9 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
   final TextEditingController _requireCtrl = TextEditingController();
   final TextEditingController _resultCtrl = TextEditingController();
   ChapterAiAction? _runningAction;
+
+  /// 当前结果由哪个动作产出（采纳应用时要区分「续写插入」与「替换」）。
+  ChapterAiAction? _resultAction;
   String? _error;
   String? _sourceText;
 
@@ -204,6 +218,7 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
       }
       setState(() {
         _resultCtrl.text = text;
+        _resultAction = action;
         _runningAction = null;
       });
     } on Object catch (e) {
@@ -217,6 +232,47 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
         _runningAction = null;
       });
     }
+  }
+
+  /// 采纳应用前的**确认对话框** —— 用户实测要求「让用户确认是否应用」。
+  ///
+  /// 语义说明因动作而异：续写 = 插到所选文本的下一段（原文保留）；
+  /// 润色 / 去重润色 / 扩写 / 重写 = 替换所选文本（原文被覆盖）。
+  Future<void> _confirmApply() async {
+    final l10n = ref.read(l10nProvider);
+    final ChapterAiAction? action = _resultAction;
+    if (action == null || widget.onApply == null) return;
+    final bool insertAfter = action == ChapterAiAction.continueWrite;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogCtx) => AlertDialog(
+        title: Text(l10n.t('RAI.ApplyTitle', '应用 AI 结果')),
+        content: Text(
+          insertAfter
+              ? l10n.tf('RAI.ApplyInsertFmt',
+                  '将把 AI 结果作为「下一段」插入到所选文本之后（原选中文本保留）。\n\n'
+                  '选中文本：{0} 字\nAI 结果：{1} 字',
+                  <Object>[_sourceText?.length ?? 0, _resultCtrl.text.length])
+              : l10n.tf('RAI.ApplyReplaceFmt',
+                  '将用 AI 结果替换当前选中的文本段（原选中文本被覆盖，'
+                  '章节版本号 +1，可在版本历史中追溯）。\n\n'
+                  '选中文本：{0} 字\nAI 结果：{1} 字',
+                  <Object>[_sourceText?.length ?? 0, _resultCtrl.text.length]),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: Text(l10n.t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: Text(l10n.t('RAI.Apply', '采纳应用')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    widget.onApply!.call(_resultCtrl.text, action);
   }
 
   @override
@@ -277,7 +333,7 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
                       },
                 label: Text(_actionLabel(action, l10n)),
               ),
-            if (hasResult)
+            if (hasResult) ...[
               OutlinedButton.icon(
                 onPressed: () async {
                   await Clipboard.setData(
@@ -291,6 +347,14 @@ class _ChapterAiPanelState extends ConsumerState<ChapterAiPanel> {
                 icon: const Icon(Icons.copy_all_outlined, size: 16),
                 label: Text(l10n.t('RAI.CopyResult', '复制结果')),
               ),
+              if (widget.onApply != null && _resultAction != null)
+                FilledButton.icon(
+                  onPressed:
+                      _runningAction != null ? null : () => _confirmApply(),
+                  icon: const Icon(Icons.check_circle_outline, size: 16),
+                  label: Text(l10n.t('RAI.Apply', '采纳应用')),
+                ),
+            ],
           ],
         ),
         if (_error != null) ...[

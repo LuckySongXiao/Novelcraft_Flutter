@@ -243,13 +243,15 @@ const List<WritingPromptStage> bookPromptStages = [
 请为全卷第 {{chapterIndex}}/{{cfg_chaptersPerVolume}} 章制定章节大纲：
 - **第一行必须输出「标题：《本章正式章节名》」**（8~14 字的文学化章名，只写章名本身，不要包含卷号、章号或书名）；
 - 本章目标（推进什么）、出场人物、场景与时间线、关键冲突与转折、章末钩子；
-- 与前后章自然衔接；200-400 字。''',
+- 与前后章自然衔接；200-400 字。
+{{styleRules}}''',
     variables: {
       'cfg_bookTitle': '书名',
       'mainOutline': '主线大纲',
       'context3': '本卷大纲（含缺省说明）',
       'chapterIndex': '章节序号',
       'cfg_chaptersPerVolume': '每卷章数',
+      'styleRules': '拆书文风规则（未启用时为空）',
     },
     variablesEn: {
       'cfg_bookTitle': 'Book title',
@@ -257,6 +259,172 @@ const List<WritingPromptStage> bookPromptStages = [
       'context3': 'This volume\'s outline (with fallback note)',
       'chapterIndex': 'Chapter index',
       'cfg_chaptersPerVolume': 'Chapters per volume',
+      'styleRules': 'Digested style rules (empty when disabled)',
+    },
+  ),
+  WritingPromptStage(
+    id: 'Book/chapterNamesSystem',
+    title: '章名统一整理 · 角色',
+    titleEn: 'Chapter Title Normalization · Role',
+    defaultBody:
+        '你是小说编辑，只为章节取名。只输出 JSON 对象本身，禁止解释、禁止 Markdown 包装、禁止输出大纲原文。',
+  ),
+  WritingPromptStage(
+    id: 'Book/chapterNames',
+    title: '章名统一整理',
+    titleEn: 'Chapter Title Normalization',
+    defaultBody: r'''长篇小说《{{cfg_bookTitle}}》的章节大纲已经产出，但其中一部分章节没有按「标题：《章名》」的格式给出章名。请为下列**每一章**各起一个章名。
+
+【待命名章节（序号｜所在卷章｜该章大纲摘要）】
+{{items}}
+
+要求：
+- 每章 8~14 字，文学化，能概括该章内容；只写章名本身；
+- 不含卷号、章号、书名、书名号、引号，也不含标点；
+- 严禁出现「目标」「本章」「本卷」「出场人物」「时间线」「地点」「冲突」「伏笔」「钩子」「大纲」等大纲字段词；
+- 相邻章节的章名不得重复。
+
+只输出 JSON：{"names":[{"i":1,"name":"章名"},{"i":2,"name":"章名"}]}''',
+    variables: {'cfg_bookTitle': '书名', 'items': '待命名章节清单'},
+    variablesEn: {
+      'cfg_bookTitle': 'Book title',
+      'items': 'Chapters awaiting titles',
+    },
+  ),
+  WritingPromptStage(
+    id: 'Profile/system',
+    title: '档案归纳角色',
+    titleEn: 'Profile Synthesizer Role',
+    defaultBody:
+        '你是小说设定档案员。你的任务是把逐章累积的剧情流水收敛成稳定、可读的设定档案。'
+        '只输出 JSON 对象本身，禁止解释、禁止 Markdown 包装、禁止原文引用。',
+  ),
+  WritingPromptStage(
+    id: 'Profile/synthesize',
+    title: '分卷档案归纳',
+    titleEn: 'Volume Profile Synthesis',
+    defaultBody: r'''以下是剧情流水（{{volumeLabel}}，按发生顺序，每行一条），记录了「{{typeLabel}}」实体「{{name}}」的设定变化：
+
+{{history}}
+
+该实体当前已登记的档案（（空）表示尚未登记）：
+{{current}}
+
+请把上面的流水归纳为该实体的稳定档案。
+
+需要归纳的字段：
+{{fields}}
+
+只输出 JSON 对象本身，键名照抄上面的字段名：
+{{json}}
+
+要求：
+- 只依据上面的流水，不得编造未出现的信息；无依据的字段留空字符串或空数组；
+- 每个字符串字段不超过 {{maxChars}} 字；
+- 数组字段按发生顺序排列；
+- 不要复述流水原文，要提炼成档案语言。''',
+    variables: {
+      'volumeLabel': '卷标识（如「第1卷《血色黎明》」）',
+      'typeLabel': '实体类别（人物/势力组织/世界观设定）',
+      'name': '实体名称',
+      'history': '本卷剧情流水',
+      'current': '当前已登记的档案值',
+      'fields': '需要归纳的字段清单',
+      'json': '期望的 JSON 形状',
+      'maxChars': '单字段字数上限',
+    },
+    variablesEn: {
+      'volumeLabel': 'Volume label',
+      'typeLabel': 'Entity kind',
+      'name': 'Entity name',
+      'history': 'Changes recorded in this volume',
+      'current': 'Currently registered profile values',
+      'fields': 'Fields to synthesize',
+      'json': 'Expected JSON shape',
+      'maxChars': 'Max characters per field',
+    },
+  ),
+  WritingPromptStage(
+    id: 'Style/system',
+    title: '拆书研读角色',
+    titleEn: 'Style Digest Role',
+    defaultBody:
+        '你是资深小说写作教练。你的任务是研读样本文本的**写法**（叙述视角、句式、节奏、'
+        '修辞、可复用技法），不总结剧情、不复述内容、不评价好坏。只输出 JSON 对象本身，'
+        '禁止解释、禁止 Markdown 包装。',
+  ),
+  WritingPromptStage(
+    id: 'Style/observe',
+    title: '拆书 · 片段观察',
+    titleEn: 'Style Digest · Chunk Observation',
+    defaultBody: r'''以下是一本小说的第 {{index}}/{{total}} 个样本片段（已去除广告与站点水印）：
+
+{{sample}}
+
+请研读这段文字的写法，按下面 7 个维度各给一句结论：
+{{aspects}}
+
+另外提炼本片段中可复用的写作技法，category 只能取以下之一：{{categories}}。
+
+只输出 JSON 对象本身，键名照抄：
+{{json}}
+
+要求：
+- 每个维度不超过 120 字，只写「怎么写」，不写「写了什么」；
+- 技法最多 8 条，title 是技法名（6~12 字），detail 是可复用的一句话写法；
+- 没有把握的维度留空字符串，不得编造；
+- 禁止解释、禁止 Markdown 包装。''',
+    variables: {
+      'index': '片段序号',
+      'total': '片段总数',
+      'sample': '样本片段正文',
+      'aspects': '需要观察的维度清单',
+      'categories': '技法大类候选',
+      'json': '期望的 JSON 形状',
+    },
+    variablesEn: {
+      'index': 'Chunk index',
+      'total': 'Total chunks',
+      'sample': 'Sample text',
+      'aspects': 'Aspects to observe',
+      'categories': 'Allowed technique categories',
+      'json': 'Expected JSON shape',
+    },
+  ),
+  WritingPromptStage(
+    id: 'Style/synthesize',
+    title: '拆书 · 规则汇总',
+    titleEn: 'Style Digest · Rule Synthesis',
+    defaultBody: r'''下面是一本小说{{name}}的研读笔记（由多个样本片段分别观察后合并而成，
+同一维度里可能是多句并列的描述）：
+{{observations}}
+
+请把它汇总成一份可直接指导写作的规则，按下面 7 个维度各给一条结论：
+{{aspects}}
+
+并整理出最终的可复用技法清单，category 只能取以下之一：{{categories}}。
+
+只输出 JSON 对象本身，键名照抄：
+{{json}}
+
+要求：
+- 每个维度写成**指令式**结论（「以…为主」「多用…少用…」），而不是描述式；不超过 150 字；
+- 合并同义观察，丢弃互相矛盾的表述；
+- 技法去重后不超过 20 条，title 是技法名，detail 是可复用的一句话写法；
+- 禁止解释、禁止 Markdown 包装。''',
+    variables: {
+      'name': '书名或来源名',
+      'observations': '各片段观察的合并结果',
+      'aspects': '需要归纳的维度清单',
+      'categories': '技法大类候选',
+      'json': '期望的 JSON 形状',
+    },
+    variablesEn: {
+      'name': 'Book or source name',
+      'observations': 'Merged chunk observations',
+      'aspects': 'Aspects to synthesize',
+      'categories': 'Allowed technique categories',
+      'json': 'Expected JSON shape',
     },
   ),
   WritingPromptStage(
@@ -313,18 +481,21 @@ const List<WritingPromptStage> bookPromptStages = [
 写作纪律（必须严格遵守）：
 1. 不要写章节标题，不要复述大纲，不要输出解释、序号或 Markdown 包装；
 2. **严禁重复**已写过的句子与句式，同一意象、同一句对白不得反复出现；
-3. 写到本章剧情自然收束处即停笔，**绝对不要**出现「（全文完）」「（完）」「全文完」「THE END」等收尾语。''',
+3. 写到本章剧情自然收束处即停笔，**绝对不要**出现「（全文完）」「（完）」「全文完」「THE END」等收尾语。
+{{styleRules}}''',
     variables: {
       'context1': '主线大纲摘要',
       'context2': '本卷大纲（含缺省说明）',
       'context3': '本章大纲（含缺省说明）',
       'targetChars': '目标字数',
+      'styleRules': '拆书文风规则（未启用时为空）',
     },
     variablesEn: {
       'context1': 'Main outline summary',
       'context2': 'This volume\'s outline (with fallback note)',
       'context3': 'This chapter\'s outline (with fallback note)',
       'targetChars': 'Target word count',
+      'styleRules': 'Digested style rules (empty when disabled)',
     },
   ),
   WritingPromptStage(
@@ -345,7 +516,8 @@ const List<WritingPromptStage> bookPromptStages = [
 {{context7}}写作纪律（必须严格遵守）：
 1. 只写本段正文，不要写章节标题、不要复述大纲、不要输出解释；
 2. **严禁重复**上文与已写内容里的句子、意象与对白；
-3. 结尾停在剧情推进处，**不要**收束全章，**绝对不要**写「（全文完）」「（完）」等收尾语。''',
+3. 结尾停在剧情推进处，**不要**收束全章，**绝对不要**写「（全文完）」「（完）」等收尾语。
+{{styleRules}}''',
     variables: {
       'context1': '主线大纲摘要',
       'volText': '本卷大纲',
@@ -354,6 +526,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'index': '卷号或段号',
       'targetChars': '目标字数',
       'context7': '上一段过短时的补足要求',
+      'styleRules': '拆书文风规则（未启用时为空）',
     },
     variablesEn: {
       'context1': 'Main outline summary',
@@ -363,6 +536,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'index': 'Volume or segment number',
       'targetChars': 'Target word count',
       'context7': 'Top-up requirement when the last segment was too short',
+      'styleRules': 'Digested style rules (empty when disabled)',
     },
   ),
   WritingPromptStage(
@@ -374,13 +548,15 @@ const List<WritingPromptStage> bookPromptStages = [
 
 {{context3}}
 本段至少写满 {{targetChars}} 字，{{style}}
-只输出小说正文，不要标题、不要解释、不要 Markdown、不要字数统计或写作说明、不要「（全文完）」。''',
+只输出小说正文，不要标题、不要解释、不要 Markdown、不要字数统计或写作说明、不要「（全文完）」。
+{{styleRules}}''',
     variables: {
       'chText': '本章大纲',
       'volBrief': '本卷背景',
       'context3': '上文结尾与续写衔接要求',
       'targetChars': '目标字数',
       'style': '候选叙事侧重',
+      'styleRules': '拆书文风要求摘要（未启用时为空）',
     },
     variablesEn: {
       'chText': 'This chapter\'s outline',
@@ -388,6 +564,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'context3': 'Preceding ending & continuation bridging requirement',
       'targetChars': 'Target word count',
       'style': 'Candidate narrative focus',
+      'styleRules': 'Digested style brief (empty when disabled)',
     },
   ),
   WritingPromptStage(
@@ -405,13 +582,15 @@ const List<WritingPromptStage> bookPromptStages = [
 
 本章由 {{kWriterCount}} 位偏向写手分段完成。请把本章划分为恰好 {{kWriterCount}} 个前后衔接的段落任务，并把每段派给偏向最匹配的写手，输出 JSON 数组（不要任何其它文本），每项格式：
 {"agent": 1, "persona": "combat|dialogue|flirt|rogue|comfort|scenery|psych|suspense|humor", "title": "本段小标题", "brief": "本段要写的内容：剧情要点、出场人物、情绪节奏", "boundary": "本段开始与结束的剧情边界（供前后段衔接）", "wordTarget": 350}
-要求：段落按剧情顺序编号 1..{{kWriterCount}}；前一段结束边界与后一段开始边界衔接；全部段落合起来覆盖整个章节大纲；总字数约 {{cfg_chapterWordTarget}} 字。''',
+要求：段落按剧情顺序编号 1..{{kWriterCount}}；前一段结束边界与后一段开始边界衔接；全部段落合起来覆盖整个章节大纲；总字数约 {{cfg_chapterWordTarget}} 字。
+{{styleRules}}''',
     variables: {
       'context1': '主线大纲摘要',
       'volText': '本卷大纲',
       'chText': '本章大纲',
       'kWriterCount': '写手总数',
       'cfg_chapterWordTarget': '章节目标字数',
+      'styleRules': '拆书文风规则（未启用时为空）',
     },
     variablesEn: {
       'context1': 'Main outline summary',
@@ -419,6 +598,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'chText': 'This chapter\'s outline',
       'kWriterCount': 'Total writer count',
       'cfg_chapterWordTarget': 'Target chapter word count',
+      'styleRules': 'Digested style rules (empty when disabled)',
     },
   ),
   WritingPromptStage(
@@ -443,7 +623,8 @@ const List<WritingPromptStage> bookPromptStages = [
 写作纪律（必须严格遵守）：
 1. 只写这一段正文，不要写章节标题，不要复述或改写上面的任何大纲条目，不要输出解释、序号或 Markdown 包装；
 2. **严禁重复**：不得复述本段已写过的句子与句式，同一意象、同一句对白不得反复出现；
-3. 结尾必须停在段落边界处，**绝对不要**出现「（全文完）」「（完）」「全文完」「THE END」等收尾语 —— 本章在你之后还有后续段落。''',
+3. 结尾必须停在段落边界处，**绝对不要**出现「（全文完）」「（完）」「全文完」「THE END」等收尾语 —— 本章在你之后还有后续段落。
+{{styleRules}}''',
     variables: {
       'context1': '主线大纲摘要',
       'volText': '本卷大纲',
@@ -454,6 +635,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'plan_brief': '段落任务',
       'plan_boundary': '段落边界',
       'plan_wordTarget': '段落目标字数',
+      'styleRules': '拆书文风规则（未启用时为空）',
     },
     variablesEn: {
       'context1': 'Main outline summary',
@@ -465,6 +647,7 @@ const List<WritingPromptStage> bookPromptStages = [
       'plan_brief': 'Segment task',
       'plan_boundary': 'Segment boundary',
       'plan_wordTarget': 'Segment target word count',
+      'styleRules': 'Digested style rules (empty when disabled)',
     },
   ),
   WritingPromptStage(
@@ -484,6 +667,30 @@ const List<WritingPromptStage> bookPromptStages = [
     variablesEn: {
       'chText': 'This chapter\'s outline',
       'sb': 'Submitted segment text',
+    },
+  ),
+  WritingPromptStage(
+    id: 'Book/stateUpdates',
+    title: '定稿后设定与履历抽取',
+    titleEn: 'Post-finalization Setting & History Extraction',
+    defaultBody: r'''【本章大纲】
+{{chText}}
+
+【本章定稿正文】
+{{chapter}}
+
+请通读上面这一章正文，从中抽取**需要登记到设定档案**的变更，输出 JSON
+（不要任何其它文本）：
+{"updates":[{"target":"character|world|faction|plot|timeline","action":"update|create","name":"实体准确名称","field":"status|history|notes|content|description","content":"需要登记的设定/履历变化（每条独立成句）"}]}
+要求：
+1. character 指本章出场的人物；world 指世界观子项（门派/势力范围/规则/地理/功法体系等）；
+2. name 必须与正文中出现的名称**逐字一致**，禁止臆造或改写；
+3. history/notes 字段写「本章发生的变化」；status 字段写变化后的状态词（≤10 字）；
+4. 只登记正文里**确有依据**的变更；没有就给空数组；最多 20 条。''',
+    variables: {'chText': '本章大纲', 'chapter': '本章定稿正文'},
+    variablesEn: {
+      'chText': 'This chapter\'s outline',
+      'chapter': 'This chapter\'s finalized prose',
     },
   ),
   WritingPromptStage(

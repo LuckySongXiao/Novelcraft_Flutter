@@ -4,9 +4,14 @@
 // 但用强类型 [ProjectStats] 取代 `Dictionary<string, object>`（C# 原版仅返回
 // Name/CreatedAt/UpdatedAt/Status/Progress，并未聚合子实体计数）。
 //
-// 本服务只读、不写：聚合项目下全部实体类目的数量与总字数，
+// 本服务以只读聚合为主：聚合项目下全部实体类目的数量与总字数，
 // 供项目概览页的分类卡片（双击可进入对应实体页）使用。
+//
+// 唯一例外是 `progress` —— 它是「已完成章 / 总章数」的派生量，读取时顺带
+// 自愈回写 `projects.progress`（该列历史上无人写过，恒为 0）。回写只动这一列，
+// 失败被吞掉，不影响统计返回。
 // 异常直接上抛，由 UI 层统一处理。
+import 'package:novelcraft/data/database.dart';
 import 'package:novelcraft/data/repositories/project_repository.dart';
 import 'package:novelcraft/data/repositories/volume_repository.dart';
 import 'package:novelcraft/data/repositories/chapter_repository.dart';
@@ -100,12 +105,31 @@ class ProjectStatisticsService {
     final int wordCount =
         chapters.fold(0, (int sum, c) => sum + c.wordCount);
 
+    // 完成进度是**派生量**：已完成章 / 总章数（见 [progressFromChapterCounts]）。
+    //
+    // ⚠ 自愈回写：此前工程里**没有任何代码**写过 `projects.progress`，
+    // 概览页与项目管理页读到的恒是 0（用户实测「项目进度未随编写完成度更新」）。
+    // 这里在计算的同时顺带把值写回 —— 只要打开一次概览页，项目卡片上的进度
+    // 也跟着修正，不必重跑生成。回写只动 `progress` 一列，不动 `updated_at`
+    // （见 [ProjectRepository.updateProgress]），免得「最近编辑」被刷成刚刚。
+    final int completedChapters =
+        chapters.where((ChapterRow c) => c.status == 'Completed').length;
+    final double progress =
+        progressFromChapterCounts(completedChapters, chapters.length);
+    if (project.progress != progress.round()) {
+      try {
+        await _projectRepo.updateProgress(projectId, progress.round());
+      } on Object {
+        // 回写只是自愈收益，失败不能拖垮统计读取。
+      }
+    }
+
     return ProjectStats(
       volumeCount: volumes.length,
       chapterCount: chapters.length,
       characterCount: characters.length,
       wordCount: wordCount,
-      progress: project.progress.toDouble(),
+      progress: progress,
       lastEditedAt: project.updatedAt,
       factionCount: factions.length,
       plotCount: plots.length,

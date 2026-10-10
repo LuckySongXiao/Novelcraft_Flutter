@@ -14,7 +14,9 @@ class WebKeyValueStore implements KeyValueStore {
     _prefs ??= await SharedPreferences.getInstance();
   }
 
-  String _k(String scope, String key) => 'novelcraft/$scope/$key';
+  /// 与 native 侧保持同一套键归一（见 [sanitizeStoreKey]）—— 否则同一个键
+  /// 在两端落成不同的记录，`listKeys` 也会给出不一致的结果。
+  String _k(String scope, String key) => 'novelcraft/$scope/${sanitizeStoreKey(key)}';
 
   @override
   Future<String?> readJson(String scope, String key) async {

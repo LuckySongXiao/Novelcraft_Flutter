@@ -8,6 +8,21 @@
 /// `AnalyzeRelationshipAsync` 字典返回的强类型化版本。
 library;
 
+/// 项目完成进度（**章节完成率**口径，0-100）。
+///
+/// 为什么用「章」而不是「字数」：章是最小可交付单元 —— 写完一章就该动一格，
+/// 与作者的直觉一致；字数口径会被短章 / 长章拉偏（30 章里有 3 章超长就能
+/// 把进度顶到 30% 而实际只写了三章）。
+///
+/// 质量闸没过、被存成草稿（`status == 'Draft'`）的章**不计入分子**：
+/// 它们还会走「全书跑完后自动重写」，重写通过转为已完成时进度自然回升。
+///
+/// 无章节时返回 0（新建项目尚未规划大纲，不该显示 100%）。
+double progressFromChapterCounts(int completed, int total) {
+  if (total <= 0) return 0;
+  return (completed * 100 / total).clamp(0, 100).toDouble();
+}
+
 /// 项目聚合统计（对应 ProjectService.GetProjectStatisticsAsync 的强类型化）
 ///
 /// C# 原版只返回 Name/CreatedAt/UpdatedAt/Status/Progress；这里按任务要求补齐

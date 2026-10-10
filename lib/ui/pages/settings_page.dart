@@ -5,6 +5,7 @@ import '../../l10n/l10n.dart';
 import '../../theme/app_theme.dart';
 import 'ai_health_page.dart';
 import 'agent_batch_config_page.dart';
+import 'style_study_page.dart';
 import 'writing_prompt_settings_page.dart';
 
 /// 设置页 —— 对应 C# 的「选项 / 设置」对话框
@@ -43,6 +44,21 @@ class SettingsPage extends ConsumerWidget {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => const WritingPromptSettingsPage(),
+          )),
+        )),
+
+        const SizedBox(height: 16),
+
+        Card(child: ListTile(
+          leading: const Icon(Icons.auto_stories_outlined),
+          title: Text(l10n.t('Set.StyleStudy', '文风研读（拆书）')),
+          subtitle: Text(
+            l10n.t('Set.StyleStudyDesc',
+                '把一本写得好的小说拆成可复用的写作规则，注入到自己的书里'),
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const StyleStudyPage(),
           )),
         )),
 

@@ -171,7 +171,11 @@ class AIConfigurationPage extends ConsumerStatefulWidget {
       _AIConfigurationPageState();
 }
 
-/// 最大令牌数滑动档位节点：512 → 1M（12 档）。
+/// 最大令牌数滑动档位节点：512 → 1M（14 档）。
+///
+/// ⚠ 24K(24576) / 25K(25600) 两个**非 2 的幂**档位是刻意插入的：RWKV 官方
+/// G1K 云端模型的上下文窗口标称 `ctx25600`（= 25K），若档位表只有
+/// 16K → 32K，用户拖滑块会被吸附到 32K，永远选不出模型真实支持的 25K。
 const List<int> kMaxTokensSteps = <int>[
   512, // 512
   1024, // 1K
@@ -179,6 +183,8 @@ const List<int> kMaxTokensSteps = <int>[
   4096, // 4K
   8192, // 8K
   16384, // 16K
+  24576, // 24K
+  25600, // 25K（RWKV G1K 云端 ctx25600）
   32768, // 32K
   65536, // 64K
   131072, // 128K
@@ -195,6 +201,8 @@ const List<String> kMaxTokensStepLabels = <String>[
   '4K',
   '8K',
   '16K',
+  '24K',
+  '25K',
   '32K',
   '64K',
   '128K',
@@ -260,12 +268,16 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       await _loadPersistedProviderConfigs();
       await _loadRwkvCloudProfiles();
       _refreshFromManager();
+      // 必须放在 provider 配置与默认 provider 都恢复之后：让「模型上下文
+      // 窗口」跟随默认 provider 的模型名刷新（详见方法注释）。
+      await _syncContextWindowFromModel();
       _ensureRwkvScanned();
     });
   }
 
   static const String _kvScopeAiConfig = 'ai_config';
   static const String _kvKeyRwkvCfg = 'rwkv.configuration';
+  static const String _kvKeyRuntimeSettings = 'runtime_settings';
 
   /// 云端 RWKV（api-7b.rwkvos.com）的配置：baseUrl + CF Service Token。
   static const String _kvKeyRwkvCloudCfg = 'rwkv.cloud_configuration';
@@ -1543,6 +1555,59 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     }
   }
 
+  /// 注册名（`RWKV Cloud` / `RWKV Cloud::official-7b`）→ provider 种类。
+  ///
+  /// 与 [_kindByStorageKey] 互补：后者用于 `provider_cfg.*` 的存储键（= kind.name），
+  /// 这里用于 `ModelManager` 记录的默认 provider 名。精确名优先，其次剥 `::` 后缀。
+  _ProviderKind? _kindByRegisteredName(String? name) {
+    if (name == null || name.isEmpty) return null;
+    for (final _ProviderKind k in _ProviderKind.values) {
+      if (_configs[k]!.registeredName == name) return k;
+    }
+    for (final _ProviderKind k in _ProviderKind.values) {
+      if (name.startsWith('${_configs[k]!.registeredName}::')) return k;
+    }
+    return null;
+  }
+
+  /// 单独落盘运行时设置（采样/思维链之外只动窗口时用）。
+  Future<void> _persistRuntimeSettings(AiRuntimeSettings s) async {
+    try {
+      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
+      await kv.writeJson(
+        _kvScopeAiConfig,
+        _kvKeyRuntimeSettings,
+        jsonEncode(s.toJson()),
+      );
+    } on Object {
+      // 落盘失败不影响当前会话（下次保存会重试）。
+    }
+  }
+
+  /// 让「模型上下文窗口」跟随**默认 provider 的模型名**刷新并落盘。
+  ///
+  /// 背景（用户报「模型支持 25K，却设不了 25K 上下文」）：窗口此前**只在点
+  /// 「保存」provider 时**刷新一次，页面加载时用的是 KVStore 里的旧值 ——
+  /// 模型名写着 `ctx25600`，窗口却卡在默认的 16384，于是生成链路的
+  /// `outputBudgetTokens` 被 `16384 × 55% ≈ 9011` 钳死，滑块拖到 25K 也没用。
+  ///
+  /// 这里在页面加载后按默认 provider 的模型名同步一次（不新增任何可编辑控件，
+  /// 窗口仍是只读派生值），保证窗口与模型名一致。
+  Future<void> _syncContextWindowFromModel() async {
+    if (!mounted) return;
+    final _ProviderKind? kind = _kindByRegisteredName(_defaultProvider);
+    if (kind == null) return;
+    final String model = (_configs[kind]?.defaultModel ?? '').trim();
+    if (model.isEmpty) return;
+    final int window = AiRuntimeSettings.parseContextWindow(model);
+    if (window == aiRuntimeSettings.contextWindowTokens) return;
+    final AiRuntimeSettings next = aiRuntimeSettings.copyWith(
+      contextWindowTokens: window,
+    );
+    aiRuntimeSettings = next;
+    await _persistRuntimeSettings(next);
+  }
+
   /// 把当前 provider 配置写入本地（下次启动自动恢复），并在保存默认后同步。
   Future<void> _persistProviderConfig() async {
     try {
@@ -1555,21 +1620,21 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       await ref.read(modelConfigStoreProvider).saveDefault(_defaultProvider);
       // 模型最大参考长度 = 最大令牌数：保存 provider 时一并同步并持久化，
       // 保障重启后生成链路的参考窗口与「最大令牌数」依然一致。
-      // 同时从模型名解析上下文窗口（`ctx16384` → 16384），供生成链路
-      // 把「参考 + 输出」在窗口内切分，避免「最大令牌数填得比窗口还大」。
+      // 窗口优先取**默认 provider** 的模型名（生成链路用的是它）；默认 provider
+      // 未知时退回当前所选 provider —— 否则在非默认 tab 上点保存会把窗口改写成
+      // 别家模型的窗口值（如 OpenRouter 模型没有 ctx 标记 → 被写成 16384）。
+      final _ProviderKind? defKind = _kindByRegisteredName(_defaultProvider);
+      final String defModel = defKind == null
+          ? ''
+          : (_configs[defKind]?.defaultModel ?? '').trim();
       final AiRuntimeSettings synced = aiRuntimeSettings.copyWith(
         maxReferenceLength: _cfg.defaultMaxTokens,
         contextWindowTokens: AiRuntimeSettings.parseContextWindow(
-          _cfg.defaultModel,
+          defModel.isNotEmpty ? defModel : _cfg.defaultModel,
         ),
       );
       aiRuntimeSettings = synced;
-      final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
-      await kv.writeJson(
-        'ai_config',
-        'runtime_settings',
-        jsonEncode(synced.toJson()),
-      );
+      await _persistRuntimeSettings(synced);
     } on Object {
       // 持久化失败不影响保存结果
     }
@@ -1890,7 +1955,11 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
       final String eta = p.etaSeconds > 0
           ? '  ${l10n.tf('AIC.EtaRemainingFmt', '剩余 {0}s', {'0': p.etaSeconds})}'
           : '';
-      return '$phase  ${mb.toStringAsFixed(1)}/$totalMb.toStringAsFixed(1) MB$speed$eta';
+      // ⚠ 必须写 `${...}`：`$totalMb.toStringAsFixed(1)` 只会插值 totalMb，
+      // 后面的 `.toStringAsFixed(1)` 退化成字面文本，
+      // 界面上会显示成「12.3/45.6.toStringAsFixed(1) MB」。
+      // 由 `tools/dart_interp_lint.py` 扫出。
+      return '$phase  ${mb.toStringAsFixed(1)}/${totalMb.toStringAsFixed(1)} MB$speed$eta';
     }
     return phase;
   }
@@ -4923,6 +4992,12 @@ class _SamplingThinkingCardState extends ConsumerState<_SamplingThinkingCard> {
       dryPenaltyLastN: _intOrNull('dry_penalty_last_n'),
       thinkingEnabled: aiRuntimeSettings.thinkingEnabled,
       thinkingIntensity: aiRuntimeSettings.thinkingIntensity,
+      // ⚠ 必须**显式继承**这两项：本卡片只负责采样/思维链，若省略即回落构造
+      // 默认值（4000 / 16384），保存一次采样参数就会把用户在「最大令牌数」
+      // 滑块上设好的 25K 与已同步的上下文窗口静默抹掉 —— 这正是用户报
+      // 「设不了 25K 上下文」的第二个根因。
+      maxReferenceLength: aiRuntimeSettings.maxReferenceLength,
+      contextWindowTokens: aiRuntimeSettings.contextWindowTokens,
     );
     setState(() => aiRuntimeSettings = s);
     await _persist(s);

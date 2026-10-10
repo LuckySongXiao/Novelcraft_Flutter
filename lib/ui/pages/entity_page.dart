@@ -83,6 +83,8 @@ class EntityPageConfig {
     this.summaryField,
     this.previewBuilder,
     this.syncOnSave = false,
+    this.rowActionBuilder,
+    this.formActionBuilder,
   });
 
   final String titleZh;
@@ -106,6 +108,24 @@ class EntityPageConfig {
   /// 保存后是否触发章节后处理（世界观/剧情/时间线自动同步）。
   /// 仅 chapterEntityConfig 置 true——见 entity_page._save。
   final bool syncOnSave;
+
+  /// 可选的**行级操作**：列表每行尾部追加的控件（当前仅 chapterEntityConfig 用，
+  /// 给草稿章提供「重写」）。返回空列表表示该行不显示任何操作。
+  final List<Widget> Function(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> row,
+    VoidCallback reload,
+  )? rowActionBuilder;
+
+  /// 可选的**表单区操作**：详情表单顶部追加的控件（当前仅 chapterEntityConfig 用，
+  /// 提供「按上下文整章重写」）。
+  final List<Widget> Function(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> row,
+    VoidCallback reload,
+  )? formActionBuilder;
 
   final EntityDataSource Function(WidgetRef ref) sourceBuilder;
 
@@ -366,6 +386,19 @@ class _EntityPageState extends ConsumerState<EntityPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// 外部改动（如单章重写）后的刷新：重载列表并把**最新值**回填表单。
+  ///
+  /// 之所以要回填：重写直接改了数据库里的正文，若只刷新左侧列表，右侧表单里
+  /// 还是旧正文 —— 用户接着点「保存」就会把刚重写好的正文覆盖回旧稿。
+  Future<void> _reloadAndRefill() async {
+    await _reload();
+    if (!mounted) return;
+    setState(() {
+      _dirty = false;
+      _fillForm(_selected);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -473,6 +506,14 @@ class _EntityPageState extends ConsumerState<EntityPage> {
                                       final row = _items[i];
                                       final selected =
                                           _selected?['id'] == row['id'];
+                                      final rowActions =
+                                          cfg.rowActionBuilder?.call(
+                                                context,
+                                                ref,
+                                                row,
+                                                _reload,
+                                              ) ??
+                                              const <Widget>[];
                                       return ListTile(
                                         selected: selected,
                                         selectedTileColor:
@@ -495,6 +536,12 @@ class _EntityPageState extends ConsumerState<EntityPage> {
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                               ),
+                                        trailing: rowActions.isEmpty
+                                            ? null
+                                            : Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: rowActions,
+                                              ),
                                         onTap: () => _select(row),
                                       );
                                     },
@@ -514,9 +561,31 @@ class _EntityPageState extends ConsumerState<EntityPage> {
 
   Widget _buildForm(bool isEnglish) {
     final preview = widget.config.previewBuilder;
+    final formActionBuilder = widget.config.formActionBuilder;
+    final List<Widget> formActions = (_selected == null || formActionBuilder == null)
+        ? const <Widget>[]
+        : formActionBuilder(
+            context,
+            ref,
+            _selected!,
+            () => unawaited(_reloadAndRefill()),
+          );
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // 章节专属操作（如「按上下文整章重写」）—— 与「预览本章」同一行右对齐。
+        if (formActions.isNotEmpty) ...[
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: formActions,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         // 功能 A：选中记录后提供只读预览（表单快照 + 行元信息一起带走）
         if (preview != null && _selected != null) ...[
           Align(
@@ -526,16 +595,28 @@ class _EntityPageState extends ConsumerState<EntityPage> {
               label: Text(ref
                   .read(l10nProvider)
                   .t('CPV.Open', '预览本章')),
-              onPressed: () {
+              onPressed: () async {
                 final values = Map<String, dynamic>.of(_selected!);
                 // 表单当前值覆盖：未保存的改动也进预览
                 for (final f in widget.config.fields) {
                   values[f.key] = _formCtrl[f.key]!.text;
                 }
-                Navigator.push(
+                // 章节预览内可「采纳应用」AI 结果并直接写库 —— 返回非 null
+                // 时带回最新字段快照，回填表单控制器，避免旧表单快照
+                // 在下一次保存时把已应用的内容覆盖掉。
+                final Map<String, dynamic>? updated =
+                    await Navigator.push<Map<String, dynamic>>(
                   context,
-                  MaterialPageRoute(builder: (_) => preview(context, values)),
+                  MaterialPageRoute<Map<String, dynamic>>(
+                      builder: (_) => preview(context, values)),
                 );
+                if (updated == null || !mounted) return;
+                for (final f in widget.config.fields) {
+                  final Object? v = updated[f.key];
+                  if (v != null && _formCtrl[f.key] != null) {
+                    _formCtrl[f.key]!.text = '$v';
+                  }
+                }
               },
             ),
           ),

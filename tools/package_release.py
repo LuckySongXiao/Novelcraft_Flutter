@@ -4,7 +4,7 @@
 用法（在工程根目录执行）：
 
     python tools/package_release.py                 # 打包 + 打印校验值
-    python tools/package_release.py --version 1.0.0+35
+    python tools/package_release.py --version 1.0.0+46
     python tools/package_release.py --no-apk        # 跳过 APK（未构建时）
 
 前置：先跑出构建产物
@@ -53,6 +53,22 @@ def sha256(path: str, block: int = 1 << 20) -> str:
     return h.hexdigest().upper()
 
 
+def find_clean_snapshot(release_root: str, version: str) -> str:
+    """定位干净源码快照目录（与 sync_release_snapshot.py 保持同一套探测规则）。
+
+    该目录历史上改过名（`Novelcraft_Flutter_source_v<版本>` →
+    `novelcraft_<版本>_source`），硬编码旧名会让打包在第 2 步直接中断。
+    """
+    candidates = [
+        os.path.join(release_root, "novelcraft_%s_source" % version),
+        os.path.join(release_root, "Novelcraft_Flutter_source_v%s" % version),
+    ]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0]
+
+
 def mirror(src: str, dst: str) -> None:
     """清空 dst 后全量复制 src（dst 必须先存在或可创建）。"""
     os.makedirs(dst, exist_ok=True)
@@ -80,12 +96,14 @@ def zip_dir(srcdir: str, zippath: str, level: int = 6) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--version", default="1.0.0+35")
+    ap.add_argument("--version", default="1.0.0+46")
     ap.add_argument("--release-root", default=RELEASE_ROOT,
                     help="发布件所在根目录（默认工程目录的上两级）")
     ap.add_argument("--no-apk", action="store_true")
     ap.add_argument("--no-win", action="store_true")
     ap.add_argument("--no-source", action="store_true")
+    ap.add_argument("--source-snapshot", default=None,
+                    help="干净源码快照目录（默认在发布根自动探测）")
     args = ap.parse_args()
 
     release_root = os.path.abspath(args.release_root)
@@ -94,8 +112,10 @@ def main() -> int:
     win_zip = win_dir + ".zip"
     src_zip = os.path.join(release_root, "novelcraft_%s_source.zip" % v)
     apk_dst = os.path.join(release_root, "novelcraft_%s_release.apk" % v)
-    source_snapshot = os.path.join(
-        release_root, "Novelcraft_Flutter_source_v1.0.0+35"
+    source_snapshot = (
+        os.path.abspath(args.source_snapshot)
+        if args.source_snapshot
+        else find_clean_snapshot(release_root, v)
     )
 
     produced: list[str] = []

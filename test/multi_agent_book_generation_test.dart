@@ -19,6 +19,64 @@ import 'package:uuid/uuid.dart';
 
 const Uuid _uuid = Uuid();
 
+/// 生成一段「长且不重复」的伪章节正文。
+///
+/// 为什么不能写死常量：质量闸要求定稿 ≥ [MultiAgentBookConfig.minFinalWords]
+/// （默认 3200 字），任何写死的长文本都必然自重复 —— `FictionQuality.issue`
+/// 会立刻判 `repetition`，把链路推进「正文污染纠偏」分支；而纠偏分支要求
+/// 模型**真的产出新正文**，假执行器给不出来，用例就会以
+/// 「纠偏后仍有正文污染」失败。所以这里按模板**程序化生成**变体：
+/// 段落数 150、每段换地点/动作/环境/心理，`_repeatRatio` = 0，
+/// `_degenerationOnset` 也远在阈值之上。
+String _longChapterProse() {
+  const List<String> places = <String>[
+    '演武场',
+    '后山石阶',
+    '藏经阁外的回廊',
+    '丹房前的青砖地',
+    '断崖边的锁链桥',
+    '偏殿的铜炉旁',
+  ];
+  const List<String> verbs = <String>[
+    '拔剑',
+    '侧身',
+    '低喝',
+    '回望',
+    '踏步',
+    '凝神',
+    '收势',
+    '屏息',
+    '疾走',
+    '按柄',
+  ];
+  const List<String> ambience = <String>[
+    '风从北面压下来',
+    '檐角的铜铃又响了一记',
+    '云影掠过石阶',
+    '香灰落了一小撮',
+    '远处传来三声钟',
+    '灯火晃了一晃',
+  ];
+  const List<String> thoughts = <String>[
+    '他想起入门那日的誓词',
+    '师姐的目光停在他的腕上',
+    '内息在经脉里打了个旋',
+    '灵台里那点清明始终没散',
+    '有人在暗处记着这一笔',
+    '旧伤的酸麻又一次醒来',
+  ];
+  final StringBuffer b = StringBuffer('【终稿】');
+  for (int i = 0; i < 150; i++) {
+    b
+      ..write('第${i + 1}节。')
+      ..write('叶知秋在${places[i % places.length]}${verbs[(i * 3) % verbs.length]}，')
+      ..write('${ambience[(i * 5) % ambience.length]}，')
+      ..write('${thoughts[(i * 7) % thoughts.length]}，')
+      ..write('于是把这一式收在${(i * 11) % 97}分力上，等一个更稳的时机。\n\n');
+  }
+  return b.toString();
+}
+
 /// 脚本化假执行器：按 system/user 关键词路由到固定回复，并记录全部调用。
 class _ScriptedChat {
   final List<String> systemCalls = <String>[];
@@ -29,6 +87,9 @@ class _ScriptedChat {
     List<ChatMessage> messages, {
     required int maxTokens,
     double temperature = 0.85,
+    // 客户端 state 会话标识（[AgentChatExecutor] 契约的一部分）：
+    // 打桩里不关心，但签名必须对齐，否则类型不匹配编译不过。
+    String? sessionKey,
   }) async {
     final String user = messages.isEmpty ? '' : messages.last.content;
     systemCalls.add(systemPrompt);
@@ -68,10 +129,18 @@ class _ScriptedChat {
         return '组长补写：' * 60;
       }
       if (user.contains('拼接为整章正文')) {
-        // 质量闸要求定稿 ≥ 4000 字
-        return '【终稿】主角初入宗门，试炼之战后拜师入门，整章正文完整成稿。' * 150;
+        // 质量闸要求定稿 ≥ minFinalWords（默认 3200 字），
+        // 且必须能过 `FictionQuality.issue` 的复读判据 —— 见 [_longChapterProse]。
+        return _longChapterProse();
       }
       return '组长回复。';
+    }
+    // 正文污染纠偏（`Book/repairSystem` = 「你是小说正文写手…」）：
+    // 旧打桩没有这个分支，返回空串 → `issue('')` = empty → 整章被拒。
+    // 真实模型在这里一定会产出新正文，打桩必须对齐。
+    if (systemPrompt.contains('小说正文写手')) {
+      return '纠偏后的段落。叶知秋收剑入鞘，石阶上的碎影随着晨光移了半寸，'
+          '他没有回头，只把呼吸压得极缓，像在等一句迟到很久的话。';
     }
     // 写手：初稿（段落 2 故意写太短触发返工）/ 返工
     if (systemPrompt.contains('SubAgent Writer')) {
@@ -165,6 +234,7 @@ void main() {
                 List<ChatMessage> messages, {
                 required int maxTokens,
                 double temperature = 0.85,
+                String? sessionKey,
               }) {
                 mainCalls.add(system);
                 return chat.call(
@@ -180,6 +250,7 @@ void main() {
                 List<ChatMessage> messages, {
                 required int maxTokens,
                 double temperature = 0.85,
+                String? sessionKey,
               }) {
                 subCalls.add(system);
                 return chat.call(

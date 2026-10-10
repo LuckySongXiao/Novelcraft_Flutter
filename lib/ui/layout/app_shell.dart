@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/app_version.dart';
 import '../../core/di.dart';
 import '../../l10n/l10n.dart';
 import '../pages/multi_agent_run_matrix_dialog.dart';
@@ -62,11 +63,67 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// 用户手动切换后以手动值为准。
   bool? _extendedOverride;
 
-  /// AppBar 右上角的「写作中」绿色动态长条（多智能体写书后台运行时出现，
-  /// 点击打开章节矩阵实时进度视图）。
+  /// AppBar 右上角的写作长条：
+  ///   * 运行中 → 绿色「写作中」动态长条（多智能体写书后台运行时出现，
+  ///     点击打开章节矩阵实时进度视图）；
+  ///   * 已结束且可回看 → 「写作结果」长条（有 NG 章时用警示色并标出数量）。
+  ///
+  /// 第二种形态是 2026-10-10 补的：以前运行结束状态被丢弃、窗口自动关闭，
+  /// 作者之后再也无法回看「哪几章 NG 了、NG 率多少」—— 实测痛点。
   List<Widget> _buildWritingPill(BuildContext context) {
     final MultiAgentRunState? run = ref.watch(multiAgentRunProvider);
-    if (run == null || !run.running) return const <Widget>[];
+    if (run == null) return const <Widget>[];
+    final l10n = ref.watch(l10nProvider);
+
+    if (!run.running && run.hasLastRun) {
+      final bool hasNg = run.failedCount > 0;
+      final Color tone = hasNg ? Colors.orange : Colors.green;
+      return <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: Tooltip(
+            message: run.step,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => showMultiAgentRunMatrixDialog(context),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: tone.withValues(alpha: 0.14),
+                  border: Border.all(color: tone, width: 1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      hasNg ? Icons.error_outline : Icons.check_circle_outline,
+                      size: 12,
+                      color: tone,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      hasNg
+                          ? l10n.tf('MAG.ResultShortNgFmt', '写作结果 · NG {0} 章',
+                              <Object>[run.failedCount])
+                          : l10n.t('MAG.ResultShort', '写作结果'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: tone,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    if (!run.running) return const <Widget>[];
     final double? p = run.effectiveProgress;
     final String pct = p == null ? '' : ' ${(p * 100).round()}%';
     return <Widget>[
@@ -670,7 +727,7 @@ class _StatusBar extends ConsumerWidget {
           ),
           const Spacer(),
           Text(
-            'v1.0.0+23',
+            kAppVersionLabel,
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
         ],
