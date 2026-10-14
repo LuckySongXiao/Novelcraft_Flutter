@@ -2,6 +2,7 @@ import '../../ai/models/provider.dart';
 import '../../ai/runtime_settings.dart';
 import '../../ai/rwkv/rwkv_sampling.dart';
 import '../../ai/utils/fiction_quality.dart';
+import '../../ai/utils/selection_apply_text.dart' show isTruncatedSelection;
 
 enum ChapterAiAction { polish, dedupePolish, expand, continueWrite, rewrite }
 
@@ -99,13 +100,31 @@ abstract final class SelectionEditService {
       volumeOutline: volumeOutline, prevChapterTail: prevChapterTail,
     ),
     parameters: isRwkvFamilyProvider(provider.providerName)
-        ? aiRuntimeSettings.longFormSamplingParams() : {},
+        ? <String, dynamic>{
+            ...aiRuntimeSettings.longFormSamplingParams(),
+            // 思维链总开关关掉时，必须显式告诉 RWKV 云服务端「不要加思考前缀」——
+            // 官方文档（docs/rwkv_lightning_api/http-api.zh-CN.md）里
+            // `think_type: none` 才是关思考的正确手段；省略该字段服务端默认 `fast`，
+            // 于是 App 里「关闭思维链」在云路由上从未真正生效（思考 token 还会
+            // 挤占本就不够的正文预算）。开的时候不传，沿用服务端默认。
+            if (!aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
+          }
+        : <String, dynamic>{},
     validate: (text) {
       if (text == selected.trim()) return 'unchanged_selection';
-      if (action != ChapterAiAction.dedupePolish &&
+      // 截断判据只对**替换语义**（润色 / 扩写 / 重写）成立；续写产出的是新增文本，
+      // 与选区长度无可比性 —— 否则「选一段长文再续写」会被 0.6 倍基线判死
+      //（见 selection_apply_text.dart:isTruncatedSelection 的完整说明）。
+      final bool shrinkable =
+          action != ChapterAiAction.dedupePolish &&
           action != ChapterAiAction.rewrite &&
-          !RegExp(r'重写|无效|精简|缩短|rewrite|shorten', caseSensitive: false).hasMatch(instruction) &&
-          text.length < selected.length * .6) {
+          !RegExp(r'重写|无效|精简|缩短|rewrite|shorten', caseSensitive: false).hasMatch(instruction);
+      if (shrinkable &&
+          isTruncatedSelection(
+            resultLength: text.length,
+            selectedLength: selected.length,
+            additive: action == ChapterAiAction.continueWrite,
+          )) {
         return 'truncated_selection';
       }
       // 续写下限：目标 1200 字的 50%（600 字）—— 两次尝试都不足即如实报错，

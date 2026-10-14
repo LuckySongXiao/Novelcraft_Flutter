@@ -101,6 +101,36 @@ void main() {
   _check('D4 短文本不判（清洗层另有门槛）', !RepetitionGuard.isDegenerate('本章目标：本章目标：短复读'));
   _check('D5 空文本安全', !RepetitionGuard.isDegenerate(''));
 
+  print('== E. 正文落库闸：旧判据漏网、复读守卫必须抓住的形态 ==');
+  // 旧正文质量闸（FictionQuality.issue）的两条判据都抓不住下面两种形态：
+  //   ① 句子级判据要求单句 ≥16 字且出现 ≥3 次 —— 短句循环直接漏网；
+  //   ② 段落级判据（_repeatRatio>0.5）只看整段全同 —— 段内换词复读漏网。
+  // +46 的 RepetitionGuard 必须兜住，否则复读正文仍会穿闸落库（已修为
+  // ChapterRewriteService._persistAndSync 的落库前闸）。
+  final String shortLoop = '他笑了。' * 40;
+  print('  短句循环 ngram=${RepetitionGuard.charNgramRepeatRatio(shortLoop)}');
+  _check('E1 短句循环判退化（旧句子级判据漏网）', RepetitionGuard.isDegenerate(shortLoop));
+
+  final String midRepeat =
+      '雪落下来的时候，他想起那年冬天在渡口等船的人。' +
+      '雪落下来的时候，他想起那年冬天在渡口等船的人啊。' +
+      '雪落下来的时候，他想起那年冬天在渡口等船的人呢。' +
+      '雪落下来的时候，他想起那年冬天在渡口等船的人吧。' +
+      '雪落下来的时候，他想起那年冬天在渡口等船的人。' +
+      '雪落下来的时候，他想起那年冬天在渡口等船的人啊。';
+  print('  换词复读 ngram=${RepetitionGuard.charNgramRepeatRatio(midRepeat)}');
+  _check('E2 换词复读判退化', RepetitionGuard.isDegenerate(midRepeat));
+
+  // 误杀防线：正常长篇散文（多段、无重复）必须放过。
+  const String longProse =
+      '夜色像一层薄薄的灰布，慢慢盖住了整条街。'
+      '陈九把最后一扇窗掩上，回身看见桌上那盏油灯正一跳一跳地烧着。'
+      '他伸手拨了拨灯芯，火光稳下来，照出墙角那只落了灰的木箱。'
+      '木箱的锁是新的，铜面还亮着，显然不久前才被人换过。'
+      '他盯着那把锁看了很久，直到门外传来脚步声，才慢慢直起身。'
+      '那脚步声不紧不慢，在门槛外停住了，接着是三下轻轻的叩门。';
+  _check('E3 正常长篇散文不误杀', !RepetitionGuard.isDegenerate(longProse));
+
   print('== 结果 ==');
   print('passed=$_passed failed=$_failed');
   if (_failed > 0) {

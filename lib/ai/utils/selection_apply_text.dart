@@ -56,3 +56,27 @@ String applySelectionResult({
       ? '$before\n\n$cleanResult'
       : '$before\n\n$cleanResult\n\n$rest';
 }
+
+/// 「结果明显短于选区」的截断判据（纯函数，供选节编辑的 validate 复用）。
+///
+/// ⚠ 只有**替换语义**（润色 / 去重润色 / 扩写 / 重写）才成立 —— 结果覆盖选区，
+/// 长度理应与选区相当。**续写语义是「新增」文本**（插到所选段落之后，原选区保留），
+/// 其长度与选区长度没有任何可比性。
+///
+/// 用户实测 BUG（v1.0.0+46）：此前 validate 一律按 `result < selected * 0.6` 判截断，
+/// 于是「选中一段 3000 字的长文 → 续写」时，模型产出的 1200 字合格续写
+/// （≥ 续写下限 600 字）会被判成 `truncated_selection` → 两次重试都失败 → 整个
+/// 续写动作如实报错。选区越长越必失败，正是「长选区续写永远失败」的根因。
+///
+/// [additive] 为 true（续写）时**恒返回 false**；[selectedLength] 非正时同样不判
+/// （没有可比基线）。[minRatio] 为允许的最小长度比。
+bool isTruncatedSelection({
+  required int resultLength,
+  required int selectedLength,
+  required bool additive,
+  double minRatio = 0.6,
+}) {
+  if (additive) return false;
+  if (selectedLength <= 0) return false;
+  return resultLength < selectedLength * minRatio;
+}

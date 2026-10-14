@@ -1,9 +1,17 @@
-// 8 个具体 Agent 的完整实现（精修版，修仙题材专业 system prompt）。
+// 8 个具体 Agent 的完整实现。
+//
+// ⚠ +47 重要修正（去硬编码）：本文件此前把**某一本书**（《玄穹剑主》）
+// 的书名、题材与 5 个角色名写死在 **system prompt 与回退文本**里。后果：
+//   * 任何**其它项目**走这条链路（例如《夜闯寡妇村》）都会被模型写成
+//     《玄穹剑主》的人物与设定 —— 属于「会导致模型写作异常的数据」；
+//   * 回退文本本身就是别的书的正文片段，一旦被落库就污染项目。
+// 现在：**题材/书名/人物一律由调用方通过 parameters 提供**；回退文本改为
+// 明确的失败占位（[aiUnavailablePlaceholder]），不再伪造内容。
 //
 // 对应 C# `Agents/` 下各 Agent 实现。这里按「角色独立、上下游数据结构明确」原则：
 //
 // 1. 每个 Agent 都覆写 [buildSystemPrompt] + [buildUserPrompt]：
-//    - System Prompt：贴合《玄穹剑主》风格（修仙/东方奇幻），明确任务（职责明确、用词一致），并要求结构化输出（分节）
+//    - System Prompt：只描述**职责与输出结构**，不绑定具体题材/人名
 //    - User Prompt：把 parameters 展开为自然语言指令。
 // 2. 每个 Agent 都显式定义 capability 清单（对应 NovelWorkflowEngine 的 task name）。
 // 3. [processAIResponse] 把 AI 生成的 Markdown 标题行解析成 Map<String,dynamic> 放入 metadata，
@@ -13,6 +21,15 @@ library;
 
 import 'agent.dart';
 import '../utils/anti_ai_flavor.dart';
+
+/// AI 不可用时的**失败占位**（替代此前的「其它小说正文片段」回退）。
+///
+/// 为什么必须换掉：旧回退文本是《玄穹剑主》的设定/正文，调用方无法区分
+/// 「这是内容」还是「这是失败」，一旦落库就把**别的书**写进了用户项目。
+/// 现在返回一眼可辨的占位串，且 `metadata['Fallback'] = true` 仍可程序化判定。
+String aiUnavailablePlaceholder(String taskType, String what) =>
+    '（AI 不可用，未生成$what。任务「$taskType」未真正执行 —— '
+    '请检查模型/服务配置后重试。此占位内容不可作为项目数据保存。）';
 
 /// 从 AI 返回中抽取 Markdown 标题（## xxx）与下一段内容到 Map。
 Map<String, String> parseMarkdownSections(String ai) {
@@ -84,20 +101,24 @@ class DirectorAgent extends BaseAgent {
 
   @override
   String buildSystemPrompt(String taskType) {
+    // ⚠ +47 去硬编码：这些 system prompt 此前写死了《玄穹剑主》的题材与人名，
+    // 任何其它项目（例如《夜闯寡妇村》）走这条链路都会被注入**错误的书名/角色**。
+    // 现在一律「题材/人物由输入决定」，只保留结构性要求。
     if (taskType == 'AnalyzeTheme') {
-      return '你是 NovelCraft 主编（Director），专精东方奇幻/修仙题材主题提炼。'
+      return '你是 NovelCraft 主编（Director），负责提炼书籍主题。'
           '请按以下分节输出：## 核心主题（一句话）/ ## 副主题（2~4条）/ ## 剧情结构（分幕分卷）/ ## 节奏建议 / ## 情绪曲线。'
-          '所有输出必须中文，每条分节至少 3 行内容。';
+          '题材与风格**以用户提供的设定为准**，不要自行假定；所有输出必须中文，每条分节至少 3 行内容。';
     }
     if (taskType == 'GenerateOutline') {
-      return '你是《玄穹剑主》专业主编。请按 ## 第一卷 / ## 第二卷 ... 结构生成分卷大纲：'
+      return '你是专业主编。请按 ## 第一卷 / ## 第二卷 ... 结构生成分卷大纲：'
           '每卷含「卷名 · 简介（80~150字）· 核心冲突 · 主角阶段目标」；至少 4 卷；'
-          '分幕（开端/发展/高潮/结局）清晰，卷间伏笔串联；所有中文。';
+          '分幕（开端/发展/高潮/结局）清晰，卷间伏笔串联；所有中文。'
+          '书名、题材、人物**一律以用户提供的设定为准**，不得替换为其它作品。';
     }
     if (taskType == 'CreateWorldSetting') {
-      return '你是东方奇幻设定总监。请按 ## 地理 / ## 修炼体系（境界9级+每级简释） / '
-          '## 资源（灵石丹药法宝分级） / ## 势力（正道/魔道/妖族） / ## 族群（人族/妖族关系） / ## 禁忌历史 输出；'
-          '逻辑自洽，东方修仙风格，不可混杂现代或西方元素。';
+      return '你是世界观设定总监。请按 ## 地理 / ## 力量体系（分级+每级简释） / '
+          '## 资源 / ## 势力 / ## 族群 / ## 禁忌历史 输出；'
+          '**体系形态以用户提供的题材为准**（修仙/奇幻/科幻/都市等），逻辑自洽、不可混杂无关元素。';
     }
     if (taskType == 'OptimizeOutline') {
       return '你是资深主编。请诊断用户给出的大纲，按 ## 存在问题 / ## 优化后方案 分节输出；'
@@ -137,29 +158,13 @@ class DirectorAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    String fb;
-    if (taskType == 'AnalyzeTheme') {
-      fb = '## 核心主题\n凡人逆天改命，打破天道桎梏\n'
-          '## 副主题\n1. 兄弟情义（叶知秋 x 谢青山）\n'
-          '2. 正魔之辨（非黑即白的反思）\n3. 救赎（苏曼莎摆脱妖族宿命）\n'
-          '## 剧情结构\n四幕：入门青云 → 秘境争锋 → 宗门之变 → 飞升证道\n'
-          '## 节奏建议\n前期紧凑（每卷15-25章），第3卷宗门大战达高潮\n'
-          '## 情绪曲线\n压抑（灭门）-温情（入门）-燃（秘境）-悲（宗门之变）-喜（飞升）';
-    } else if (taskType == 'GenerateOutline') {
-      fb = '## 第一卷 · 青云少年行\n简介：叶知秋从秋风镇登青云，入门大试觉醒上古剑脉，拜入师门。\n核心冲突：血煞门外门追杀案；主角阶段目标：通过入门大试。\n'
-          '## 第二卷 · 青冥秘境\n简介：秘境开启，与苏曼莎首次相遇组队夺机缘。\n核心冲突：五大洲年轻一代争锋；目标：夺秘境榜首。\n'
-          '## 第三卷 · 青云之变\n简介：血无极率血煞门攻上青云，灭门真相揭露。\n核心冲突：青云存亡；目标：突破元婴，守护宗门。\n'
-          '## 第四卷 · 玄穹飞升\n简介：平定乱世，叶知秋证玄穹剑主真身飞升。\n核心冲突：天道桎梏；目标：携众人飞升。';
-    } else if (taskType == 'CreateWorldSetting') {
-      fb = '## 地理\n青冥山脉三千里 / 血泽魔渊十二州 / 中州皇朝 / 极北冰原 / 东荒妖族\n'
-          '## 修炼体系\n炼气→筑基→金丹→元婴→化神→炼虚→合体→大乘→渡劫→飞升（10级，每级分初/中/后/圆满）\n'
-          '## 资源\n下品/中品/上品/极品灵石（兑换1:100）；一至九品丹药；法器→灵器→仙器→神器\n'
-          '## 势力\n正道（青云/紫霄/瑶池）；魔道（血煞/合欢/幽冥）；妖族（月影狐族/金鹏/龙族）\n'
-          '## 族群\n人族、妖族互有往来但不信任，魔族为上古遗留禁忌血脉\n'
-          '## 禁忌历史\n万年前天道崩塌一战，玄穹剑主陨落后剑脉四散，此后飞升之路半锁。';
-    } else {
-      fb = 'Director 本地回退：$taskType';
-    }
+    // ⚠ +47：不再返回《玄穹剑主》的设定（那是**别的书**的数据）。
+    final String fb = aiUnavailablePlaceholder(
+      taskType,
+      taskType == 'AnalyzeTheme'
+          ? '主题分析'
+          : (taskType == 'GenerateOutline' ? '分卷大纲' : '世界观设定'),
+    );
     return AgentTaskResult(
       isSuccess: true,
       data: fb,
@@ -217,26 +222,30 @@ class WriterAgent extends BaseAgent {
 
   @override
   String buildSystemPrompt(String taskType) {
+    // ⚠ +47 去硬编码：此前这里写死了《玄穹剑主》书名与 5 个角色的人设语气
+    //（叶知秋/谢青山/苏曼莎/冷无霜/血无极），任何其它项目都会写出**错误的人名与语气**。
+    // 现在改为「人物与语气一律取自用户提供的章大纲 / 项目设定」。
     if (taskType == 'GenerateChapterContent') {
       // 反 AI 味五戒：StoryScope（arXiv:2604.03136）实证的 5 大话语层
       // AI 写作倾向，作为负向约束注入（见 anti_ai_flavor.dart 头注）
       return withAntiAiFlavorGuidelines(
-        '你是《玄穹剑主》的网文主笔作家（WriterAgent）。'
-        '要求：严格中文、第三人称、无现代用语、修仙术语统一；'
-        '分节：## 章节标题 / ## 正文；字数：至少1500字。'
-        '人物语气必须匹配：叶知秋=冷静外冷内热；谢青山=憨厚正直；苏曼莎=清冷隐忍；'
-        '冷无霜=冷艳毒舌；血无极=阴毒深沉。开头抓眼球，结尾留钩子。',
+        '你是专业中文小说主笔作家（WriterAgent）。'
+        '要求：严格中文、第三人称、只用用户给定的人物与设定（不得引入其它作品的人物/名词）；'
+        '只输出章节正文，不要输出标题、解释、字数统计或大纲；'
+        '开头抓眼球，结尾留钩子；若用户给出了目标字数，必须写满。',
       );
     }
     if (taskType == 'ContinueChapter') {
       return withAntiAiFlavorGuidelines(
-        '你是东方奇幻续写手。请根据上下文延续，人物不崩、节奏不停、字数1500-2500，结尾必须留强钩子。',
+        '你是专业中文小说续写手。请根据上下文延续：人物不崩、设定不乱、节奏不停，'
+        '只输出**新增**正文（不要重复已给的上文），结尾留强钩子；若给出了目标字数必须写满。',
       );
     }
     if (taskType == 'PolishText') {
       // 润色同样是 AI 味重灾区：选节润色最容易把松散线索「顺」成整洁单线
       return withAntiAiFlavorGuidelines(
-        '你是专业文字润色编辑。请从语病修复、人物语气统一、场景生动化、修仙术语一致、节奏紧凑化五方面润色用户提供的正文，直接输出润色后的完整文本。'
+        '你是专业文字润色编辑。请从语病修复、人物语气统一、场景生动化、术语一致、节奏紧凑化五方面'
+        '润色用户提供的正文，直接输出润色后的完整文本。'
         '润色时保留原文的时间线结构与结局歧义，不要把留白解释清楚。',
       );
     }
@@ -247,8 +256,11 @@ class WriterAgent extends BaseAgent {
   String buildUserPrompt(String taskType, Map<String, dynamic> parameters) {
     final b = StringBuffer('请执行任务 $taskType。\n');
     parameters.forEach((k, v) => b.writeln('$k: $v'));
+    // ⚠ +47 去硬编码：此前缺省塞入《玄穹剑主》的角色名，会把错误人名写进别的书。
+    // 现在只提示「按给定设定」，不注入任何具体人名。
     if (taskType == 'GenerateChapterContent' && !parameters.containsKey('chapterTitle')) {
-      b.writeln('默认标题：未命名章节；默认角色：叶知秋、谢青山、冷无霜');
+      b.writeln('（未提供章节标题与人物表：请严格按上方给出的项目设定与大纲写作，'
+          '不得引入设定之外的人物或名词。）');
     }
     return b.toString();
   }
@@ -275,16 +287,17 @@ class WriterAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    const fb = '【本地回退章节示例】\n\n'
-        '叶知秋背负玄铁古剑，立在青云山外的云海边缘，剑眉微蹙。\n\n'
-        '谢青山拍了拍他的肩膀：「小师弟，你今日是第一次登青云主峰，不必紧张。」\n'
-        '话音未落，远处一道剑光破云而来，冷无霜一袭雪白狐裘落于二人身前，冷冷道：「大师兄，长老会召你议事。」\n\n'
-        '叶知秋低头抱拳，却察觉冷无霜的目光在他腰间古剑上停留了一瞬。\n';
+    // ⚠ +47：旧回退是《玄穹剑主》的**正文片段**（含 4 个角色名）——
+    // 一旦被当成章节内容落库，就把别的书写进了用户项目。改为失败占位。
+    final String fb = aiUnavailablePlaceholder(
+      taskType,
+      taskType == 'GenerateChapterContent'
+          ? '章节正文'
+          : (taskType == 'ContinueChapter' ? '续写正文' : '润色结果'),
+    );
     return AgentTaskResult(
       isSuccess: true,
-      data: taskType == 'GenerateChapterContent'
-          ? '${parameters['chapterTitle'] ?? '未命名章节'}\n\n$fb'
-          : (taskType == 'ContinueChapter' ? fb : '润色结果（本地回退：$taskType）'),
+      data: fb,
       metadata: {
         'TaskType': taskType,
         'sections': parseMarkdownSections(fb),
@@ -383,17 +396,9 @@ class CharacterAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    const fb = '## 基本信息\n姓名：示例 / 化名：示 / 性别：男 / 种族：人族 / 宗门：青云宗 / 身份：内门弟子\n'
-        '## 外貌\n面容清俊，身形修长，腰间悬一柄短剑，右虎口常年有厚茧。\n'
-        '## 性格\n沉稳内敛，重情义，对敌人绝不手软。\n'
-        '## 身世背景\n自小失祜，由宗门药堂抚养长大，少年时便立誓要护身后之人。\n'
-        '## 动机\n短期：通过内门大比；长期：守护青云宗。\n'
-        '## 核心冲突\n内在：怕自己太弱护不住人；外在：魔道势大。\n'
-        '## 优势\n悟性极高 / 意志力坚韧\n'
-        '## 弱点\n过于在意他人眼光，重压时会冲动。\n'
-        '## 修为境界\n炼气九层\n'
-        '## 标签\n内门弟子、剑修、护短\n'
-        '## 与其他角色关系\n1. 视大师兄谢青山为兄长；2. 对冷无霜有好感但不敢言；3. 与血煞门弟子天生敌对。';
+    // ⚠ +47：旧回退是某本书的角色档案（含青云宗/谢青山/冷无霜等），
+    // 会被当成「角色设定」写进用户项目。改为失败占位。
+    final String fb = aiUnavailablePlaceholder(taskType, '角色档案');
     return AgentTaskResult(
       isSuccess: true,
       data: fb,
@@ -492,11 +497,8 @@ class PlotAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    const fb = '## 开端\n秋风吹叶，灭门旧事起\n叶知秋父母被血煞门所害，被谢青山救上青云山。\n'
-        '## 上升情节\n入门试剑\n入门大试中叶知秋体内上古剑脉觉醒，震动九峰长老。\n'
-        '## 中盘转进\n秘境相逢\n青冥秘境中与苏曼莎联手御敌，情愫暗生；同时察觉宗门内有内鬼。\n'
-        '## 高潮\n青云大战\n血无极率血煞门攻上青云，叶知秋得知灭门真相，剑脉完全觉醒，突破元婴。\n'
-        '## 结局\n玄穹飞升\n平定乱世，叶知秋证玄穹剑主真身，与众人同登飞升之路。';
+    // ⚠ +47：旧回退是某本书的剧情结构（含叶知秋/血煞门等）。改为失败占位。
+    final String fb = aiUnavailablePlaceholder(taskType, '剧情结构');
     return AgentTaskResult(
       isSuccess: true,
       data: fb,
@@ -549,9 +551,12 @@ class WorldAgent extends BaseAgent {
 
   @override
   String buildSystemPrompt(String taskType) {
+    // ⚠ +47 去硬编码：此前写死「东方奇幻 / 修炼体系 / 正道魔道妖族」，
+    // 非该题材的项目会被强行塞进修仙世界观。现在体系形态由输入决定。
     if (taskType == 'CreateWorldSetting') {
-      return '你是东方奇幻设定总监。按 ## 地理 / ## 修炼体系（10级境界+描述）/ ## 货币与资源 / '
-          '## 势力（正道/魔道/妖族 三足）/ ## 禁忌 / ## 近百年大事年表（≥20条） 分节，逻辑自洽，不可混杂现代或西方元素。';
+      return '你是世界观设定总监。按 ## 地理 / ## 力量或规则体系（分级+描述）/ ## 货币与资源 / '
+          '## 势力格局 / ## 禁忌 / ## 近百年大事年表（≥20条） 分节，逻辑自洽。'
+          '**体系形态与题材以用户提供的设定为准**（修仙/奇幻/科幻/都市/历史等），不得自行假定。';
     }
     if (taskType == 'OptimizeWorldSetting') {
       return '你是设定医生。按 ## 逻辑漏洞 / ## 战力平衡修正 / ## 经济体系自洽 / ## 地域特色 给出优化方案。';
@@ -586,12 +591,8 @@ class WorldAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    const fb = '## 地理\n青冥山脉 / 血泽魔渊 / 中州皇朝 / 极北冰原 / 东荒妖族\n'
-        '## 修炼体系\n炼气→筑基→金丹→元婴→化神→炼虚→合体→大乘→渡劫→飞升，每级分初/中/后/圆满。\n'
-        '## 货币与资源\n灵石四级；丹药九品；法器→灵器→仙器→神器；仙晶仅上界流通。\n'
-        '## 势力\n正道（青云/紫霄/瑶池），魔道（血煞/合欢/幽冥），妖族八部。\n'
-        '## 禁忌\n修炼中不可提及他人名讳夺其气运；不可擅入上古战场；不可与魔族缔结盟约。\n'
-        '## 近百年大事年表\n100年前·青冥秘境首次开启；50年前·血煞门崛起；30年前·天道封印松动。';
+    // ⚠ +47：旧回退是某本书的修仙世界观（青冥山脉/血煞门/炼气→飞升）。
+    final String fb = aiUnavailablePlaceholder(taskType, '世界观设定');
     return AgentTaskResult(
       isSuccess: true,
       data: fb,
@@ -780,12 +781,8 @@ class SummarizerAgent extends BaseAgent {
     String taskType,
     Map<String, dynamic> parameters,
   ) async {
-    const fb = '## 一句话剧情\n叶知秋初登青云山，拜入师门\n'
-        '## 出场人物\n叶知秋 / 谢青山 / 冷无霜\n'
-        '## 关键事件\n拜师大典；入门剑脉初觉；冷无霜留意叶知秋腰间古剑。\n'
-        '## 情绪基调\n温馨中带一丝隐忧\n'
-        '## 埋下伏笔\n上古剑脉觉醒、宗门内鬼线索。\n'
-        '## 后续可回收\n冷无霜与上古剑主可能存在前世渊源。';
+    // ⚠ +47：旧回退是某本书的章节摘要（含叶知秋等）。改为失败占位。
+    final String fb = aiUnavailablePlaceholder(taskType, '章节摘要');
     return AgentTaskResult(
       isSuccess: true,
       data: fb,

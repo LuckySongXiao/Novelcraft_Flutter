@@ -584,33 +584,37 @@ Ability Features:
                   'A recluse of legend, once the most celebrated figure of his era',
             ),
           ]
+        // ⚠ +47 去硬编码：旧回退是**修仙题材**的具体人物
+        //（林轩/苏雨薇/玄天老祖 + 修仙传承/修仙天才），会污染非修仙项目。
+        // 与上面 `_createGenericCultivationSystem` 的中性策略保持一致：
+        // 只给「结构占位 + 中性命名」，题材由作者/AI 后续替换。
         : const <_CharacterTemplate>[
             _CharacterTemplate(
-              name: '林轩',
+              name: '主角',
               type: '主角',
-              gender: '男',
-              age: 18,
-              appearance: '相貌英俊，身材修长，眼神坚毅',
-              personality: '坚韧不拔，正义感强，重情重义',
-              background: '出身平凡，因机缘巧合获得修仙传承',
+              gender: '未定',
+              age: 0,
+              appearance: '（待补充：外貌）',
+              personality: '（待补充：性格）',
+              background: '（待补充：身世背景，须贴合本项目题材）',
             ),
             _CharacterTemplate(
-              name: '苏雨薇',
-              type: '女主角',
-              gender: '女',
-              age: 17,
-              appearance: '倾国倾城，气质出尘，如仙子下凡',
-              personality: '聪慧善良，外柔内刚，冰雪聪明',
-              background: '名门世家出身，天赋卓绝的修仙天才',
+              name: '主要配角',
+              type: '配角',
+              gender: '未定',
+              age: 0,
+              appearance: '（待补充：外貌）',
+              personality: '（待补充：性格）',
+              background: '（待补充：身世背景）',
             ),
             _CharacterTemplate(
-              name: '玄天老祖',
-              type: '师父',
-              gender: '男',
-              age: 800,
-              appearance: '仙风道骨，白发飘逸，深不可测',
-              personality: '睿智深沉，慈祥严厉，洞察世事',
-              background: '隐世高人，曾经的修仙界传奇人物',
+              name: '引导者',
+              type: '导师',
+              gender: '未定',
+              age: 0,
+              appearance: '（待补充：外貌）',
+              personality: '（待补充：性格）',
+              background: '（待补充：身世背景）',
             ),
           ];
 
@@ -676,27 +680,28 @@ Ability Features:
               importance: 10,
               order: 1,
             ),
+            // ⚠ +47 de-hardcoded (see the zh branch): no genre-specific content.
             const _WorldSettingTemplate(
               name: 'World Geography',
               type: 'Geography Setting',
               content:
-                  "The known world spans four great regions, each with distinct terrain, cultures, and resources that shape their people's ways of life.",
+                  '(To be filled in: the main regions, terrain, and resource distribution of this project.)',
               importance: 9,
               order: 2,
             ),
             const _WorldSettingTemplate(
-              name: 'Energy System',
-              type: 'Energy Setting',
+              name: 'Power / Rule System',
+              type: 'System Setting',
               content:
-                  "The world's energy flows in five elemental currents (metal, wood, water, fire, earth) plus rare variants such as lightning, ice, and wind. Practitioners attune to affinities matching their nature.",
+                  '(To be filled in: this project\'s energy or rule system and its classification, matching the genre.)',
               importance: 8,
               order: 3,
             ),
             const _WorldSettingTemplate(
-              name: 'Artifact Ranks',
+              name: 'Items & Resource Tiers',
               type: 'Item Setting',
               content:
-                  'Artifacts are ranked: Mortal → Spirit → Treasure → Law → Immortal → Divine. Each rank divides into lower, middle, upper, and peak quality.',
+                  '(To be filled in: the tiers and quality grades of key items/resources in this project.)',
               importance: 7,
               order: 4,
             ),
@@ -704,7 +709,7 @@ Ability Features:
               name: 'Time & Lifespan',
               type: 'Time Setting',
               content:
-                  'Time flows as it does in the mortal world, yet practitioners live far longer — roughly two centuries at the early ranks, five at the middle, a thousand at the high, and beyond.',
+                  '(To be filled in: this project\'s calendar, time flow, and any lifespan rules tied to its power system.)',
               importance: 7,
               order: 5,
             ),
@@ -717,31 +722,33 @@ Ability Features:
               importance: 10,
               order: 1,
             ),
+            // ⚠ +47 去硬编码：旧回退写死了「九天仙域 / 灵气体系 / 法宝等级 /
+            // 练气期寿命」等修仙设定，会污染非修仙项目。改为中性占位。
             const _WorldSettingTemplate(
               name: '世界地理',
               type: '地理设定',
-              content: '九天仙域分为四大洲：东胜神洲、西牛贺洲、南赡部洲、北俱芦洲。每洲都有独特的地理环境和修炼资源。',
+              content: '（待补充：本项目的主要地域划分、地理特征与资源分布。）',
               importance: 9,
               order: 2,
             ),
             const _WorldSettingTemplate(
-              name: '灵气体系',
-              type: '能量设定',
-              content: '天地灵气分为五行灵气（金木水火土）和特殊灵气（雷、冰、风等）。修炼者根据体质吸收不同属性的灵气。',
+              name: '力量或规则体系',
+              type: '体系设定',
+              content: '（待补充：本项目的能量/规则体系及其分类，须贴合项目题材。）',
               importance: 8,
               order: 3,
             ),
             const _WorldSettingTemplate(
-              name: '法宝等级',
+              name: '物品与资源分级',
               type: '物品设定',
-              content: '法宝等级：凡器→灵器→宝器→法器→仙器→神器。每个等级又分为下品、中品、上品、极品四个品质。',
+              content: '（待补充：本项目关键物品/资源的分级与品质划分。）',
               importance: 7,
               order: 4,
             ),
             const _WorldSettingTemplate(
               name: '时间设定',
               type: '时间设定',
-              content: '修仙界时间流速与凡间相同，但修炼者寿命大幅延长。练气期寿命200年，筑基期500年，金丹期1000年，以此类推。',
+              content: '（待补充：本项目的时间流速、历法，以及与力量体系相关的寿命设定。）',
               importance: 7,
               order: 5,
             ),
@@ -815,42 +822,44 @@ Ability Features:
               tags: 'commerce,wealth,trade,neutral',
             ),
           ]
+        // ⚠ +47 去硬编码：旧回退是修仙题材的三个势力（玄天宗/血月宗/万宝商会），
+        // 会污染非修仙项目。改为中性占位，名称与设定由作者/AI 后续替换。
         : const <_FactionTemplate>[
             _FactionTemplate(
-              name: '玄天宗',
-              type: '修仙宗门',
+              name: '主要势力A',
+              type: '（待定）',
               powerLevel: 95,
-              description: '修仙界历史悠久的大型宗门，拥有强大实力和深厚底蕴，门规严明，注重传承',
-              territory: '玄天山脉',
-              memberCount: 50000,
+              description: '（待补充：本项目的主导势力，须贴合题材。）',
+              territory: '（待补充）',
+              memberCount: 0,
               powerRating: 95,
               influence: 90,
               importance: 95,
-              tags: '宗门,修仙,传承,强大',
+              tags: '待补充',
             ),
             _FactionTemplate(
-              name: '血月宗',
-              type: '修仙宗门',
+              name: '对抗势力B',
+              type: '（待定）',
               powerLevel: 85,
-              description: '以血系功法闻名的修仙宗门，修炼方式独特，在修仙界有着特殊地位',
-              territory: '血月峡谷',
-              memberCount: 30000,
+              description: '（待补充：与主导势力对立的一方。）',
+              territory: '（待补充）',
+              memberCount: 0,
               powerRating: 85,
               influence: 70,
               importance: 80,
-              tags: '宗门,血系功法,独特修炼,神秘',
+              tags: '待补充',
             ),
             _FactionTemplate(
-              name: '万宝商会',
-              type: '商业组织',
+              name: '中立势力C',
+              type: '（待定）',
               powerLevel: 70,
-              description: '修仙界最大的商业组织，掌控着大部分修炼资源的流通，保持中立立场',
-              territory: '各大商城',
-              memberCount: 20000,
+              description: '（待补充：保持中立、掌控资源或情报的一方。）',
+              territory: '（待补充）',
+              memberCount: 0,
               powerRating: 70,
               influence: 80,
               importance: 65,
-              tags: '商业,财富,贸易,中立',
+              tags: '待补充',
             ),
           ];
 
@@ -890,9 +899,11 @@ Ability Features:
           ? 'Progression ranks: ${levelNames.join(' → ')}. Ranks ascend step by step; each breakthrough requires meeting its condition and yields a qualitative leap.'
           : '修炼等级：${levelNames.join('→')}。等级由低到高递进，每次突破均需满足对应条件并获得质的飞跃。';
     }
+    // ⚠ +47 去硬编码：末级兜底此前写死修仙十境（练气→…→仙人），
+    // 非修仙项目会被塞进错误的等级体系。改为中性表述。
     return _en
-        ? 'Progression ranks: Novice → Adept → Adept Master → Core Formation → Spirit Refinement → Union → Ascendant → Sovereign → Tribulation → Immortal. Each great realm divides into early, middle, late, and peak stages.'
-        : '修炼等级：练气→筑基→金丹→元婴→化神→炼虚→合体→大乘→渡劫→仙人。每个大境界分为初期、中期、后期、巅峰四个小境界。';
+        ? 'Progression ranks: (to be defined for this project). Ranks ascend step by step; each breakthrough requires meeting its condition and yields a qualitative leap.'
+        : '力量等级：（待本项目定义）由低到高递进，每次突破均需满足对应条件并获得质的飞跃。';
   }
 }
 

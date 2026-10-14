@@ -147,6 +147,48 @@ void main() {
     _check('C5 展示态续写一次成功', once == '段A第一句。\n\n续\n\n段B第一句。');
   }
 
+  // -------------------------------------------------------------------------
+  // D 组：截断判据（isTruncatedSelection）—— +46 实测 BUG 的回归锁
+  //
+  // 现象：选一段长文（如 3000 字）点「续写」，模型产出 1200 字合格续写
+  // （≥ 续写下限 600 字）却被 0.6 倍基线判成 truncated_selection，
+  // 两次重试都失败 → 续写动作永远报错。续写是**新增**文本，与选区长度无关。
+  // -------------------------------------------------------------------------
+  {
+    // 续写语义（additive）恒不判截断 —— 无论结果多短。
+    _check('D1 续写：结果远短于选区也不判截断',
+        !isTruncatedSelection(
+            resultLength: 1200, selectedLength: 3000, additive: true));
+    _check('D2 续写：结果极短仍不判（下限由 continuation_too_short 管）',
+        !isTruncatedSelection(
+            resultLength: 10, selectedLength: 5000, additive: true));
+  }
+  {
+    // 替换语义（润色 / 扩写 / 重写）仍按 0.6 倍基线判。
+    _check('D3 替换：结果 < 选区 60% → 判截断',
+        isTruncatedSelection(
+            resultLength: 500, selectedLength: 1000, additive: false));
+    _check('D4 替换：结果 = 选区 60% → 不判（边界含等号）',
+        !isTruncatedSelection(
+            resultLength: 600, selectedLength: 1000, additive: false));
+    _check('D5 替换：结果 ≥ 选区 → 不判',
+        !isTruncatedSelection(
+            resultLength: 1200, selectedLength: 1000, additive: false));
+  }
+  {
+    // 无基线（空选区）不判 —— 避免 0 除法语义与误杀。
+    _check('D6 选区长度为 0 → 不判',
+        !isTruncatedSelection(
+            resultLength: 1, selectedLength: 0, additive: false));
+    // 自定义比例生效。
+    _check('D7 自定义 minRatio 生效',
+        isTruncatedSelection(
+            resultLength: 800,
+            selectedLength: 1000,
+            additive: false,
+            minRatio: 0.9));
+  }
+
   print('selection_apply_selftest: $_passed passed, $_failed failed');
   if (_failed > 0) {
     throw StateError('selection_apply_selftest FAILED: $_failed assertion(s)');

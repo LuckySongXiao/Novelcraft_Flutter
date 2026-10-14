@@ -604,6 +604,12 @@ class OpenAICompatibleProvider implements IModelProvider {
       'alpha_decay',
       'stop_tokens',
       'chunk_size',
+      // RWKV 云无状态路由的思考控制（官方文档 http-api.zh-CN.md）：
+      // `think_type`（none/fast/free/preferChinese/…）与 `enable_think`。
+      // 不放进白名单的话，App 里「关闭思维链」在云路由上无法生效 ——
+      // 服务端省略该字段时默认 `fast`，会白白吃掉正文的 token 预算。
+      'think_type',
+      'enable_think',
       // llama.cpp DRY 采样器
       'dry_multiplier',
       'dry_base',

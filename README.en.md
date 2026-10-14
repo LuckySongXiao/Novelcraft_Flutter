@@ -5,7 +5,7 @@
 ![NovelCraft overview: story worlds, writing workflows and content export](docs/images/novelcraft-overview-en.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B36-5C6BC0" alt="Current source version: 1.0.0+36" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B47-5C6BC0" alt="Current source version: 1.0.0+47" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="Primary delivery platforms: Windows and Android" />
@@ -23,7 +23,7 @@
 
 Originally built with C# WPF, the project is being developed in Flutter. Its primary deliverables are a portable Windows desktop package and an Android APK. It is designed for authors managing long-form fiction, creators exploring collaboration between models, and developers studying AI writing workflows.
 
-> Current source version: **1.0.0+36**. This release focuses on multiple selectable prompt templates per writing stage. Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations). The diagrams illustrate features and workflows; see [Screenshots](#screenshots) for actual screenshots of the running application.
+> Current source version: **1.0.0+47**. This release re-tunes the RWKV writing parameters from real-model benchmarks (`alpha_decay` raised to 0.999 — measured as the single most effective anti-repetition knob), unifies prose temperature at 1.0, removes other books and characters hardcoded into system prompts, tightens per-slice budgets and adds a whole-chapter retry (book-level gate pass rate 4/5 → 5/5). Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations). The diagrams illustrate features and workflows; see [Screenshots](#screenshots) for actual screenshots of the running application.
 
 ## Contents
 

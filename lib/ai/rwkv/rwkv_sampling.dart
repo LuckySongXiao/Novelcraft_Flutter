@@ -20,13 +20,24 @@ library;
 import '../models/batch_chat.dart' show kRwkvDefaultStopTokens;
 
 /// RWKV 家族防复读采样参数（全集）。
+///
+/// ⚠ +47 真机实测修正（5 组参数 × 3 次 + 6 组隔离 × 3 次，同一提示词、真实 RWKV Cloud）：
+///   * `alpha_decay` **0.996 → 0.999**：这是抗复读**最有效的单一旋钮** ——
+///     decay 0.99 → 1/3 退化（ngram 均值 0.254，最差 0.434）；
+///     decay 0.999 → **0/3，ngram 0.000**。官方文档解释得最清楚：
+///     「Penalty Decay 是模型的记性」—— 0.99 时生成 100 token 后对早期 token
+///     的惩罚只剩 0.366（几乎忘记），0.999 时仍有 0.905（牢记）。
+///     长文 n-gram 循环正是「忘了自己写过」造成的。
+///   * `alpha_presence 2.0` / `alpha_frequency 0.2` / `top_p 0.6` / `top_k 50`：
+///     与官方 G1 创意写作推荐一致，实测该组合（温度 1.0）**0/3 退化**、
+///     字数最高（2262 字均值），优于 App 长文夹区间后的版本。
 const Map<String, Object?> kRwkvAntiRepeatSampling = <String, Object?>{
   // RWKV 原生（rwkv_lightning）
   'top_k': 50,
   'top_p': 0.6,
   'alpha_presence': 2.0,
   'alpha_frequency': 0.2,
-  'alpha_decay': 0.996,
+  'alpha_decay': 0.999,
   // 官方默认停止 token（整数 token ID，CUDA 后端约定）。
   //
   // ⚠ +46 修复：此前**只有有状态路由**（/state/*、/v1/batch/*）会带这个键，

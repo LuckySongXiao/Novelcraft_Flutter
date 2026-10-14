@@ -607,6 +607,13 @@ class ChapterRewriteService {
   ///
   /// [outline] 为修订后的大纲（[repairOutlineAndRewrite] 传入）；空串时回落
   /// 读库的 `_outlineOf`。失败语义与 [rewrite] 一致：**正文没过闸就绝不落库**。
+  /// 整章重写的最大尝试次数（首次 + 1 次重试）。
+  ///
+  /// ⚠ +47 真机实测：复读是**随机事件**（同一提示词/参数下 5 章里会有 1 章
+  /// 陷入 n-gram 循环，且退化起点太靠前时无法靠截断救回）。整章重写一次
+  /// 即可解决 —— 冒烟测试把过闸率从 4/5 提升到 5/5。
+  static const int kMaxChapterWriteAttempts = 2;
+
   Future<ChapterRewriteResult> rewriteWithPlan({
     required String chapterId,
     String projectId = '',
@@ -615,6 +622,7 @@ class ChapterRewriteService {
     String outline = '',
     int totalTargetWords = ChapterRewriteService.planTotalTargetWords,
     void Function(String phase)? onProgress,
+    bool isRetry = false,
   }) async {
     final ChapterRow? chapter = await _chapters.getById(chapterId);
     if (chapter == null) return _chapterMissing('');
@@ -691,8 +699,17 @@ class ChapterRewriteService {
           tail: tail,
           isFirst: accumulated.isEmpty,
           isLast: sliceNo == slices.length,
+          // ⚠ 作者「额外要求」必须进到**真正写正文**的提示词里。此前只在
+          // 规划（`_buildSlicePlanPrompt`）里带了，续写片从不携带 —— 于是
+          // 「在额外要求里写明本章要推进的剧情」对正文毫无作用，只有规划层看得到。
+          instruction: instruction.trim(),
         ),
-        maxTokens: (slice.targetWords * 2).clamp(1200, 3400),
+        // ⚠ +47 真机实测：**单次生成越长，进入 n-gram 循环的概率越高** ——
+        // 2200 token 预算下 0/3 退化；2800 token 预算（原 2.0×目标）下出现
+        // 整章复读（ngram 0.884，且因退化起点太靠前而**无法靠截断救回**）。
+        // 收到 1.5×（上限 2400）→ 单次暴露窗口变小；不足的字数由 ③' 补片循环
+        // 用**更多、更短**的片补足。
+        maxTokens: (slice.targetWords * 1.5).clamp(1000, 2400).toInt(),
       );
       if (raw == null || raw.trim().isEmpty) {
         // 单片失败不中断 —— 但底座为空时后续片失去「从开篇写起」的锚，
@@ -741,9 +758,11 @@ class ChapterRewriteService {
           tail: tail,
           isFirst: accumulated.isEmpty,
           isLast: false,
+          instruction: instruction.trim(),
           forceLengthWarning: true,
         ),
-        maxTokens: (need * 2).clamp(1600, 3400),
+        // 同上：补片也用 1.5× 预算（原 2.0×）。
+        maxTokens: (need * 1.5).clamp(1200, 2400).toInt(),
       );
       if (raw == null || raw.trim().isEmpty) break;
       String piece = MultiAgentBookGenerationService.cleanFinalChapter(
@@ -761,6 +780,20 @@ class ChapterRewriteService {
       minWords: minFinalWords,
     );
     if (preNote.isNotEmpty) {
+      // ⚠ +47：复读是随机事件 —— 整章重写一次再判（见 kMaxChapterWriteAttempts）。
+      if (!isRetry) {
+        onProgress?.call('rewrite');
+        return rewriteWithPlan(
+          chapterId: chapterId,
+          projectId: projectId,
+          instruction: instruction,
+          storyTime: storyTime,
+          outline: outline,
+          totalTargetWords: totalTargetWords,
+          onProgress: onProgress,
+          isRetry: true,
+        );
+      }
       return ChapterRewriteResult(
         isSuccess: false,
         content: accumulated,
@@ -793,6 +826,20 @@ class ChapterRewriteService {
       minWords: minFinalWords,
     );
     if (note.isNotEmpty) {
+      // 同上：润色后复检不过 → 整章重写一次（复读/塌缩都属随机事件）。
+      if (!isRetry) {
+        onProgress?.call('rewrite');
+        return rewriteWithPlan(
+          chapterId: chapterId,
+          projectId: projectId,
+          instruction: instruction,
+          storyTime: storyTime,
+          outline: outline,
+          totalTargetWords: totalTargetWords,
+          onProgress: onProgress,
+          isRetry: true,
+        );
+      }
       return ChapterRewriteResult(
         isSuccess: false,
         content: finalText,
@@ -1509,11 +1556,19 @@ class ChapterRewriteService {
   ///
   /// [systemPrompt] 缺省为「只输出章节正文」的写手人格；大纲修订会传自己的
   /// 编辑人格（见 [repairOutlineAndRewrite]）。
+  /// 正文生成的默认温度。
+  ///
+  /// ⚠ +47 真机实测（同一提示词、5 组参数 × 3 次）：**温度是长文复读的第一主因** ——
+  /// `0.6 → 3/3 退化`、`0.88 → 1/3`、`1.0 → 0/3`、`1.3 → 0/3`
+  ///（ngram 均值 0.490 / 0.141 / 0.035 / 0.000）。原值 0.88 落在复读高发区。
+  /// 官方文档亦要求「Top_P 偏低时须把 Temperature 提到 1 以上以避免死循环/重复」。
+  static const double kProseTemperature = 1.0;
+
   Future<String?> _generate(
     String body, {
     required int maxTokens,
     String? systemPrompt,
-    double temperature = 0.88,
+    double temperature = kProseTemperature,
   }) async {
     for (int attempt = 0; attempt < 2; attempt++) {
       final String? text = await _generateOnce(
@@ -1532,7 +1587,7 @@ class ChapterRewriteService {
     String body, {
     required int maxTokens,
     String? systemPrompt,
-    double temperature = 0.88,
+    double temperature = kProseTemperature,
   }) async {
     final IModelProvider? provider = _provider();
     if (provider != null && provider.isAvailable) {
@@ -1550,9 +1605,14 @@ class ChapterRewriteService {
             maxTokens: maxTokens,
             // RWKV 家族才认这套防复读采样参数（其它厂商会 400）
             parameters: isRwkvFamilyProvider(provider.providerName)
-                ? Map<String, dynamic>.of(
-                    aiRuntimeSettings.longFormSamplingParams(),
-                  )
+                ? <String, dynamic>{
+                    ...aiRuntimeSettings.longFormSamplingParams(),
+                    // 关闭思维链时必须显式下发 `think_type: none` —— RWKV 云
+                    // 无状态路由省略该字段时服务端默认 `fast`（官方文档
+                    // docs/rwkv_lightning_api/http-api.zh-CN.md §Chat completions），
+                    // 思考 token 会挤占本就紧张的正文预算，直接拉低成稿字数。
+                    if (!aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
+                  }
                 : <String, dynamic>{},
           ),
         );
@@ -1585,6 +1645,24 @@ class ChapterRewriteService {
     }
   }
 
+  /// 定稿正文的**退化复读兜底**（与大纲修订的复读闸同源）。
+  ///
+  /// 铁律（见 `docs/交接-复读问题-外援接入指南.md` §5.5）：
+  /// **凡是「模型输出 → 直接落库」的路径，落库前必须过 `RepetitionGuard.isDegenerate`。**
+  /// +46 只在大纲路径落实了这条；正文路径此前仅靠 `chapterQualityNote`
+  /// （`FictionQuality.issue` + 段落重复率 > 0.5），而这两条都**抓不住**
+  /// 「12-gram 重复率 0.30~0.5 的整段复读」和「短句循环」（句子级判据要求
+  /// 单句 ≥16 字且出现 ≥3 次）。所以复读正文仍有穿闸落库的通道，这里补上。
+  ///
+  /// 返回空串 = 通过；非空 = 面向用户的原因串。
+  String _degenerateProseNote(String text) {
+    if (!RepetitionGuard.isDegenerate(text)) return '';
+    final String diag = RepetitionGuard.diagnose(text);
+    return _texts.isEnglish
+        ? 'degenerate repetition ($diag)'
+        : '疑似整段复读（$diag）';
+  }
+
   /// 落库 + 触发世界观同步，并生成面向用户的说明。
   Future<ChapterRewriteResult> _persistAndSync({
     required ChapterRow chapter,
@@ -1593,6 +1671,23 @@ class ChapterRewriteService {
     String storyTime = '',
     void Function(String phase)? onProgress,
   }) async {
+    // 落库前的最后一道闸：正文退化复读绝不写库（否则会污染后续所有重写）。
+    final String repeatNote = _degenerateProseNote(merged);
+    if (repeatNote.isNotEmpty) {
+      return ChapterRewriteResult(
+        isSuccess: false,
+        content: merged,
+        message: _texts.tf(
+          'CRW.QualityFailed',
+          '重写未通过质量闸（{0}），原稿未修改。可调整大纲后重试。',
+          <Object>[repeatNote],
+        ),
+        chapterTitle: chapter.title,
+        originalLength: original.length,
+        revisedLength: merged.length,
+        qualityNote: repeatNote,
+      );
+    }
     try {
       await _chapters.updateById(
         chapter.id,

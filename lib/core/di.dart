@@ -52,6 +52,8 @@ import '../application/services/political_position_service.dart';
 import '../application/services/currency_system_service.dart';
 import '../application/services/relationship_network_service.dart';
 import '../application/services/timeline_event_service.dart';
+import '../application/services/chapter_repetition_repair_service.dart';
+import '../application/services/project_meta_cleanup_service.dart';
 import '../application/services/project_statistics_service.dart';
 import '../application/services/database_seeder.dart';
 import '../application/services/project_context_assembler.dart';
@@ -284,6 +286,21 @@ final volumeServiceProvider = Provider<VolumeService>(
 final chapterServiceProvider = Provider<ChapterService>(
   (ref) => ChapterService(ref.watch(chapterRepositoryProvider)),
 );
+
+/// 「项目体检 → 一键清洗」：批量修复章节标题/梗概的历史污染（不动正文）。
+final projectMetaCleanupServiceProvider = Provider<ProjectMetaCleanupService>(
+  (ref) => ProjectMetaCleanupService(
+    chapters: ref.watch(chapterRepositoryProvider),
+  ),
+);
+
+/// 「逐章复读体检」：定位正文复读并给出截断修复稿（**逐章确认**后才写库）。
+final chapterRepetitionRepairServiceProvider =
+    Provider<ChapterRepetitionRepairService>(
+      (ref) => ChapterRepetitionRepairService(
+        chapters: ref.watch(chapterRepositoryProvider),
+      ),
+    );
 
 final characterServiceProvider = Provider<CharacterService>(
   (ref) => CharacterService(

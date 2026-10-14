@@ -204,12 +204,11 @@ class AiRuntimeSettings {
   }
 
   /// 长文正文（章节段落 / 整章定稿）专用采样参数：
-  /// 在用户预设之上叠加**抗复读下限**。
+  /// 在用户预设之上叠加**抗复读区间**（只夹到区间内，不改预设本身）。
   ///
-  /// 为什么需要下限：RWKV 是 RNN，上下文里出现过的 n-gram 会持续抬高自身
-  /// 采样概率；官方档的 DRY 覆盖窗口只有 2048 token，压不住一整章的上下文
-  ///（实测整章段落重复率可达 85%+）。这里只在「比下限更弱」时才抬高，
-  /// 不覆盖用户更激进的配置，也不改预设本身。
+  /// 为什么需要：RWKV 是 RNN，上下文里出现过的 n-gram 会持续抬高自身
+  /// 采样概率（实测整章段落重复率可达 85%+）。本方法把用户预设夹进一个
+  /// **经真机实测验证过的抗复读区间**——区间取值与依据见方法体内的 +47 说明。
   Map<String, Object?> longFormSamplingParams() {
     final Map<String, Object?> params = samplingParams();
     double asDouble(Object? v, double fallback) =>
@@ -234,12 +233,28 @@ class AiRuntimeSettings {
       return v;
     }
 
-    // 惩罚方向按官方：presence 趋 0，frequency 取中高（专治「换词复读」）。
-    band('alpha_presence', 0.0, 0.5, 0);
-    band('alpha_frequency', 0.6, 1.0, 0.6);
+    // ⚠ +47 **重定区间**（真机实测：5 组参数 × 3 次 + 6 组旋钮隔离 × 3 次，
+    //   同一提示词、真实 RWKV Cloud 7.2B，判据 = 12-gram 重复率 / 退化与否）：
+    //
+    //   ① **alpha_decay 是抗复读最有效的单一旋钮**（本次最大发现）：
+    //      decay 0.99 → 1/3 退化（ngram 均值 0.254，最差 0.434）；
+    //      decay 0.999 → **0/3，ngram 0.000**。
+    //      官方文档的「记性」解释完全对得上：0.99 时生成 100 token 后对早期
+    //      token 的惩罚只剩 0.366（几乎忘记），0.999 时仍有 0.905（牢记）。
+    //      长文 n-gram 循环正是「忘了自己写过」→ 这里给 decay 加**下限 0.999**。
+    //   ② **alpha_presence 上限 0.5 → 2.0**：旧注释担心「被罚得不敢写」，
+    //      但实测「官方档原值（presence 2.0）」0/3 退化、字数最高；
+    //      而当年那次事故的真实诱因是 `presence 3.0 + dry_penalty_last_n 16000`
+    //      的极端组合，不是 presence 2.0 本身。官方 G1 创意写作也是 2.0。
+    //   ③ **alpha_frequency 上限 1.0 → 0.5**：官方创意档为 0.2，实测 freq 0.2
+    //      表现最好。频率惩罚过高会连中文虚词（的/了/他）一起罚，文笔发涩。
+    //   ④ **top_p 区间 0.45~0.55 → 0.5~0.7**：实测 top_p 0.5（ngram 均值 0.204）
+    //      比 0.6（0.181）更易退化；官方创意写作建议 0.6~0.8。
+    band('alpha_decay', 0.999, 1.0, 0.999);
+    band('alpha_presence', 0.0, 2.0, 0);
+    band('alpha_frequency', 0.0, 0.5, 0.2);
     band('dry_multiplier', 0.8, 0.9, 0);
-    // top_p 0.45~0.55：低于 0.4 会让长篇续写停笔过早，高于 0.6 复读抬头。
-    band('top_p', 0.45, 0.55, 1);
+    band('top_p', 0.5, 0.7, 0.6);
     params['dry_penalty_last_n'] = 4096;
     return params;
   }

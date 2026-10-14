@@ -5,7 +5,7 @@
 ![NovelCraft 项目概览：故事世界、写作工艺与内容交付](docs/images/novelcraft-overview.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B36-5C6BC0" alt="当前代码版本 1.0.0+36" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B47-5C6BC0" alt="当前代码版本 1.0.0+47" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="主要交付平台 Windows 和 Android" />
@@ -23,7 +23,7 @@
 
 项目由 C# WPF 版本迁移到 Flutter，当前主要交付 Windows 桌面便携版和 Android APK。适合需要管理长篇设定的作者、希望尝试多模型协作的创作者，以及研究 AI 写作流程的开发者。
 
-> 当前代码版本：**1.0.0+36**。本版重点是“写作工艺节点 Prompt 多模板配置”。内容审查与自动改进仍属于实验功能，具体边界见[当前状态与已知限制](#当前状态与已知限制)。文中的插图为功能流程示意，实际界面截图见[界面截图](#界面截图)。
+> 当前代码版本：**1.0.0+47**。本版重点是「RWKV 写作参数真机实测重定 + 去硬编码 + 写作工艺改进」：`alpha_decay` 提到 0.999（实测最有效的抗复读旋钮）、正文温度统一 1.0、清除 system prompt 里写死的其它书籍与角色、片预算收紧并新增整章重试（成书过闸率 4/5 → 5/5）。内容审查与自动改进仍属于实验功能，具体边界见[当前状态与已知限制](#当前状态与已知限制)。文中的插图为功能流程示意，实际界面截图见[界面截图](#界面截图)。
 
 ## 目录
 
@@ -462,6 +462,23 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows --dart-define
 ```
 
 真实端点测试会发起网络请求，结果受模型部署、额度和服务状态影响。不要把实际密钥填写进 README 或测试源码。
+
+**1.0.0+47 最近一次验证记录（2026-10-12）：**
+
+| 检查 | 结果 |
+| --- | --- |
+| 类型检查（`tools/analyze_inprocess.dart`） | 240 文件，0 error / 0 warning |
+| 离线自检 | **15 个全绿**（新增 `chapter_meta_cleaner_selftest` 38 条、`repetition_repair_selftest` 22 条） |
+| 英文界面词条缺失扫描（`tools/i18n_missing_keys.py`） | 1192 调用点 / 0 缺失 |
+| 插值 lint（`tools/dart_interp_lint.py`） | 284 文件 / 0 命中 |
+| Windows release 构建 | 成功（EXIT=0 / 80.9s） |
+| Windows 启动存活验证 | 通过（PID 8112，20s 后存活，窗口 `novelcraft`） |
+| Android release 构建 | 成功（EXIT=0 / 144.1s / 70.9 MB） |
+| Android 版本与签名校验 | `versionCode='47'`；验签 Verifies，证书与上一版一致 |
+| 写作工艺真机验证 | 3 轮对照实验、16 组参数 × 3–4 次真实 RWKV 调用 |
+| 成书验证（《低潮图书馆》5 章） | 过闸率 4/5 → **5/5**，平均 ngram 0.256 → **0.053** |
+
+本版结论全部来自**真实 RWKV Cloud 模型调用**与**真实用户库**：`alpha_decay` 上调到 0.999 是抗复读最有效的单一旋钮（0.99 → 1/3 退化，0.999 → 0/3、ngram 0.000），官方 G1「创意写作」档（decay 0.99 + temp 0.6）经实测**不适用于长文**。同时清除了 system prompt 与回退文本里写死的其它书籍及角色名，并把 RWKV agent 链路正文 `max_tokens` 从 2048（低于 3200 字定稿闸）提到 4096。这里是一次本地验证记录，并非持续集成“全绿”的声明。
 
 **1.0.0+36 最近一次验证记录（2026-10-07）：**
 

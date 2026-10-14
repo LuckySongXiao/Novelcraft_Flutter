@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../application/services/project_meta_cleanup_service.dart';
 import '../../core/di.dart';
 import '../../data/database.dart';
 import '../../l10n/l10n.dart';
 import '../layout/navigation.dart';
+import 'chapter_repetition_dialog.dart';
 
 enum HealthCheckMode { consistency, quality, all }
 
@@ -77,6 +79,7 @@ class ProjectHealthCheckPage extends ConsumerStatefulWidget {
 
 class _ProjectHealthCheckPageState extends ConsumerState<ProjectHealthCheckPage> {
   bool _isChecking = false;
+  bool _isCleaning = false;
   DateTime? _lastCheckAt;
   HealthCheckMode _lastMode = HealthCheckMode.all;
   final List<_HealthIssue> _issues = [];
@@ -141,6 +144,54 @@ class _ProjectHealthCheckPageState extends ConsumerState<ProjectHealthCheckPage>
                                   _isChecking ? null : () => _run(HealthCheckMode.all),
                               icon: const Icon(Icons.health_and_safety),
                               label: Text(l10n.t('HC.FullCheck', '全量检查')),
+                            ),
+                          ),
+                          // 「项目体检 → 一键清洗」：批量修复标题/梗概的历史污染。
+                          // 先 dry-run 弹确认框（列出条数），确认后才写库；只动
+                          // title/summary，绝不碰正文。
+                          Tooltip(
+                            message: l10n.t(
+                              'HC.MetaCleanupTooltip',
+                              '批量清洗章节标题与梗概的历史污染（只改标题/梗概，不动正文）',
+                            ),
+                            child: FilledButton.tonalIcon(
+                              onPressed: _isChecking || _isCleaning
+                                  ? null
+                                  : () => _cleanMeta(),
+                              icon: _isCleaning
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.cleaning_services_outlined),
+                              label: Text(
+                                _isCleaning
+                                    ? l10n.t('HC.MetaCleanupRunning', '正在清洗…')
+                                    : l10n.t('HC.MetaCleanup', '元数据清洗'),
+                              ),
+                            ),
+                          ),
+                          // 「逐章复读体检」：定位正文复读 → 逐章确认截断修复。
+                          Tooltip(
+                            message: l10n.t(
+                              'HC.RepetitionCheckTooltip',
+                              '定位正文复读并给出截断修复稿（逐章确认后写回）',
+                            ),
+                            child: FilledButton.tonalIcon(
+                              onPressed: projectId == null
+                                  ? null
+                                  : () => showChapterRepetitionDialog(
+                                      context,
+                                      ref,
+                                      projectId: projectId,
+                                    ),
+                              icon: const Icon(Icons.content_cut_outlined),
+                              label: Text(
+                                l10n.t('HC.RepetitionCheck', '逐章复读体检'),
+                              ),
                             ),
                           ),
                           IconButton(
@@ -434,6 +485,105 @@ class _ProjectHealthCheckPageState extends ConsumerState<ProjectHealthCheckPage>
         '警告' => Colors.orange,
         _ => Colors.blue,
       };
+
+  /// 「项目体检 → 一键清洗」：dry-run → 确认 → 写库。
+  ///
+  /// 只修 `title` / `summary`（规则见 `ChapterMetaCleaner`），**绝不改正文**。
+  /// 正文复读属于内容问题，必须逐章确认或重写 —— 所以这里不做自动改写。
+  Future<void> _cleanMeta() async {
+    final l10n = ref.read(l10nProvider);
+    final projectId = ref.read(currentProjectIdProvider);
+    if (projectId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t('HC.SelectProjectInMgrFirst', '请先在项目管理中选择一个项目'),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final service = ref.read(projectMetaCleanupServiceProvider);
+    final MetaCleanupPlan plan = await service.plan(projectId);
+    if (!mounted) return;
+
+    if (plan.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.t('HC.MetaCleanupNone', '未发现需要清洗的标题或梗概。'),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(
+          l10n.t('HC.MetaCleanupConfirmTitle', '确认清洗元数据'),
+        ),
+        content: Text(
+          l10n.tf(
+            'HC.MetaCleanupConfirmBody',
+            '将修复 {titles} 个标题、{summaries} 个梗概，共 {total} 章。只改标题与梗概，绝不改动正文。',
+            <String, Object>{
+              'titles': plan.titleFixes,
+              'summaries': plan.summaryFixes,
+              'total': plan.total,
+            },
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(l10n.t('Common.Cancel', '取消')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(l10n.t('Common.Confirm', '确认')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _isCleaning = true);
+    try {
+      await service.apply(plan);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.tf(
+              'HC.MetaCleanupDone',
+              '已清洗：标题 {titles} 个、梗概 {summaries} 个。',
+              <String, Object>{
+                'titles': plan.titleFixes,
+                'summaries': plan.summaryFixes,
+              },
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.tf('HC.MetaCleanupFailed', '清洗失败：{error}', <String, Object>{
+              'error': '$e',
+            }),
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isCleaning = false);
+    }
+  }
 
   Future<void> _run(HealthCheckMode mode) async {
     final l10n = ref.read(l10nProvider);

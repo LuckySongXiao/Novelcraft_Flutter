@@ -27,6 +27,7 @@ import 'writing_prompt_templates.dart';
 import 'dart:convert';
 import '../../ai/utils/chapter_title.dart';
 import '../../ai/utils/fiction_quality.dart';
+import '../../ai/utils/repetition_guard.dart';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:logging/logging.dart';
@@ -1018,7 +1019,12 @@ class MultiAgentBookGenerationService {
         // 章节名必须自带卷号：各卷都从「第一章」重排编号，只写章号在全书
         // 视图里完全无法区分（用户实测痛点）。章名由上面的解析/整理步骤给出。
         final int vIdx = volumeRows.indexOf(vol);
-        final String resolved = resolvedNames[i].name ?? '';
+        // ⚠ 只有**可靠**的解析结果才允许当章名用。此前无条件取 `name`，
+        // 于是「解析器判不可靠 → 批量重命名又没成功」时，污染名（如
+        // `净化仪式（约700字）开局状态`）照样落库。判不可靠就回落「第N章」。
+        final ChapterNameResult resolvedName = resolvedNames[i];
+        final String resolved =
+            resolvedName.reliable ? (resolvedName.name ?? '') : '';
         final String name = resolved.isEmpty ? '第${_cn(cIdx)}章' : resolved;
         final String title = '第${_cn(vIdx + 1)}卷·第${_cn(cIdx)}章·《$name》';
         // 梗概只留一句话 —— 章节记录里不放大纲草稿与过程数据。
@@ -3611,8 +3617,20 @@ class MultiAgentBookGenerationService {
   /// 章节记录**只保留最终正文 + 短梗概**，不再塞入大纲草稿与过程数据 ——
   /// 旧实现把 900 字大纲原文写进 `summary`，章节编辑页里「正文」区域看起来
   /// 像一堆草稿（用户反馈）。清洗规则见 `ChapterTitleParser.extractBrief`。
-  static String _chapterBrief(String outline, String name) =>
-      ChapterTitleParser.extractBrief(outline, name);
+  /// 梗概的**退化复读**兜底（用户真实库实锤）：`cf949155` / `421e4a69` 等项目里
+  /// 有 100+ 条 `summary` 是「同一句在绝境中完全觉醒…」循环十几遍的复读文本 ——
+  /// 一旦落库就会在后续每次「按梗概重写」里传染。梗概是**短文本**（≤120 字），
+  /// 用 `RepetitionGuard` 的通用阈值 0.30 抓不住（实测真实退化梗概 ngram=0.271），
+  /// 所以这里单独用更低的 0.20 阈值；正常梗概 ngram≈0.00，安全边距充足。
+  static String _chapterBrief(String outline, String name) {
+    final String brief = ChapterTitleParser.extractBrief(outline, name);
+    if (brief.isEmpty) return brief;
+    if (RepetitionGuard.isDegenerate(brief, threshold: 0.20)) {
+      // 复读梗概不可用 —— 回落到章名（宁可信息少，不可投毒）。
+      return name.trim().isEmpty ? '' : name.trim();
+    }
+    return brief;
+  }
 
   /// 批量章名整理：一次调用为**所有**格式不规范的章节重新命名。
   ///

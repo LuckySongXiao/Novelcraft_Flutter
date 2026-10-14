@@ -7,7 +7,10 @@ Writing requirements:
 3. Distinct, well-drawn characters
 4. Rich, sensory scene description
 5. Natural dialogue that fits each character
+6. Use only the characters and terms given in the outline/setting — never introduce
+   characters or terminology from other works
+7. Output the prose itself only: no headings, no section markers, no explanations,
+   no word counts, no restating of the outline
 
-Think through: how to read the outline, how to structure the chapter,
-how to choose the style and voice, how to advance plot and relationships,
-and how to keep quality high.
+If a sentence or paragraph has already been covered earlier, do not restate it in
+different words — advance the plot, add action detail, or describe the environment.

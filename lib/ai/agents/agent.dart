@@ -630,7 +630,7 @@ abstract class BaseAgent implements IAgent {
         final request = ChatRequest(
           systemPrompt: systemPrompt,
           messages: [ChatMessage.user(userPrompt)],
-          temperature: 0.7,
+          temperature: resolveRwkvTemperature(taskType),
           maxTokens: 4000,
         );
         final response =
@@ -649,7 +649,7 @@ abstract class BaseAgent implements IAgent {
           ChatRequest(
             systemPrompt: systemPrompt,
             messages: [ChatMessage.user(userPrompt)],
-            temperature: 0.7,
+            temperature: resolveRwkvTemperature(taskType),
             maxTokens: resolveRwkvMaxTokens(taskType),
           ),
           sessionId: sessionId,
@@ -706,7 +706,7 @@ abstract class BaseAgent implements IAgent {
         ChatRequest(
           systemPrompt: systemPrompt,
           messages: [ChatMessage.user(userPrompt)],
-          temperature: 0.7,
+          temperature: resolveRwkvTemperature(taskType),
           maxTokens: resolveRwkvMaxTokens(taskType),
         ),
         sessionId: sessionId,
@@ -754,17 +754,25 @@ abstract class BaseAgent implements IAgent {
   }
 
   /// 按任务类型解析 RWKV 生成的最大 token 数。
+  ///
+  /// ⚠ +47 修正（真机实测）：
+  ///   * 本项目实测中文 **≈1 token/字**（见 `AiRuntimeSettings.kTokensPerChineseChar`），
+  ///     而章节定稿质量闸要求 **≥3200 字**。原值 `GenerateChapterContent = 2048`
+  ///     意味着这条链路**永远写不满字数闸**（2048 token ≈ 2048 字 < 3200）→ 必 NG。
+  ///   * `PolishText = 1800` 同理：润色 3200 字的章节会被截成 1800 字。
+  ///   现在按「目标字数 + 余量」给足预算。
   int resolveRwkvMaxTokens(String taskType) {
     switch (taskType) {
-      case 'GenerateOutline':
-      case 'CreateWorldSetting':
+      // 正文类：定稿闸 3200 字 → 给到 4096 token（约 4096 字）留足余量。
       case 'GenerateChapterContent':
       case 'ContinueChapter':
-        return 2048;
       case 'PolishText':
+        return 4096;
+      case 'GenerateOutline':
+      case 'CreateWorldSetting':
       case 'OptimizeOutline':
       case 'OptimizePlot':
-        return 1800;
+        return 2560;
       case 'GenerateCharacter':
       case 'OptimizeCharacter':
       case 'GeneratePlot':
@@ -778,10 +786,41 @@ abstract class BaseAgent implements IAgent {
     }
   }
 
+  /// 按任务类型解析 RWKV 生成的温度。
+  ///
+  /// ⚠ +47 新增（真机实测，5 组采样参数 × 3 次对照）：
+  ///   **温度是长文复读的第一主因** —— 同一提示词下
+  ///   `temperature 0.6 → 3/3 退化`、`0.88 → 1/3`、`1.0 → 0/3`、`1.3 → 0/3`
+  ///   （ngram 均值 0.490 / 0.141 / 0.035 / 0.000）。
+  ///   此前三条 RWKV 链路**一律硬编码 0.7**，正好落在复读高发区。
+  ///   官方文档亦明确：「Top_P 极低时须提高 Temperature（1 以上）以避免死循环/重复」。
+  ///
+  /// 结构化任务（大纲/JSON/摘要）仍用低温保准确。
+  double resolveRwkvTemperature(String taskType) {
+    switch (taskType) {
+      case 'GenerateChapterContent':
+      case 'ContinueChapter':
+      case 'PolishText':
+        return 1.0; // 正文类：温度 1.0（实测 0/3 退化）
+      case 'GenerateOutline':
+      case 'CreateWorldSetting':
+      case 'OptimizeOutline':
+      case 'OptimizePlot':
+        return 0.8;
+      default:
+        return 0.7;
+    }
+  }
+
   /// 构建系统提示（子类可覆写）。
+  ///
+  /// ⚠ +47：删掉了「并提供详细的思考过程」。对**写作类**任务，让模型输出思考过程
+  /// 会直接挤占正文 token 预算、且思考文本容易泄漏进正文（RWKV 批量路由不受
+  /// `think_type` 控制，实测会自发吐 `<think>`）。思考过程应由
+  /// `ThinkingChainProcessor` 在**提示词之外**编排，而不是写进 system prompt。
   String buildSystemPrompt(String taskType) =>
       '你是一个专业的$name，负责$description。请根据用户的要求执行$taskType任务，'
-      '并提供详细的思考过程。';
+      '只输出任务要求的最终结果。';
 
   /// 构建用户提示（子类可覆写）。
   String buildUserPrompt(String taskType, Map<String, dynamic> parameters) {

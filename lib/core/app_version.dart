@@ -6,7 +6,7 @@
 /// 这里保持一个纯常量，升版本时三处一起改即可
 /// （另有 `tools/sync_release_snapshot.py` / `tools/package_release.py`
 /// 的 `DEFAULT_VERSION` 记录发布件版本号）。
-const String kAppVersion = '1.0.0+46';
+const String kAppVersion = '1.0.0+47';
 
 /// 带 `v` 前缀的显示形式，如 `v1.0.0+36`。
 const String kAppVersionLabel = 'v$kAppVersion';
