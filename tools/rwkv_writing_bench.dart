@@ -6,7 +6,7 @@
 //
 // 用法（必须带 --disable-dart-dev）：
 //   dart --disable-dart-dev tools/rwkv_writing_bench.dart [suite] [repeats]
-//     suite   ∈ params | prompt | decay   （默认 params）
+//     suite   ∈ params | prompt | decay | strict | strict2 | strict3   （默认 params）
 //     repeats 每组重复次数（默认 3）
 //
 // 环境变量（可选）：
@@ -141,6 +141,104 @@ final List<BenchArm> _decaySuite = <BenchArm>[
       params: <String, Object?>{..._unbanded, 'top_p': 0.5}),
 ];
 
+/// `strict` 套件（+48 第一轮）：候选「最严防重复」组合。
+///
+/// ⚠ 结论（见 +48 交接记录）：复读确实 0/3，但**字数崩了**（均值 481，
+/// 达标 0/3）—— 把 freq/dry/last_n 三处同时顶严会「被罚得不敢写」。
+/// 因此本套件只作为**负面结论**的留档，实际取值由 `strict2` / `strict3` 决定。
+final List<BenchArm> _strictSuite = <BenchArm>[
+  BenchArm(
+    name: 'UNBANDED_BASE',
+    note: '对照：+47 实测 0/3 退化、字数最高的官方档原值',
+    params: _unbanded,
+  ),
+  BenchArm(
+    name: 'STRICT_V48',
+    note: '+48 第一版「最严」：presence 2.0 / freq 0.5 / decay 0.999 / dry 0.85 / last_n 4096',
+    params: <String, Object?>{
+      'top_k': 50, 'top_p': 0.6, 'alpha_presence': 2.0,
+      'alpha_frequency': 0.5, 'alpha_decay': 0.999,
+      'dry_multiplier': 0.85, 'dry_base': 1.75,
+      'dry_allowed_length': 2, 'dry_penalty_last_n': 4096,
+      'stop_tokens': kStop,
+    },
+  ),
+  BenchArm(
+    name: 'STRICT_V48_TOP05',
+    note: '最严 + top_p 0.5（夹区间下限）',
+    params: <String, Object?>{
+      'top_k': 50, 'top_p': 0.5, 'alpha_presence': 2.0,
+      'alpha_frequency': 0.5, 'alpha_decay': 0.999,
+      'dry_multiplier': 0.85, 'dry_base': 1.75,
+      'dry_allowed_length': 2, 'dry_penalty_last_n': 4096,
+      'stop_tokens': kStop,
+    },
+  ),
+];
+
+/// `strict2` 套件（+48 第二轮）：逐个旋钮隔离，找出「既压住复读又不掉字数」。
+final List<BenchArm> _strict2Suite = <BenchArm>[
+  BenchArm(
+    name: 'FREQ05_ONLY',
+    note: '只把 freq 0.2→0.5（其余 = 官方档原值）',
+    params: <String, Object?>{..._unbanded, 'alpha_frequency': 0.5},
+  ),
+  BenchArm(
+    name: 'DRY085_ONLY',
+    note: '只把 dry_multiplier 0.8→0.85',
+    params: <String, Object?>{..._unbanded, 'dry_multiplier': 0.85},
+  ),
+  BenchArm(
+    name: 'LASTN4096_ONLY',
+    note: '只把 dry_penalty_last_n 2048→4096',
+    params: <String, Object?>{..._unbanded, 'dry_penalty_last_n': 4096},
+  ),
+  BenchArm(
+    name: 'FREQ05_DRY085',
+    note: 'freq 0.5 + dry 0.85（窗口仍 2048）',
+    params: <String, Object?>{
+      ..._unbanded, 'alpha_frequency': 0.5, 'dry_multiplier': 0.85,
+    },
+  ),
+  BenchArm(
+    name: 'FREQ03_DRY085_LASTN4096',
+    note: 'freq 0.3 + dry 0.85 + last_n 4096',
+    params: <String, Object?>{
+      ..._unbanded, 'alpha_frequency': 0.3, 'dry_multiplier': 0.85,
+      'dry_penalty_last_n': 4096,
+    },
+  ),
+  BenchArm(
+    name: 'FREQ05_LASTN3072',
+    note: 'freq 0.5 + last_n 3072（折中窗口）',
+    params: <String, Object?>{
+      ..._unbanded, 'alpha_frequency': 0.5, 'dry_penalty_last_n': 3072,
+    },
+  ),
+];
+
+/// `strict3` 套件（+48 第三轮）：对第一轮疑似负面结论做确认 ——
+/// STRICT_V48 的短输出是「系统性变短」还是当次服务端抖动。
+final List<BenchArm> _strict3Suite = <BenchArm>[
+  BenchArm(name: 'STRICT_V48', note: '复测第一轮 481 字的组合',
+      params: <String, Object?>{
+        'top_k': 50, 'top_p': 0.6, 'alpha_presence': 2.0,
+        'alpha_frequency': 0.5, 'alpha_decay': 0.999,
+        'dry_multiplier': 0.85, 'dry_base': 1.75,
+        'dry_allowed_length': 2, 'dry_penalty_last_n': 4096,
+        'stop_tokens': kStop,
+      }),
+  BenchArm(name: 'UNBANDED_BASE', note: '对照：官方档原值',
+      params: _unbanded),
+  BenchArm(
+    name: 'FREQ05_DRY085',
+    note: '候选终值：只在 freq / dry 两处更严（窗口不动）',
+    params: <String, Object?>{
+      ..._unbanded, 'alpha_frequency': 0.5, 'dry_multiplier': 0.85,
+    },
+  ),
+];
+
 /// `prompt` 套件：提示结构（标记 / 纯续写 / 无前文 / think_type）。
 final List<BenchArm> _promptSuite = <BenchArm>[
   BenchArm(
@@ -226,6 +324,9 @@ Future<void> main(List<String> args) async {
   final int repeats = args.length > 1 ? (int.tryParse(args[1]) ?? 3) : 3;
   final List<BenchArm> arms = switch (suite) {
     'decay' => _decaySuite,
+    'strict' => _strictSuite,
+    'strict2' => _strict2Suite,
+    'strict3' => _strict3Suite,
     'prompt' => _promptSuite,
     _ => _paramsSuite,
   };

@@ -5,7 +5,7 @@
 ![NovelCraft overview: story worlds, writing workflows and content export](docs/images/novelcraft-overview-en.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B47-5C6BC0" alt="Current source version: 1.0.0+47" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B51-5C6BC0" alt="Current source version: 1.0.0+51" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="Primary delivery platforms: Windows and Android" />
@@ -23,7 +23,7 @@
 
 Originally built with C# WPF, the project is being developed in Flutter. Its primary deliverables are a portable Windows desktop package and an Android APK. It is designed for authors managing long-form fiction, creators exploring collaboration between models, and developers studying AI writing workflows.
 
-> Current source version: **1.0.0+47**. This release re-tunes the RWKV writing parameters from real-model benchmarks (`alpha_decay` raised to 0.999 — measured as the single most effective anti-repetition knob), unifies prose temperature at 1.0, removes other books and characters hardcoded into system prompts, tightens per-slice budgets and adds a whole-chapter retry (book-level gate pass rate 4/5 → 5/5). Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations). The diagrams illustrate features and workflows; see [Screenshots](#screenshots) for actual screenshots of the running application.
+> Current source version: **1.0.0+51**. This release lands the +50 live-benchmark findings in the product: **RWKV cloud stateful continuation is now off by default** (measured: `/state/*` ignores `think_type: none`, gate pass rate jitters 1/5→4/5→1/5 and produces 0-char chapters), **layered writing is wired into the app** (new AppBar entry: main outline → volume outlines → chapter briefs → prose, four levels with "parallel across units / serial within a unit", each level anchored by start→end and filling the middle linearly), the brief self-check now returns **a diff patch only** (measured: average repetition dropped from 0.169 to 0.032), plus deterministic cleanup for structured-output pollution and a duplicated-brief-field guard. Item-by-item list: `docs/升级列表-v1.0.0+51.md`. Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations).
 
 ## Contents
 
@@ -464,19 +464,18 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows --dart-define
 
 Live endpoint tests make network requests and depend on deployment, quotas and service availability. Do not put actual credentials in this README or test source files.
 
-**Latest recorded verification for 1.0.0+36, dated 2026-10-07:**
+**Latest recorded verification for 1.0.0+51, dated 2026-10-14:**
 
 | Check | Result |
 | --- | --- |
-| Type check (`tools/analyze_inprocess.dart`) | 263 files, 0 error / 0 warning |
-| Output sanitizer self-test (`tools/sanitizer_selftest.dart`) | 25 passed / 0 failed |
-| Full unit / widget suite | 416 passed, 1 skipped, 0 failed |
-| English string coverage scan | 0 missing keys |
-| Windows release build | Successful |
-| Android release build and signature verification | Successful; signature matches the previous version |
-| Physical Android device testing and live cloud writing evaluation | Not performed in this verification round |
+| Type check (`tools/analyze_inprocess.dart`) | 248 files, 0 error / 0 warning |
+| Offline self-tests | **18 / 18 green** (`layered_pipeline_selftest` **119 assertions**, `foreshadow_ledger_selftest` 112) |
+| English string coverage scan | 1296 call sites / 0 missing |
+| Interpolation lint | 292 files / 0 hits |
+| Windows release build | Success (EXIT=0 / 72.3s); `data/app.so` contains `1.0.0+51`, not `1.0.0+50` |
+| Android release build | Success (see `发布清单-v1.0.0+51.md`) |
+| Layered writing live case | 7 comparison runs; best run **5/5 past gate / 2352 chars / ngram 0.032** (baseline 5/5 / 2347 / 0.005) |
 
-This release fixes the three issues found in on-device testing (contaminated output from the serial writing path, cloud RWKV session cross-talk, and settings not synced after a chapter passed review), and restructures whole-book orchestration into "main outline serial / branch outlines parallel / single chapter serial / all chapters parallel". The previously failing end-to-end test (a repetitive final-draft fixture tripping the prose quality gate) is resolved by rewriting that fixture, without relaxing the gate. This is a record of local verification, not a claim that continuous integration is fully green.
 
 ## Current Status and Known Limitations
 

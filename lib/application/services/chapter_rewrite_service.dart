@@ -52,6 +52,7 @@ import '../../ai/providers/rwkv_provider.dart';
 import '../../ai/rwkv/rwkv_sampling.dart';
 import '../../ai/runtime_settings.dart';
 import '../../ai/utils/chapter_plan_text.dart';
+import '../../ai/utils/foreshadow_ledger.dart';
 import '../../ai/utils/localized_text.dart';
 import '../../ai/utils/outline_repair_text.dart';
 import '../../ai/utils/output_sanitizer.dart';
@@ -1455,9 +1456,15 @@ class ChapterRewriteService {
   /// 章节表里与「写作依据」相关的字段是 `summary`（梗概）与 `notes`（备注 /
   /// 大纲原文）。实测里 30 章的 `summary` 是「大纲原文截断」—— 所以把 `notes`
   /// 也一并带上（若两者基本相同则只留一份，避免提示词里重复两大段）。
+  ///
+  /// ⚠ +49：`notes` 现在也承载「伏笔提示」块（由「纲要管理」或整书生成写入）。
+  /// 那是**给编排看的元信息**，不是剧情大纲 —— 混进正文提示词会被模型当剧情照抄
+  ///（与历史上 `## 本章大纲（87%）` 被当正文同类的污染）。这里先剥掉。
   static String _outlineOf(ChapterRow chapter) {
     final String summary = (chapter.summary ?? '').trim();
-    final String notes = (chapter.notes ?? '').trim();
+    final String notes = ForeshadowLedgerBuilder.stripSection(
+      (chapter.notes ?? '').trim(),
+    );
     if (summary.isEmpty) return notes;
     if (notes.isEmpty) return summary;
     if (notes.contains(summary)) return notes;

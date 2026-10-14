@@ -4,7 +4,21 @@ import '../../ai/rwkv/rwkv_sampling.dart';
 import '../../ai/utils/fiction_quality.dart';
 import '../../ai/utils/selection_apply_text.dart' show isTruncatedSelection;
 
-enum ChapterAiAction { polish, dedupePolish, expand, continueWrite, rewrite }
+/// 选节 AI 助手的动作集合。
+///
+/// [deleteSelection] 是**纯本地文本手术**（不调模型）：用户要求（+48）在选节
+/// 助手里补一个「删除所选文本」。它仍走同一套 confirm → onApply 通道，
+/// 所以必须作为枚举成员存在（`selection_apply_text.deleteSelectionFrom` 干活）。
+enum ChapterAiAction {
+  polish,
+  dedupePolish,
+  expand,
+  continueWrite,
+  rewrite,
+
+  /// 删除所选文本（本地手术，不消耗模型调用）。
+  deleteSelection,
+}
 
 abstract final class SelectionEditService {
   /// 各动作的**字数纪律**（2026-10-10 用户实测「续写的字数依然未达标」后补上
@@ -21,6 +35,7 @@ abstract final class SelectionEditService {
         ChapterAiAction.continueWrite => 1200,
         ChapterAiAction.expand =>
           (selectedLength * 2).clamp(400, 2000),
+        ChapterAiAction.deleteSelection => 0,
         _ => 0,
       };
 
@@ -42,6 +57,7 @@ abstract final class SelectionEditService {
     String chapterOutline = '',
     String volumeOutline = '',
     String prevChapterTail = '',
+    String foreshadowBlock = '',
   }) {
     final index = fullContent.indexOf(selected);
     if (index < 0) throw StateError('Selection no longer belongs to chapter');
@@ -63,6 +79,9 @@ abstract final class SelectionEditService {
             ChapterAiAction.expand => '依据大纲扩写选区的动作和细节，不改变既定事实。',
             ChapterAiAction.continueWrite => '仅输出紧接选区的新增正文，不重复选区，不复述后文。',
             ChapterAiAction.rewrite => '',
+            // 删除是本地手术（`deleteSelectionFrom`），永远不会走到这里；
+            // 仅为满足穷尽性检查。
+            ChapterAiAction.deleteSelection => '',
           };
     // 字数纪律：写进提示词的硬要求（作者要求在它之前，写了字数时以作者为准）。
     final int target = wordTarget(action, selected.length);
@@ -75,10 +94,40 @@ abstract final class SelectionEditService {
     return '任务：$operation\n作者要求（优先于默认操作）：$instruction\n'
         '卷大纲：$volumeOutline\n章大纲：$chapterOutline\n'
         '上一章结尾：$prevChapterTail\n'
+        '${foreshadowBlock.trim().isEmpty ? '' : '$foreshadowBlock\n'}'
         '<before>$before</before>\n<selection>$selected</selection>\n<after>$after</after>\n'
         '只输出本次处理的片段，不输出 before/after、标题、标签、解释或原文对照。'
         '$lengthRule';
   }
+
+  /// 写作类动作（续写 / 重写 / 扩写 / 去重润色）的**最严防重复**采样参数。
+  ///
+  /// 用户要求（+48）：这些动作默认使用最严防重复机制 —— 产物直接进正文，
+  /// 一次复读就要人工返工。取值来自 `AiRuntimeSettings.maxAntiRepeatSamplingParams`
+  ///（+48 三轮真机对照得出的「复读最低且字数最稳」那一点，
+  /// 详见 `kRwkvStrictestWritingSampling` 头注的实验表）。
+  ///
+  /// `isRwkvFamilyProvider` 为 false 时不下发任何参数：DeepSeek/Zhipu 等
+  /// 严格 API 会因 `alpha_*` / `dry_*` 顶层字段直接 400（rwkv_sampling.dart 头注）。
+  static Map<String, dynamic> writingSamplingParams(IModelProvider provider) {
+    if (!isRwkvFamilyProvider(provider.providerName)) return <String, dynamic>{};
+    return <String, dynamic>{
+      ...aiRuntimeSettings.maxAntiRepeatSamplingParams(),
+      // 思维链总开关关掉时，必须显式告诉 RWKV 云服务端「不要加思考前缀」——
+      // 官方文档（docs/rwkv_lightning_api/http-api.zh-CN.md）里
+      // `think_type: none` 才是关思考的正确手段；省略该字段服务端默认 `fast`，
+      // 于是 App 里「关闭思维链」在云路由上从未真正生效（思考 token 还会
+      // 挤占本就不够的正文预算）。开的时候不传，沿用服务端默认。
+      if (!aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
+    };
+  }
+
+  /// 写作类动作的首轮温度。
+  ///
+  /// +47 真机实测：0.88 落在 RWKV 复读高发区（0.6→3/3 退化、0.88→1/3、
+  /// **1.0→0/3**），且 1.0 时字数均值最高（2262）—— 所以写作动作固定 1.0。
+  /// 温度 1.2 复读更低但会过早停笔（达标仅 2/4、均值掉到 1338），不取。
+  static const double writingTemperature = 1.0;
 
   static Future<String> edit({
     required IModelProvider provider,
@@ -90,26 +139,19 @@ abstract final class SelectionEditService {
     String chapterOutline = '',
     String volumeOutline = '',
     String prevChapterTail = '',
+    String foreshadowBlock = '',
   }) => FictionQuality.generate(
     chat: provider.chat,
     model: model,
     maxTokens: maxTokens(action, selected.length),
+    temperature: writingTemperature,
     prompt: buildPrompt(
       action: action, selected: selected, fullContent: fullContent,
       instruction: instruction, chapterOutline: chapterOutline,
       volumeOutline: volumeOutline, prevChapterTail: prevChapterTail,
+      foreshadowBlock: foreshadowBlock,
     ),
-    parameters: isRwkvFamilyProvider(provider.providerName)
-        ? <String, dynamic>{
-            ...aiRuntimeSettings.longFormSamplingParams(),
-            // 思维链总开关关掉时，必须显式告诉 RWKV 云服务端「不要加思考前缀」——
-            // 官方文档（docs/rwkv_lightning_api/http-api.zh-CN.md）里
-            // `think_type: none` 才是关思考的正确手段；省略该字段服务端默认 `fast`，
-            // 于是 App 里「关闭思维链」在云路由上从未真正生效（思考 token 还会
-            // 挤占本就不够的正文预算）。开的时候不传，沿用服务端默认。
-            if (!aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
-          }
-        : <String, dynamic>{},
+    parameters: writingSamplingParams(provider),
     validate: (text) {
       if (text == selected.trim()) return 'unchanged_selection';
       // 截断判据只对**替换语义**（润色 / 扩写 / 重写）成立；续写产出的是新增文本，

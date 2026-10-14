@@ -57,6 +57,44 @@ String applySelectionResult({
       : '$before\n\n$cleanResult\n\n$rest';
 }
 
+/// 删除选中文本（纯本地手术，不调模型）。
+///
+/// 用户要求（+48）：选节助手除了润色/扩写/续写，还要能「删除所选文本」——
+/// 作者常用它切掉大段跑题/复读的中间部分，比手工回编辑表单快得多。
+///
+/// 段落语义与 [applySelectionResult] 一致：选区可能停在段中，此时只删选区本身，
+/// 该段剩余部分保留；若删完后所在段只剩空白，则整段消失（不留下空行垃圾）。
+///
+/// 抛 `StateError` 当选区已不在正文中（选区过期，调用方如实报错）。
+String deleteSelectionFrom({
+  required String content,
+  required String selected,
+}) {
+  if (selected.isEmpty) {
+    throw StateError('Selection is empty; nothing to delete');
+  }
+  final int index = content.indexOf(selected);
+  if (index < 0) {
+    throw StateError('Selection no longer belongs to the chapter content');
+  }
+  final int end = index + selected.length;
+  // 选区两端各自的「段落粘连」字符：删掉后在左右拼接处可能留下
+  // 空段（原段只剩一截空白）或多个连续换行 —— 统一在这里收口。
+  final String merged = '${content.substring(0, index)}'
+      '${content.substring(end)}';
+  return _normalizeParagraphSpacing(merged);
+}
+
+/// 归一化段落间距：空段（只剩空白的段）整段删除，多空行压成一个空行。
+String _normalizeParagraphSpacing(String text) {
+  final List<String> paragraphs = text
+      .split(RegExp(r'\r\n|\r|\n'))
+      .map((String p) => p.trim())
+      .where((String p) => p.isNotEmpty)
+      .toList();
+  return paragraphs.join('\n\n');
+}
+
 /// 「结果明显短于选区」的截断判据（纯函数，供选节编辑的 validate 复用）。
 ///
 /// ⚠ 只有**替换语义**（润色 / 去重润色 / 扩写 / 重写）才成立 —— 结果覆盖选区，

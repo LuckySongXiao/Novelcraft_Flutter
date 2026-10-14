@@ -9,6 +9,8 @@ enum NavigationTarget {
   projectManagement,
   projectOverview,
   volumeManagement,
+  /// 纲要管理（+48）—— 分卷宗分章节撰写大纲/细纲，位于「章节管理」上方。
+  outlineManagement,
   chapterManagement,
   characterManagement,
   timeline,

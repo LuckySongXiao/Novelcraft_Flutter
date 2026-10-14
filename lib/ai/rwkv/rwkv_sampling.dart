@@ -53,6 +53,46 @@ const Map<String, Object?> kRwkvAntiRepeatSampling = <String, Object?>{
   'dry_penalty_last_n': 2048,
 };
 
+/// **写作动作（续写 / 重写 / 扩写 / 去重润色）专用的实测最严防重复参数**。
+///
+/// ⚠ 关键结论（+48，三轮真机对照：`tools/rwkv_writing_bench.dart`
+/// suite = strict / strict2 / strict3，同一提示词、真实 RWKV Cloud 7.2B）：
+///
+/// | 组合 | 字数均值 | 达标 | 退化 | ngram 最差 |
+/// |---|---:|---:|---:|---:|
+/// | **本组（下表取值）** | **1957** | **3/4** | 0/4 | **0.001** |
+/// | freq .5 + dry .85 + `last_n` 4096 | 481 / 644（两轮复现） | 0/3 / 0/4 | 0/4 | 0.000 |
+/// | freq .5 + dry .85 + `last_n` 2048 | 2448 / 1358 | 2/3 / 1/4 | 0/4 | **0.236** |
+/// | 只抬 freq→0.5 | 1168 | 1/3 | 0/3 | 0.000 |
+/// | 只抬 `dry_multiplier`→0.85 | 427（仅 1 个有效样本） | 0/3 | — | 0.005 |
+/// | 只抬 `last_n`→4096 | 1684 | 1/3 | 0/3 | 0.001 |
+///
+/// **两条反直觉结论**：
+/// 1. 「把惩罚旋钮全部拉满」≠「更防复读」——`freq 0.5 + dry 0.85 + last_n 4096`
+///    的字数掉到 481/644（-67%），完全够不上 1600 字目标；
+/// 2. 抬高 `frequency` 反而**抬复读**（`last_n 2048` 那组 ngram 最差 0.236，
+///    而本组只有 0.001）—— 频率惩罚会连中文虚词（的/了/他）一起罚，
+///    把「正常的重复用词」罚掉后模型改从更窄的分布里选，反而更容易滑进循环。
+///
+/// 所以「最严防重复」= **只把真正有效的那个旋钮（`alpha_decay`）顶到 0.999，
+/// 其余保持在实测最优的官方创意档取值**，而不是无脑拉满。
+/// 温度必须配 1.0（0.88 落在复读高发区），并显式带 `stop_tokens`（事中止损）。
+const Map<String, Object?> kRwkvStrictestWritingSampling = <String, Object?>{
+  'top_k': 50,
+  'top_p': 0.6,
+  'alpha_presence': 2.0,
+  'alpha_frequency': 0.2,
+  // 抗复读唯一真正有效的旋钮：decay 0.99 → 1/3 退化；0.999 → 0/3。
+  'alpha_decay': 0.999,
+  'stop_tokens': kRwkvDefaultStopTokens,
+  'dry_multiplier': 0.8,
+  'dry_base': 1.75,
+  'dry_allowed_length': 2,
+  // ⚠ 固定 2048（官方值），**不要**拉到 4096 —— 实测 4096 与 freq 0.5 组合时
+  // 字数崩到 481/644。见本常量头注的实验表。
+  'dry_penalty_last_n': 2048,
+};
+
 /// provider 名是否属于 RWKV 家族（只有它们认上面这套参数）。
 bool isRwkvFamilyProvider(String providerName) =>
     providerName.toLowerCase().contains('rwkv');

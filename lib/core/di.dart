@@ -6,6 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
 
+import '../ai/utils/chapter_plan_text.dart' show trimSliceEcho;
+import '../ai/utils/output_sanitizer.dart';
+import '../ai/utils/repetition_guard.dart';
+import '../application/services/layered_book_generation_service.dart';
+import '../application/services/layered_book_runner.dart';
+import '../application/services/selection_edit_service.dart';
 import '../data/database.dart';
 import '../data/storage/key_value_store.dart';
 import '../data/storage/key_value_archive_store.dart';
@@ -348,6 +354,64 @@ final plotServiceProvider = Provider<PlotService>(
   (ref) => PlotService(ref.watch(plotRepositoryProvider)),
 );
 
+/// **分层写书**（+50）：主线（串行）→ 分卷（卷间并行/卷内串行）→ 细纲（章间并行/章内串行）
+/// → 正文（同）的 App 侧装配。
+///
+/// 一次模型调用走「双代理主写手 → 默认 provider」；正文类调用带上 +48 的最严防重复
+/// 采样参数，结构化调用带普通采样参数。
+///
+/// ⚠ `proseStateful` 默认 **false**：+50 实测 RWKV 云端 `/state/*` 不可用于正文
+///（详见 HANDOFF 与 `docs/分层写书管线-设计-v1.0.0+50.md`）。
+final layeredBookRunnerProvider = Provider<LayeredBookRunner>((ref) {
+  return LayeredBookRunner(
+    projects: ref.watch(projectServiceProvider),
+    volumes: ref.watch(volumeServiceProvider),
+    chapters: ref.watch(chapterServiceProvider),
+    plots: ref.watch(plotServiceProvider),
+    cleanProse: (String raw) => AIOutputSanitizer.extractCleanOutput(raw),
+    qualityNote: (String prose, int minChars) {
+      final int n = prose.trim().length;
+      if (n < minChars) return '字数不足（$n < $minChars）';
+      if (RepetitionGuard.isDegenerate(prose)) {
+        final double ng = RepetitionGuard.charNgramRepeatRatio(prose);
+        return '复读率过高（ngram=${ng.toStringAsFixed(3)}）';
+      }
+      return '';
+    },
+    trimEcho: trimSliceEcho,
+    chat: (LayeredChatRequest r) async {
+      final IModelProvider? provider =
+          resolveAgentProvider(ref, main: true) ??
+              ref.read(modelManagerProvider).getDefaultProvider();
+      if (provider == null || !provider.isAvailable) {
+        throw StateError('没有可用的写作模型，请先到「AI 配置」注册并设置默认模型');
+      }
+      final bool rwkv = isRwkvFamilyProvider(provider.providerName);
+      final Map<String, dynamic> params = <String, dynamic>{
+        if (r.prose)
+          ...SelectionEditService.writingSamplingParams(provider)
+        else if (rwkv)
+          ...aiRuntimeSettings.samplingParams(),
+        // 只有显式开启有状态时才下发会话键（默认关闭，见上面的实测结论）
+        if (r.stateful && provider is RwkvCloudProvider)
+          'rwkvSessionKey': r.sessionKey,
+        if (rwkv && !aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
+      };
+      final ChatResponse resp = await provider.chat(ChatRequest(
+        systemPrompt: r.system,
+        messages: <ChatMessage>[ChatMessage.user(r.user)],
+        temperature: r.temperature,
+        maxTokens: r.maxTokens,
+        parameters: params,
+      ));
+      if (!resp.isSuccess) {
+        throw StateError(resp.errorMessage ?? '模型调用失败');
+      }
+      return resp.content;
+    },
+  );
+});
+
 final raceServiceProvider = Provider<RaceService>(
   (ref) => RaceService(ref.watch(raceRepositoryProvider)),
 );
@@ -519,7 +583,12 @@ final rwkvCloudProviderInstanceProvider = Provider<RwkvCloudProvider>((ref) {
     stats: ref.watch(aiRuntimeStatsProvider),
     // BUG 2：把 RWKV state 的**会话身份与转写本**交给客户端持有并持久化。
     sessionLedger: ref.watch(rwkvCloudSessionLedgerProvider),
-    clientStateEnabled: true,
+    // ⚠ +50 真机实测：云端 `/state/*` 路由**当前不可用于正文** —— 它无视
+    // `think_type: none`，每轮先输出思考且长度极不稳定；同一套分层代码连跑三次
+    // 过闸率 1/5 → 4/5 → 1/5，并出现 0 字章。无状态路由（`/v1/chat/completions`）
+    // 实测稳定。所以这里**默认关闭**客户端 state 续跑（`rwkvSessionKey` 不下发 →
+    // 自动回落无状态链路）；等服务端修好 `/state/*` 的 `think_type` 支持后再打开。
+    clientStateEnabled: false,
   );
   ref.onDispose(() => p.dispose());
   return p;

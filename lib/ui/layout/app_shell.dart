@@ -26,7 +26,9 @@ import '../pages/dialog_generation_page.dart';
 import '../pages/project_health_check_page.dart';
 import '../pages/prerequisite_generation_page.dart';
 import '../pages/generation_archive_page.dart';
+import '../pages/layered_generation_dialog.dart';
 import '../pages/multi_agent_generation_dialog.dart';
+import '../pages/outline_management_page.dart';
 
 /// 触控平台放宽二级导航列表项密度（安卓操控性：触控目标更大）；桌面保持紧凑。
 final VisualDensity kSubNavTileDensity =
@@ -200,6 +202,10 @@ class _AppShellState extends ConsumerState<AppShell> {
                     child: Text(l10n.t('Shell.VM.Title', '卷宗管理')),
                   ),
                   PopupMenuItem(
+                    value: NavigationTarget.outlineManagement,
+                    child: Text(l10n.t('OM.Title', '纲要管理')),
+                  ),
+                  PopupMenuItem(
                     value: NavigationTarget.characterManagement,
                     child: Text(l10n.t('Shell.CM.Title', '人物管理')),
                   ),
@@ -234,6 +240,20 @@ class _AppShellState extends ConsumerState<AppShell> {
               icon: const Icon(Icons.auto_awesome, size: 18),
               label: Text(l10n.t('Side.Btn.OneClick', '一键生成书籍')),
               onPressed: _oneClickGenerate,
+            ),
+          const SizedBox(width: 4),
+          // 分层写书（+50）：四级管线（主线→分卷→细纲→正文），与「一键生成」并存
+          if (width < 860)
+            IconButton(
+              icon: const Icon(Icons.account_tree_outlined, size: 20),
+              tooltip: l10n.t('LG.Title', '分层写书（串行 → 并行）'),
+              onPressed: () => openLayeredGeneration(context, ref),
+            )
+          else
+            TextButton.icon(
+              icon: const Icon(Icons.account_tree_outlined, size: 18),
+              label: Text(l10n.t('LG.Short', '分层写书')),
+              onPressed: () => openLayeredGeneration(context, ref),
             ),
           const SizedBox(width: 4),
           if (phonePortrait && writingPill.isNotEmpty)
@@ -290,19 +310,26 @@ class _AppShellState extends ConsumerState<AppShell> {
               height: 64,
               selectedIndex: switch (_railIndex(nav.target)) {
                 3 => 1,
-                5 => 2,
+                4 => 2,
                 6 => 3,
+                7 => 4,
                 _ => 0,
               },
               onDestinationSelected: (index) =>
-                  _onRailSelected(context, const [0, 3, 5, 6][index]),
+                  _onRailSelected(context, const [0, 3, 4, 6, 7][index]),
               destinations: [
                 NavigationDestination(
                   icon: const Icon(Icons.folder_outlined),
                   label: l10n.t('Shell.PM.Title', '项目管理'),
                 ),
                 NavigationDestination(
+                  icon: const Icon(Icons.account_tree_outlined),
+                  selectedIcon: const Icon(Icons.account_tree),
+                  label: l10n.t('OM.Title', '纲要管理'),
+                ),
+                NavigationDestination(
                   icon: const Icon(Icons.article_outlined),
+                  selectedIcon: const Icon(Icons.article),
                   label: l10n.t('Shell.ChM.Title', '章节管理'),
                 ),
                 NavigationDestination(
@@ -367,6 +394,12 @@ class _AppShellState extends ConsumerState<AppShell> {
                               icon: const Icon(Icons.menu_book_outlined),
                               selectedIcon: const Icon(Icons.menu_book),
                               label: Text(l10n.t('Shell.VM.Title', '卷宗管理')),
+                            ),
+                            // +48 用户要求：「章节管理模块上方追加一个纲要管理」
+                            NavigationRailDestination(
+                              icon: const Icon(Icons.account_tree_outlined),
+                              selectedIcon: const Icon(Icons.account_tree),
+                              label: Text(l10n.t('OM.Title', '纲要管理')),
                             ),
                             NavigationRailDestination(
                               icon: const Icon(Icons.article_outlined),
@@ -465,10 +498,12 @@ class _AppShellState extends ConsumerState<AppShell> {
         return 1;
       case NavigationTarget.volumeManagement:
         return 2;
-      case NavigationTarget.chapterManagement:
+      case NavigationTarget.outlineManagement:
         return 3;
-      case NavigationTarget.characterManagement:
+      case NavigationTarget.chapterManagement:
         return 4;
+      case NavigationTarget.characterManagement:
+        return 5;
       case NavigationTarget.worldSettingManagement:
       case NavigationTarget.cultivationSystem:
       case NavigationTarget.politicalSystem:
@@ -476,7 +511,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       case NavigationTarget.resource:
       case NavigationTarget.race:
       case NavigationTarget.currencySystem:
-        return 5;
+        return 6;
       case NavigationTarget.aiCollaboration:
       case NavigationTarget.aiConfiguration:
       case NavigationTarget.dialogGeneration:
@@ -484,7 +519,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       case NavigationTarget.projectHealthCheck:
       case NavigationTarget.prerequisiteGeneration:
       case NavigationTarget.generationArchive:
-        return 6;
+        return 7;
       default:
         return 0;
     }
@@ -495,10 +530,11 @@ class _AppShellState extends ConsumerState<AppShell> {
       0 => NavigationTarget.projectManagement,
       1 => NavigationTarget.projectOverview,
       2 => NavigationTarget.volumeManagement,
-      3 => NavigationTarget.chapterManagement,
-      4 => NavigationTarget.characterManagement,
-      5 => NavigationTarget.worldSettingManagement,
-      6 => NavigationTarget.aiCollaboration,
+      3 => NavigationTarget.outlineManagement,
+      4 => NavigationTarget.chapterManagement,
+      5 => NavigationTarget.characterManagement,
+      6 => NavigationTarget.worldSettingManagement,
+      7 => NavigationTarget.aiCollaboration,
       _ => NavigationTarget.projectManagement,
     };
     ref.read(navigationProvider.notifier).navigateTo(target);
@@ -525,6 +561,10 @@ class _AppShellState extends ConsumerState<AppShell> {
     // 聚合 / 工具页
     if (entry.target == NavigationTarget.settings) {
       return const SettingsPage();
+    }
+    // 纲要管理：分卷宗分章节的大纲 / 细纲编辑（+48）
+    if (entry.target == NavigationTarget.outlineManagement) {
+      return const OutlineManagementPage();
     }
     if (entry.target == NavigationTarget.projectOverview ||
         entry.target == NavigationTarget.timeline ||
@@ -612,6 +652,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       NavigationTarget.projectManagement => l10n.t('Shell.PM.Title', '项目管理'),
       NavigationTarget.projectOverview => l10n.t('Shell.PO.Title', '项目概览'),
       NavigationTarget.volumeManagement => l10n.t('VM.Title', '卷宗管理'),
+      NavigationTarget.outlineManagement => l10n.t('OM.Title', '纲要管理'),
       NavigationTarget.chapterManagement =>
         l10n.t('CHM.Title', '章节管理'),
       NavigationTarget.characterManagement => l10n.t('CM.Title', '人物管理'),

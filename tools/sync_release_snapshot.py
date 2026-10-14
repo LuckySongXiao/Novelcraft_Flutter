@@ -32,7 +32,7 @@ PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 本仓库布局：<发布根>\Flutter版代码\novelcraft\，因此发布根 = 工程目录的上两级。
 RELEASE_ROOT = os.path.dirname(os.path.dirname(PROJ))
 
-DEFAULT_VERSION = "1.0.0+47"
+DEFAULT_VERSION = "1.0.0+51"
 
 WORKING_SNAPSHOT = os.path.join(RELEASE_ROOT, "Novelcraft_Flutter_source")
 

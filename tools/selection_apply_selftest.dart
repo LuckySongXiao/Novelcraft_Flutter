@@ -148,6 +148,69 @@ void main() {
   }
 
   // -------------------------------------------------------------------------
+  // E 组：删除所选文本（+48 新增的本地手术）
+  // -------------------------------------------------------------------------
+  {
+    // 删段中一截：该段剩余部分保留。
+    final out = deleteSelectionFrom(
+      content: content, selected: '主角跑得飞快');
+    _check('E1 选区被删除', !out.contains('主角跑得飞快'));
+    _check('E2 段内剩余文本保留',
+        out.contains('一路追到山谷口才停下脚步。'));
+    _check('E3 前后段保留',
+        out.contains('第一段开头的话。') && out.contains('第三段收尾。'));
+  }
+  {
+    // 整段删除：不留下空段垃圾。
+    final out = deleteSelectionFrom(
+      content: content, selected: '第二段整段都在讲追击的经过，主角跑得飞快，'
+          '一路追到山谷口才停下脚步。');
+    _check('E4 整段删除后无空段',
+        out == '第一段开头的话。\n\n第三段收尾。');
+  }
+  {
+    // 删掉首段 / 末段：首尾都不留多余空行。
+    const two = '段一被删。\n\n段二留下。';
+    _check('E5 删首段',
+        deleteSelectionFrom(content: two, selected: '段一被删。') == '段二留下。');
+    _check('E6 删末段',
+        deleteSelectionFrom(content: two, selected: '段二留下。') == '段一被删。');
+  }
+  {
+    // 只剩一段时删掉它 → 空串（调用方照常写库，章节变空正文）。
+    _check('E7 删唯一段 → 空串',
+        deleteSelectionFrom(content: '只有一段。', selected: '只有一段。') == '');
+  }
+  {
+    // 段落中间有单换行（非空行分隔）时，删除后仍被归一成空行分隔。
+    const single = '段一句一。\n段一句二。\n段二。';
+    final out = deleteSelectionFrom(content: single, selected: '段一句二。');
+    _check('E8 段内换行归一', !out.contains('\n\n\n') && !out.contains('段一句二。'));
+  }
+  _check('E9 空选区 → 抛错', () {
+    try {
+      deleteSelectionFrom(content: content, selected: '');
+      return false;
+    } on StateError {
+      return true;
+    }
+  }());
+  _check('E10 选区不在正文中 → 抛错', () {
+    try {
+      deleteSelectionFrom(content: content, selected: '不存在的文本');
+      return false;
+    } on StateError {
+      return true;
+    }
+  }());
+  _check('E11 重复出现的选区只删第一处（indexOf 语义）', () {
+    const dup = '重复段一。\n\n间隔段。\n\n重复段一。';
+    final out = deleteSelectionFrom(content: dup, selected: '重复段一。');
+    _check('E11a 第一处已删', !out.startsWith('重复段一。'));
+    return out.contains('间隔段。');
+  }());
+
+  // -------------------------------------------------------------------------
   // D 组：截断判据（isTruncatedSelection）—— +46 实测 BUG 的回归锁
   //
   // 现象：选一段长文（如 3000 字）点「续写」，模型产出 1200 字合格续写

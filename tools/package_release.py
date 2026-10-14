@@ -96,7 +96,7 @@ def zip_dir(srcdir: str, zippath: str, level: int = 6) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--version", default="1.0.0+47")
+    ap.add_argument("--version", default="1.0.0+51")
     ap.add_argument("--release-root", default=RELEASE_ROOT,
                     help="发布件所在根目录（默认工程目录的上两级）")
     ap.add_argument("--no-apk", action="store_true")

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SelectedContentRange;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../ai/utils/selection_apply_text.dart';
+import '../../ai/utils/foreshadow_ledger.dart';
+import '../../ai/utils/selection_apply_text.dart'
+    show applySelectionResult, deleteSelectionFrom;
 import '../../application/services/chapter_stats_service.dart';
 import '../../core/di.dart';
 import '../../core/enums/pseudo_enums.dart';
@@ -67,6 +69,10 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
   String _chapterOutline = '';
   String _volumeOutline = '';
   String _prevChapterTail = '';
+
+  /// 本章的**伏笔联动**块（+49）—— 由全书细纲里的「伏笔提示」派生，
+  /// 注入选节助手，保证扩写 / 续写 / 重写不会把已埋的线写断。
+  String _foreshadowBlock = '';
 
   /// 唤出面板后自动滚动定位用
   final GlobalKey _aiPanelKey = GlobalKey();
@@ -141,8 +147,76 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
         _volumeOutline = volOutline;
         _prevChapterTail = tail;
       });
+      // 伏笔联动（+49）：需要全书细纲才能算出「本章要回收/提醒什么」。
+      // 放在最后单独算 —— 失败不影响阅读与润色（静默降级为无伏笔模式）。
+      await _loadForeshadow(row);
     } catch (_) {
       // 静默降级：AI 面板仍可用（扩写/续写少大纲上下文）
+    }
+  }
+
+  /// 装载本章的伏笔联动块。
+  ///
+  /// 账本是**纯派生**数据：从全书各章细纲（`summary` + `notes`）里的
+  /// 「伏笔提示」块重新解析，所以这里读到的一定是最新状态。
+  Future<void> _loadForeshadow(ChapterRow row) async {
+    try {
+      final String pid = (row.projectId ?? '').toString();
+      if (pid.isEmpty) return;
+      final List<VolumeRow> vols =
+          await ref.read(volumeServiceProvider).getByProjectId(pid);
+      final List<ChapterRow> chaps =
+          await ref.read(chapterServiceProvider).getByProjectId(pid);
+      if (chaps.isEmpty) return;
+      final Map<String, int> volOrder = <String, int>{
+        for (final VolumeRow v in vols) v.id: v.orderIndex,
+      };
+      final Map<String, List<ChapterRow>> byVolume =
+          <String, List<ChapterRow>>{};
+      for (final ChapterRow c in chaps) {
+        (byVolume[c.volumeId] ??= <ChapterRow>[]).add(c);
+      }
+      final List<ForeshadowFlatChapter> flat = <ForeshadowFlatChapter>[];
+      for (final VolumeRow v in vols) {
+        final List<ChapterRow> list = List<ChapterRow>.of(
+            byVolume[v.id] ?? const <ChapterRow>[])
+          ..sort((ChapterRow a, ChapterRow b) =>
+              a.orderIndex.compareTo(b.orderIndex));
+        for (final ChapterRow c in list) {
+          flat.add(ForeshadowFlatChapter(
+            id: c.id,
+            volumeId: v.id,
+            title: c.title,
+            outline: ForeshadowFlattener.mergeOutline(c.summary, c.notes),
+            hasContent: (c.content ?? '').trim().isNotEmpty,
+          ));
+        }
+      }
+      final ForeshadowFlattenResult fr = ForeshadowFlattener.flatten(
+        chapters: flat,
+        volumeOrderById: volOrder,
+      );
+      final int order = fr.orderByChapterId[row.id] ?? 0;
+      if (order <= 0) return;
+      final ForeshadowLedger ledger =
+          ForeshadowLedgerBuilder.build(fr.sources);
+      final String block = ForeshadowPrompt.build(
+        ledger: ledger,
+        order: order,
+        outlineAt: fr.outlineAt,
+        titleAt: fr.titleAt,
+      );
+      final String audit =
+          ForeshadowPrompt.buildPayoffAudit(ledger: ledger, order: order);
+      if (!mounted) return;
+      setState(() {
+        _foreshadowBlock = <String>[
+          if (block.isNotEmpty) block,
+          if (audit.isNotEmpty) audit,
+        ].join('\n\n');
+      });
+    } on Object {
+      // 静默降级
     }
   }
 
@@ -199,7 +273,8 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
   /// **采纳应用**：把选节 AI 结果写回章节正文（用户确认后触发）。
   ///
   /// 语义（用户实测拍板）：续写 = 插到所选文本的下一段；润色 / 去重润色 /
-  /// 扩写 / 重写 = 替换所选文本。文本手术走纯规则 `applySelectionResult`，
+  /// 扩写 / 重写 = 替换所选文本；**删除（+48）= 从正文里抹掉所选文本**。
+  /// 文本手术走纯规则（`applySelectionResult` / `deleteSelectionFrom`），
   /// 落库后本页即时刷新（应用结果立刻可见），并把 `_values` 标脏 ——
   /// 离开页面时带回表单回填，防止旧表单快照覆盖已应用的内容。
   Future<void> _applyResult(String result, ChapterAiAction action) async {
@@ -221,12 +296,15 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
     final bool insertAfter = action == ChapterAiAction.continueWrite;
     setState(() => _applying = true);
     try {
-      final String newContent = applySelectionResult(
-        content: _displayContent,
-        selected: selected,
-        result: result,
-        insertAfter: insertAfter,
-      );
+      // 删除是本地手术（不调模型），其余动作走「插入 / 替换」。
+      final String newContent = action == ChapterAiAction.deleteSelection
+          ? deleteSelectionFrom(content: _displayContent, selected: selected)
+          : applySelectionResult(
+              content: _displayContent,
+              selected: selected,
+              result: result,
+              insertAfter: insertAfter,
+            );
       final row = await ref.read(chapterServiceProvider).getById(id);
       if (row == null) throw StateError('章节不存在或已被删除');
       final DateTime now = DateTime.now();
@@ -253,9 +331,11 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
         _selection.clear();
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(insertAfter
-            ? l10n.t('RAI.AppliedInsert', '已应用：续写内容已插入为所选文本的下一段')
-            : l10n.t('RAI.AppliedReplace', '已应用：所选文本已被 AI 结果替换')),
+        content: Text(action == ChapterAiAction.deleteSelection
+            ? l10n.t('RAI.Deleted', '已删除所选文本')
+            : insertAfter
+                ? l10n.t('RAI.AppliedInsert', '已应用：续写内容已插入为所选文本的下一段')
+                : l10n.t('RAI.AppliedReplace', '已应用：所选文本已被 AI 结果替换')),
       ));
     } on Object catch (e) {
       if (!mounted) return;
@@ -518,6 +598,7 @@ class _ChapterPreviewPageState extends ConsumerState<ChapterPreviewPage> {
                                     chapterOutline: _chapterOutline,
                                     volumeOutline: _volumeOutline,
                                     prevChapterTail: _prevChapterTail,
+                                    foreshadowBlock: _foreshadowBlock,
                                     onClearSelection: () =>
                                         setState(_selection.clear),
                                     onApply: _applying

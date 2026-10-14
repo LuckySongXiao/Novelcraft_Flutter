@@ -55,6 +55,13 @@ abstract final class FictionQuality {
   }
 
   /// Retry with a fresh instruction, never add the corrupt answer to history.
+  ///
+  /// [temperature] 首轮温度（重试轮固定抬到 1.0 —— 复读是主要的拒绝原因，
+  /// 提高温度再试一次比重试同一个分布更容易跳出循环）。
+  ///
+  /// ⚠ 默认值仍是历史行为 `0.88`（调用方未显式传时逐字节兼容）；
+  /// +47 真机实测已证明 0.88 落在 RWKV 复读高发区（0.6→3/3 退化、0.88→1/3、
+  /// 1.0→0/3），写作类调用方应显式传 1.0。
   static Future<String> generate({
     required Future<ChatResponse> Function(ChatRequest) chat,
     required String prompt,
@@ -62,6 +69,7 @@ abstract final class FictionQuality {
     bool chinese = true,
     int maxTokens = 1800,
     Map<String, dynamic> parameters = const {},
+    double temperature = 0.88,
     String? Function(String)? validate,
   }) async {
     String? problem;
@@ -75,7 +83,7 @@ abstract final class FictionQuality {
                 'No assistant commentary, source quotations, or repetition.',
         messages: [ChatMessage.user('$prompt'
             '${problem == null ? '' : '\nPrevious output rejected ($problem). Rewrite from the story context with fresh sentences. Output prose only.'}')],
-        temperature: attempt == 0 ? .88 : 1.0,
+        temperature: attempt == 0 ? temperature : 1.0,
         maxTokens: maxTokens,
         parameters: Map.of(parameters),
       ));

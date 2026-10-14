@@ -27,6 +27,7 @@ import 'writing_prompt_templates.dart';
 import 'dart:convert';
 import '../../ai/utils/chapter_title.dart';
 import '../../ai/utils/fiction_quality.dart';
+import '../../ai/utils/foreshadow_ledger.dart';
 import '../../ai/utils/repetition_guard.dart';
 
 import 'package:drift/drift.dart' show Value;
@@ -1010,6 +1011,64 @@ class MultiAgentBookGenerationService {
         }
       }
 
+      // ---- 5.3 伏笔经纬结构（+49 剧情联动）----
+      //
+      // 参考 WeaveGrid 的做法：**先生成结构（伏笔的设定/提醒/收回），再据此写正文**。
+      // 结构由纯规则生成器给出（确定性、零模型调用、不编造剧情内容 —— note 一律留空，
+      // 具体是什么线由作者/模型在对应章节的细纲里再形成）。
+      //
+      // 三个作用：
+      //   ① 把「本章要埋 / 要提醒 / 要回收什么」注入正文提示词；
+      //   ② 把提示块落到 `Chapters.notes`，成为后续「续写 / 单章重写 / 纲要管理」的
+      //      同一份真相（账本每次都从文本重新解析，不存在两份数据打架）；
+      //   ③ 让「转折章 = 回收密度峰值」这条语义在全书成立（每单元末章 ≥5 条回收）。
+      final List<ForeshadowEntry> foreshadowPlan = ForeshadowGenerator.generate(
+        chapterCount: totalChapters,
+        seed: _foreshadowSeed(cfg.bookTitle, totalChapters),
+      );
+      final Map<int, String> foreshadowHints =
+          ForeshadowGenerator.hintsByChapter(foreshadowPlan, totalChapters);
+      // 账本：用「本章大纲 + 本章提示块」重建，与写回 notes 的内容完全一致。
+      final ForeshadowLedger foreshadowLedger = ForeshadowLedgerBuilder.build(
+        <ForeshadowChapterSource>[
+          for (int i = 0; i < totalChapters; i++)
+            ForeshadowChapterSource(
+              order: i + 1,
+              outline: <String>[
+                if (i < chapterOutlines.length) chapterOutlines[i],
+                if (foreshadowHints.containsKey(i + 1)) foreshadowHints[i + 1]!,
+              ].join('\n\n'),
+              title: i < resolvedNames.length
+                  ? (resolvedNames[i].name ?? '')
+                  : '',
+            ),
+        ],
+      );
+      if (foreshadowPlan.isNotEmpty) {
+        onProgress?.call(
+          '已生成伏笔经纬：${ForeshadowGenerator.describe(foreshadowPlan, totalChapters)}',
+          0.53,
+        );
+      }
+      // 正文写作用的「大纲 + 本章伏笔义务」。**只影响提示词**：落库的 summary 仍取自
+      // 原始 `chapterOutlines[i]`，所以提示块不会污染梗概。
+      String outlineForWriter(int seq) {
+        final String base =
+            seq < chapterOutlines.length ? chapterOutlines[seq] : '';
+        if (foreshadowLedger.isEmpty) return base;
+        final String block = ForeshadowPrompt.build(
+          ledger: foreshadowLedger,
+          order: seq + 1,
+          outlineAt: (int o) =>
+              o >= 1 && o <= chapterOutlines.length ? chapterOutlines[o - 1] : '',
+          titleAt: (int o) =>
+              o >= 1 && o <= resolvedNames.length
+                  ? (resolvedNames[o - 1].name ?? '')
+                  : '',
+        );
+        return block.isEmpty ? base : '$base\n\n$block';
+      }
+
       // ---- 6. 章节大纲落库（查重：同卷同序号/同标题复用既有行，不重复创建）----
       onProgress?.call('正在写入章节大纲…', 0.55);
       final List<ChapterRow> outlineRows = <ChapterRow>[];
@@ -1039,7 +1098,12 @@ class MultiAgentBookGenerationService {
           if (outline.isNotEmpty) {
             await chapters.updateById(
               hit.id,
-              ChaptersCompanion(summary: Value(brief), title: Value(title)),
+              ChaptersCompanion(
+                summary: Value(brief),
+                title: Value(title),
+                // 伏笔提示落 `notes`（无长度上限；summary 只有 1000 字且是梗概）
+                notes: Value(foreshadowHints[i]),
+              ),
             );
           }
           outlineRows.add(hit);
@@ -1055,6 +1119,7 @@ class MultiAgentBookGenerationService {
             orderIndex: Value(cIdx),
             status: const Value('Draft'),
             summary: Value(brief),
+            notes: Value(foreshadowHints[i]),
           ),
         );
         final ChapterRow? row = await chapters.getById(cid);
@@ -1179,7 +1244,7 @@ class MultiAgentBookGenerationService {
                   volumeOutlines[volumeRows.indexWhere(
                     (VolumeRow v) => v.id == ch.volumeId,
                   )],
-              chapterOutline: chapterOutlines[seq],
+              chapterOutline: outlineForWriter(seq),
               onStep: (String step) => onProgress?.call(step, null),
               onPhase: emit,
             ),
@@ -1194,7 +1259,7 @@ class MultiAgentBookGenerationService {
                   volumeOutlines[volumeRows.indexWhere(
                     (VolumeRow v) => v.id == ch.volumeId,
                   )],
-              chapterOutline: chapterOutlines[seq],
+              chapterOutline: outlineForWriter(seq),
               onStep: (String step) => onProgress?.call(step, null),
               onPhase: emit,
             ),
@@ -1208,7 +1273,7 @@ class MultiAgentBookGenerationService {
                   volumeOutlines[volumeRows.indexWhere(
                     (VolumeRow v) => v.id == ch.volumeId,
                   )],
-              chapterOutline: chapterOutlines[seq],
+              chapterOutline: outlineForWriter(seq),
               onStep: (String step) => onProgress?.call(step, null),
               onPhase: emit,
             ),
@@ -1222,7 +1287,7 @@ class MultiAgentBookGenerationService {
                   volumeOutlines[volumeRows.indexWhere(
                     (VolumeRow v) => v.id == ch.volumeId,
                   )],
-              chapterOutline: chapterOutlines[seq],
+              chapterOutline: outlineForWriter(seq),
               onStep: (String step) => onProgress?.call(step, null),
               onPhase: emit,
             ),
@@ -1413,7 +1478,7 @@ class MultiAgentBookGenerationService {
                       volumeOutlines[volumeRows.indexWhere(
                         (VolumeRow v) => v.id == ch.volumeId,
                       )],
-                  chapterOutline: chapterOutlines[seq],
+                  chapterOutline: outlineForWriter(seq),
                   minFinalWords: cfg.minFinalWords,
                   concurrency: cfg.concurrency,
                   sections: outcome.sections,
@@ -3123,6 +3188,18 @@ class MultiAgentBookGenerationService {
     'cfg_chaptersPerVolume': (cfg.chaptersPerVolume).toString(),
     'styleRules': _styleSection(),
   });
+
+  /// 伏笔结构的确定性种子。
+  ///
+  /// 刻意**不用** `String.hashCode`（不保证跨 Dart 版本稳定），改用显式加权和，
+  /// 保证「同书名 + 同章数」在任何环境下都生成同一套经纬结构。
+  static int _foreshadowSeed(String bookTitle, int chapterCount) {
+    int h = 7;
+    for (final int c in bookTitle.codeUnits) {
+      h = (h * 31 + c) & 0x7fffffff;
+    }
+    return (h ^ chapterCount) & 0x7fffffff;
+  }
 
   String _leaderSystemPrompt() => _renderPrompt(
     'Book/leaderSystem',

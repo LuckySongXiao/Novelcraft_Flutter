@@ -259,6 +259,30 @@ class AiRuntimeSettings {
     return params;
   }
 
+  /// 写作动作（续写 / 重写 / 扩写 / 去重润色）专用：**实测最严防重复**采样参数。
+  ///
+  /// 用户要求（+48）：「续写，重写，扩写等写作参数默认使用最严防重复机制」。
+  /// 这些动作的产物直接进正文，一次复读就要人工返工。
+  ///
+  /// ⚠ 实现**不是**「把旋钮往严的方向夹」—— +48 三轮真机对照证明那样会
+  /// 既掉字数又抬复读（详见 [kRwkvStrictestWritingSampling] 头注的实验表）。
+  /// 这里直接落到**实测复读最低、字数最稳的那一点**：
+  /// 只有 `alpha_decay` 被顶到 0.999（唯一真正有效的旋钮，且只抬不压，
+  /// 用户配得更严时保留用户值），其余键取 `kRwkvStrictestWritingSampling`。
+  ///
+  /// `think_type` 由调用方（`SelectionEditService`）按思维链开关追加。
+  Map<String, Object?> maxAntiRepeatSamplingParams() {
+    final Map<String, Object?> current = samplingParams();
+    final Object? raw = current['alpha_decay'];
+    double decay = raw is num ? raw.toDouble() : 0.999;
+    if (decay < 0.999) decay = 0.999;
+    if (decay > 1.0) decay = 1.0;
+    return <String, Object?>{
+      ...kRwkvStrictestWritingSampling,
+      'alpha_decay': decay,
+    };
+  }
+
   AiRuntimeSettings copyWith({
     RwkvSamplingPresetId? samplingPreset,
     int? topK,

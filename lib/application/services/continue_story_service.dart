@@ -10,6 +10,7 @@
 //   ④ 双 Agent 写正文（失败回落单次写手调用）→ 落库 + 联动同步
 library;
 import '../../ai/utils/fiction_quality.dart';
+import '../../ai/utils/foreshadow_ledger.dart';
 
 import 'dart:convert';
 
@@ -122,6 +123,12 @@ class ContinueStoryService {
     final List<ChapterRow> chapterRows = await chapters.getByProjectId(projectId);
     final String mainOutline = await _mainOutline(projectId);
 
+    // ---- ①b 伏笔账本（剧情联动，+49）----
+    // 章细纲里的「伏笔提示」块是全书写作的**唯一真相**：这里把它解析成账本，
+    // 供「本章要回收什么 / 要提醒什么 / 要新埋什么」注入提示词。
+    final ForeshadowLedger foreshadow = _buildForeshadowLedger(volumeRows, chapterRows);
+    final int nextChapterOrder = foreshadow.chapterCount + 1;
+
     // 最近一章（取最后一个有正文的章，按卷序+章序）
     ChapterRow? lastChapter;
     final Map<String, List<ChapterRow>> byVolume = <String, List<ChapterRow>>{};
@@ -141,6 +148,15 @@ class ContinueStoryService {
       }
       if (lastChapter != null) break;
     }
+
+    // 本章的伏笔联动块（无伏笔时为空串，注入是零成本 no-op）。
+    final String foreshadowBlock = ForeshadowPrompt.build(
+      ledger: foreshadow,
+      order: nextChapterOrder,
+      outlineAt: (int o) => _foreshadowOutlineAt(chapterRows, volumeRows, o),
+      titleAt: (int o) => _foreshadowTitleAt(chapterRows, volumeRows, o),
+    );
+    final String debtReport = ForeshadowPrompt.buildDebtReport(foreshadow, nextChapterOrder);
 
     // ---- ② 主编智能体决策 ----
     onProgress?.call('主编智能体正在根据最新状态规划下一章…');
@@ -168,13 +184,19 @@ class ContinueStoryService {
                 '【主线大纲】\n${mainOutline.isEmpty ? '（未找到，请依据各卷概览自行推断主线方向）' : _truncate(mainOutline, 1500)}\n\n'
                 '【当前分卷与进度】\n$volumesDigest\n\n'
                 '【最近章节】\n$lastTail\n\n'
+                '${foreshadowBlock.isEmpty ? '' : '$foreshadowBlock\n\n'}'
+                '${debtReport.isEmpty ? '' : '$debtReport\n\n'}'
                 '请决定接下来一章怎么写，输出 JSON 对象（不要任何其它文本）：\n'
                 '{"needNewVolume": false,'
                 ' "volumeName": "卷名（仅当 needNewVolume=true 时给出，自主命名，如「第三卷 风起云涌」）",'
                 ' "chapterTitle": "章节标题（自主命名，如「第十一章 故人重逢」）",'
                 ' "chapterOutline": "本章大纲（200-400 字：本章目标、出场人物、关键冲突、章末钩子）"}\n'
                 '决策依据：若当前最后一卷的剧情已接近主线规划的卷末状态，或所有卷都已写满，'
-                '则 needNewVolume=true 并为新卷自主命名；否则沿用最后一卷（volumeName 填现有卷名）。',
+                '则 needNewVolume=true 并为新卷自主命名；否则沿用最后一卷（volumeName 填现有卷名）。\n'
+                '⚠ 伏笔约束：上面「伏笔联动」里要求**本章回收**的线，'
+                '必须写进 chapterOutline（写清用什么具体情节兑现）；'
+                '要求提醒的线只需在 outline 里提一句；'
+                '若有「未兑现伏笔」，本章应优先安排回收，不要继续拖延。',
             maxTokens: 1200,
             temperature: 0.7,
           );
@@ -222,6 +244,8 @@ class ContinueStoryService {
                 '${_truncate((lastChapter.content ?? '').trim(), 600)}',
           if (volumeRows.isNotEmpty)
             '所在分卷：$volumeName',
+          if (foreshadowBlock.isNotEmpty) foreshadowBlock,
+          if (debtReport.isNotEmpty) debtReport,
         ].join('\n\n'),
       },
     );
@@ -241,7 +265,11 @@ class ContinueStoryService {
             '【主线大纲】\n${mainOutline.isEmpty ? '（无）' : _truncate(mainOutline, 1200)}\n\n'
             '【本章大纲】\n${plan.chapterOutline}\n\n'
             '【衔接】\n$lastTail\n\n'
-            '请写出整章正文（约 2500-4000 字），与既有剧情自然衔接。',
+            '${foreshadowBlock.isEmpty ? '' : '$foreshadowBlock\n\n'}'
+            '${debtReport.isEmpty ? '' : '$debtReport\n\n'}'
+            '请写出整章正文（约 2500-4000 字），与既有剧情自然衔接。'
+            '${foreshadowBlock.isEmpty ? '' : '伏笔要求：把「本章需要回收」的线用具体情节兑现'
+                '（不是提一句就算），提醒只一句话带过，新埋的线保持模糊。'}',
         maxTokens: 8000,
         temperature: 0.85,
       );
@@ -392,6 +420,91 @@ class ContinueStoryService {
 
   int chaptersIn(Map<String, List<ChapterRow>> byVolume, String volumeId) =>
       byVolume[volumeId]?.length ?? 0;
+
+  // ---- 伏笔账本（+49 剧情联动）----
+
+  /// 由卷宗 + 章节展平出全书顺序，再构建伏笔账本。
+  ///
+  /// ⚠ `Chapters.orderIndex` 是**卷内**序号，而细纲里写的「第 50 章」是**全书**序号 ——
+  /// 展平必须按「卷序 → 卷内章序」，否则伏笔两端会指错章节。
+  static ForeshadowLedger _buildForeshadowLedger(
+    List<VolumeRow> volumeRows,
+    List<ChapterRow> chapterRows,
+  ) {
+    final Map<String, int> volOrder = <String, int>{
+      for (final VolumeRow v in volumeRows) v.id: v.orderIndex,
+    };
+    final Map<String, List<ChapterRow>> byVolume = <String, List<ChapterRow>>{};
+    for (final ChapterRow c in chapterRows) {
+      (byVolume[c.volumeId] ??= <ChapterRow>[]).add(c);
+    }
+    final List<ForeshadowFlatChapter> flat = <ForeshadowFlatChapter>[];
+    for (final VolumeRow v in volumeRows) {
+      final List<ChapterRow> list = byVolume[v.id] ?? const <ChapterRow>[];
+      final List<ChapterRow> sorted = List<ChapterRow>.of(list)
+        ..sort((ChapterRow a, ChapterRow b) =>
+            a.orderIndex.compareTo(b.orderIndex));
+      for (final ChapterRow c in sorted) {
+        flat.add(ForeshadowFlatChapter(
+          id: c.id,
+          volumeId: v.id,
+          title: c.title,
+          outline: ForeshadowFlattener.mergeOutline(c.summary, c.notes),
+          hasContent: (c.content ?? '').trim().isNotEmpty,
+        ));
+      }
+    }
+    final ForeshadowFlattenResult r = ForeshadowFlattener.flatten(
+      chapters: flat,
+      volumeOrderById: volOrder,
+    );
+    return ForeshadowLedgerBuilder.build(r.sources);
+  }
+
+  /// 账本渲染用的「第 N 章细纲」（去掉伏笔提示块，避免把元信息当剧情喂给模型）。
+  static String _foreshadowOutlineAt(
+    List<ChapterRow> chapterRows,
+    List<VolumeRow> volumeRows,
+    int order,
+  ) {
+    final List<ChapterRow> ordered = _orderedChapters(volumeRows, chapterRows);
+    if (order < 1 || order > ordered.length) return '';
+    final ChapterRow c = ordered[order - 1];
+    return ForeshadowLedgerBuilder.stripSection(
+      ForeshadowFlattener.mergeOutline(c.summary, c.notes),
+    );
+  }
+
+  static String _foreshadowTitleAt(
+    List<ChapterRow> chapterRows,
+    List<VolumeRow> volumeRows,
+    int order,
+  ) {
+    final List<ChapterRow> ordered = _orderedChapters(volumeRows, chapterRows);
+    return order >= 1 && order <= ordered.length ? ordered[order - 1].title : '';
+  }
+
+  /// 全书顺序的章节列表（卷序 → 卷内章序）。
+  static List<ChapterRow> _orderedChapters(
+    List<VolumeRow> volumeRows,
+    List<ChapterRow> chapterRows,
+  ) {
+    final Map<String, List<ChapterRow>> byVolume = <String, List<ChapterRow>>{};
+    for (final ChapterRow c in chapterRows) {
+      (byVolume[c.volumeId] ??= <ChapterRow>[]).add(c);
+    }
+    final List<ChapterRow> out = <ChapterRow>[];
+    final List<VolumeRow> vols = List<VolumeRow>.of(volumeRows)
+      ..sort((VolumeRow a, VolumeRow b) => a.orderIndex.compareTo(b.orderIndex));
+    for (final VolumeRow v in vols) {
+      final List<ChapterRow> list = List<ChapterRow>.of(
+          byVolume[v.id] ?? const <ChapterRow>[])
+        ..sort((ChapterRow a, ChapterRow b) =>
+            a.orderIndex.compareTo(b.orderIndex));
+      out.addAll(list);
+    }
+    return out;
+  }
 
   /// 主线大纲：优先 type='主线' 的剧情记录；退化到标题含「主线」；再退化到第一条。
   Future<String> _mainOutline(String projectId) async {
