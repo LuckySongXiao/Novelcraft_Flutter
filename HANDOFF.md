@@ -1,6 +1,177 @@
 # NovelCraft Flutter 版 — 交接文档（HANDOFF）
 
-## 最新交接：1.0.0+51（2026-10-14）—— 把 +50 实验结果落进产品 + 出包
+## 最新交接：1.0.0+52（2026-10-14）—— 项目逻辑/GUI 校验 + 模型边界实测 + 数据集范式（**源码已更新，未出包**）
+
+> **实测报告：`docs/模型边界能力实测-v1.0.0+52.md`（37 次真机调用，含 Attention 套件）**
+> **后训练数据集范式（两部）**：
+> - Part I `docs/RWKV后训练数据集格式范式-v1.0.md`（SFT/DPO：25 任务族 / 17 类负例 / 8 道质量闸）
+> - **Part II `docs/后训练数据集格式范式-StateTuning追加-v1.0.md`（State Tuning 专项，本次新增）**
+> 上一版：`1.0.0+51`（[下方](#1.0.051-2026-10-14--把-50-实验结果落进产品--出包)）已出包，交付件仍是 +51 三个包。
+
+### 1. 本版做了什么
+
+用户三步要求：① 先确认项目逻辑正确、GUI 完全适配有效；② 再测模型边界能力；
+③ 据此制定「用 QWEN3.8-27B 生成 RWKV 后训练数据集」的内容格式范式。
+
+### 2. ① 逻辑与 GUI 校验：全部通过，并修掉 4 个真实缺陷
+
+**校验手段**（静态 + 真库集成 + 真 widget）：
+
+| 检查 | 结果 |
+|---|---|
+| 离线自检 | **18 个全绿**（新增 M 组 9 条；`layered_pipeline_selftest` 累计 **146 条**） |
+| 类型检查 | `lib` **248 文件 0 error / 0 warning**；`tools` 25 文件；`test/` 1 文件 |
+| i18n / 插值 lint | 1296 调用点 0 缺失 / 293 文件 0 命中 |
+| **新增集成测试** `test/layered_book_runner_test.dart` | **7 / 7 通过**（真内存库 + 打桩模型，不联网） |
+
+**修掉的 4 个真实缺陷**（都由集成测试抓出，不是猜的）：
+
+| # | 缺陷 | 表现 | 修法 |
+|---|---|---|---|
+| 1 | `RepositoryLayeredSink` **不幂等** | 同名书第二次运行**再建一整卷 + 一整套章**（实测 `vs.length == 2`） | 落库前先 `getByProjectId` 回填 `_volumeIds` / `_chapterIds`；用 `Future` 缓存而非 bool 标记（卷是并行的，bool 会让第二个并发调用读到空表） |
+| 2 | `substring(0, -1)` **崩溃路径** | `伏笔提示：`（不带 `##`）时 `indexOf('## 伏笔提示') == -1` → RangeError | 新增 `BriefPatch.splitBrief()` 返回 `(body, section)` record，补 18 条回归 |
+| 3 | 卷大纲为空时**静默丢章** | `volumeId` 为空 → 整卷章节细纲 + 正文一起被 early-return 吃掉 | 兜底建卷 |
+| 4 | **服务端 `>` 前缀没有剥**（见 §3） | `>标题：《x》` → 「标题」字段解析失败 → 章名退化成「第 N 章」 | `cleanStructured` 开头剥开头连续的 `>`，补 9 条回归 |
+
+**集成测试覆盖的关键断言**（下次改落库先看它）：
+`Volumes.description` / `Chapters.summary` 都在 drift 的 **1000 字列上限**内；
+`Chapters.orderIndex` 是**卷内**序号 1..4 而管线用**全书**序号（映射正确）；
+细纲与伏笔小节**分列**（`summary` 不含 `## 伏笔提示`）；
+末两章禁埋 → `notes` 为空；正文回填后 `status == Completed` / `wordCount > 0`；
+主线大纲落 `Plots(type='主线').outline`；同名书复跑不重复建卷建章。
+
+> ⚠ **跑测试的方法（本机沙箱）**：裸 `flutter test` 会崩（Dart VM 不能 spawn 子进程，
+> 栈里是 `Git.runSync` → `CreateFile failed`）。必须 **WMI 分离进程**包一层：
+> `([wmiclass]'Win32_Process').Create('powershell.exe -File ...ps1')`，
+> 并且 CWD 要用 ASCII junction `F:\30_Novelcraft_Flutter\novelcraft_en` + `-d windows`。
+> 参考 `flutter test -d windows test/layered_book_runner_test.dart`。
+>
+> ⚠ **写 widget 测试的坑**：对话框表单是 ListView 且外层 `SizedBox(height: 520)`，
+> 视口**再大**也只构建可视范围内的项。下方字段必须 `scrollUntilVisible` 拖出来
+> 才能 find（首轮就是栽在这里，被误判成「控件缺失」）。
+
+### 3. ⚠ 最有价值的发现：服务端给每条 completion 加 `>` 前缀
+
+真机 3 次对照（`tools/rwkv_boundary_probe.dart` + 单独探针）：
+
+| 请求 | 原始 content |
+|---|---|
+| `只回复一个字：好`（无 system） | `>好` |
+| 同上 + system | `>好` |
+| 同上，不带 `stop_tokens` | `>好` |
+
+字节固定 `[62, …]`（`>`），**与 system / stop_tokens / 提示词内容全都无关** ⇒ 服务端 chat 模板行为，不是模型输出。
+正文链路早就剥（`AIOutputSanitizer._stripLeadingQuoteBlock`，2026-09-17 在 g1j 上观测过同类）；
+只有**分层管线的 `cleanStructured` 漏了**。已修 + 9 条回归。
+
+### 4. ② 模型边界：32 次真机调用的结论
+
+| 维度 | 结论 | 对数据集的硬性规定 |
+|---|---|---|
+| **单次正文长度** | 可用上限 ≈ **2000~2500 字**；超 2600 字 ngram 破 0.05；cap ≥ 4096 **词级复读崩壞**（`绝壁`/`重演` 刷屏） | **删掉**「单次 3500 字以上」档；整章一律**分片**构造 |
+| **长文自然收束** | **6/6 失败** | 「完整句收尾」必须专门练 + 质量闸兜底 |
+| **结构化 JSON** | **强项**：5/10/20/40 条 **schema 100%** | A1/A2 `count` 上限可放到 40 |
+| **上下文** | 输入 **48,000 字（≈4.8 万 token）照样接受**（未验证 Attention） | `tailContext` 可到 8000 字 |
+| **采样温度** | 最严防重复参数下 **0.3~1.5 全零复读** | 复读主因是惩罚参数不是温度（与 +48 互证） |
+| **指令遵循** | 剥 `>` 后 **7/8**，唯一真失败是**精确字数** | 精确字数类样本加量 |
+| **分片续写 D2** | **健康**：零回抄、跨片 ngram ≤ 0.0017 | DPO 的 chosen 必须保持充足，别把主路径练退 |
+
+完整数据与崩壞样本原文见 `docs/模型边界能力实测-v1.0.0+52.md`，
+逐次明细在 `F:\30_Novelcraft_Flutter\_boundary_out\rows.jsonl`。
+
+### 5. ③ 后训练数据集范式（主交付物）
+
+`docs/RWKV后训练数据集格式范式-v1.0.md`。要点：
+
+- **任务族 25 个**（A 结构规划 / B 大纲 / C 细纲与自查 / D 正文 / E 选节编辑），
+  每个任务族给出：运行时调用点、**逐字取自代码**的 prompt 模板、completion 契约、
+  正例、负例表、**可执行校验器**、配比。
+- **负例谱系 17 类**（E1~E17），全部来自真机实测，**只做已知故障的确定性变换**。
+- **8 道质量闸**（格式/契约/复读/长度/一致性/去重/语言/教师一致性）。
+- **铁律 1**：数据集里的 prompt 必须与运行时构造的字符串**逐字一致** —— 否则模型学的是另一个任务。
+- 增量为事实数所驱动：`askChars` 上限 2048；D 组单片 600~2400 字；正文末字符必须句末标点；末章禁埋伏笔。
+- 训练用法（SFT/DPO 序列化、loss mask、stop 序列）+ 评估指标全部对齐本仓库 `tools/*_selftest.dart` 的判据，**不另写一套**。
+
+### 5.1 范式已被实现成代码，并对真实数据跑过审计
+
+**不是纸面文章。** 校验器 `lib/ai/utils/dataset_spec_validator.dart`，
+自检 + 审计入口 `tools/dataset_spec_validator_selftest.dart`：
+
+- 自检 **45 条断言**（A 组合格样本 / B1~B25 每个错误码都要被抓到 / C 组去重 / D 组指标 / E 组契约）。
+- 审计模式把既有案例的真实产物过一遍范式：
+  ```bash
+  dart --disable-dart-dev tools/dataset_spec_validator_selftest.dart audit <案例目录>
+  ```
+- **+50《低潮图书馆》案例审计结果：通过 6 / 失败 7**，失败项**全部是真实缺陷**：
+  - 细纲 5 份里 3 份不合契约（`brief/2` 解析到 **0 个字段**；`brief/4`、`brief/5` 只有 **7 个**）
+  - 正文 5 章里 4 章「停在半句」（E9），`prose/3` ngram **0.7267** 已退化
+- 审计输出已存档：`_book_cases/低潮图书馆/layered_v2/dataset_spec_audit.txt`
+
+**制定范式时真实踩到并修掉的三个坑**（都靠自检发现，写进范式 §13.2）：
+
+1. **G7 不能拿正文的 0.85 去卡 JSON** —— 一份完全合格的里程碑数组中文比例只有 **0.40**
+   （`{}[]",` 占掉大半字符）。→ 按格式分档：`prose 0.85` / `textLines 0.30` / `json 0.02`。
+2. **中文比例必须计入中文标点** —— 不算 `，。：；、！？「」《》——…` 的话，真实正文只有 0.83~0.84，
+   全被误杀。→ `cjkRatio` 纳入 0x3000~0x303F / 0xFF00~0xFFEF / 0x2010~0x2027。
+3. **大纲不是 prose** —— `# 卷名` 这类条目化标记在大纲里合法，用 prose 的 G3 审会判成 E5。
+4. **G5 必须给账本完整全书章数** —— `ForeshadowLedgerBuilder.build()` 把「输入的章数」当
+   `chapterCount`，只喂一章会把 `第6章 → …` 误判成「超出全书 1 章」。
+
+### 5.2 补测：Attention 是真实的（解除上一版的保留意见）
+
+上一版写「上下文只验证不报错，未验证 Attention」。已补 `attention` 套件
+（`tools/rwkv_boundary_probe.dart`）：在前文第 N 字处埋四字暗号，要求原样复述。
+
+| 前文总长 | 暗号位置 | 命中 |
+|---:|---:|---|
+| 20,000 | 第 500 字 | ✓ |
+| 20,000 | 第 10,000 字 | ✓ |
+| 30,000 | 第 25,000 字 | ✓ |
+| 40,000 | 第 20,000 字 | ✓ |
+| 40,000 | 对照：问前文没提的事实 | **`未提及。`**（不编造） |
+
+⇒ **Attention 真实有效**，且对照组证明是「真检索而非猜」。数据集可放心用长前文。
+
+### 5.3 Part II：State Tuning 专项范式（本次新增）
+
+用户提出「state tuning 对 RWKV 写小说也许更好」，已核实它是 RWKV-PEFT 官方支持的
+**独立微调路径**（`--peft state` / `--train_type state`，与 LoRA/MiSS 并列），
+产物是可单独挂载的 `.pth` **state 文件**，据此追加制定了 Part II 范式。
+
+**Part II 与 Part I 的本质差异（一句话）**：state 是「整个数据集共享的一份全局偏置」，
+所以 **Part I 允许异构数据混一份，Part II 要求一个 state 只许一种输出形状/人格。**
+
+- **state 目标划分 6 个**（ST-1 正文写手 / ST-2 结构规划 / ST-3 细纲契约 /
+  ST-4 自查补丁 / ST-5 单书世界观 / ST-6 跨章续写），每个**单独数据集、单独训练、单独 .pth**。
+- **State Tuning 专用样本外壳**：新增 `state_target` / `sample_kind` /
+  `priming`（书级设定语料）/ `state_fingerprint`（同质性指纹）。
+- **新增 4 道闸**：ST-G9 同质性（形状/字段数/中文比例极差/长度中位数 ±30%/人称时态零分歧）、
+  ST-G10 反塌缩（训练后）、ST-G11 基底保留（训练后，防 `lr_init=1` 灾难性遗忘）、ST-G12 单轮。
+- **训练配置模板**照官方教程落地（`lr_init 1` / `lr_final 0.01` / `warmup 10` /
+  `ctx_len 512`），本项目 deviation：prose 类改 **infctx**（`--chunk_ctx 512 --ctx_len 2048`）
+  以吃长正文片；`make_data.py <jsonl> 10 512` 的 10 倍重复 → **去重必须按 state 分组后进行**。
+- **可执行**：`StateTuningGates.checkGroup()` 已实现，自检从 45 条扩到 **57 条**（F1~F12 覆盖
+  每个 ST 闸的正反例）。
+
+⚠ **两个必须先定的决策**（已写进 Part II §S9/§S10）：
+1. **部署路径**：本项目线上走 RWKV **云端** API，那个端点**无法挂载本地 state 文件**。
+   要么 merge 进模型后**自托管**（Runner / Ai00 / rwkv.cpp），要么此路暂只做实验。
+2. **知识 vs 人格**：state 参数极少，装不下大量规则 → 契约/JSON schema 仍应交给 SFT/LoRA，
+   State Tuning 只教「人格与文风」。官方数据里 `lr_init=1` 的高学习率**极易灾难性遗忘**。
+
+### 6. 验证
+
+**19/19** 离线自检（`dataset_spec_validator_selftest` **57 条**含 State Tuning 专项；`layered_pipeline_selftest` 146 条）·
+`analyze_inprocess lib` **249 文件 0 error / 0 warning** · `tools` 26 文件 0/0 ·
+i18n 1296 调用点 0 缺失 · 插值 lint 294 文件 0 命中 ·
+**集成测试 7/7** · 真机审计 6/13 通过（失败项全为真实缺陷）· 版本三处一致（`1.0.0+52`）。
+
+### 7. 未出包
+
+本轮是源码级验证与修复，未重新出包。交付件仍是 `1.0.0+51` 的三个包
+（`F:\30_Novelcraft_Flutter\发布清单-v1.0.0+51.md`）。要出 +52 包说一声。
+
+## 最新交接（历史）：1.0.0+51（2026-10-14）—— 把 +50 实验结果落进产品 + 出包
 
 > **升级列表（本版逐项清单）：`docs/升级列表-v1.0.0+51.md`（权威）**
 > 实验报告：`docs/分层写书管线-设计-v1.0.0+50.md`

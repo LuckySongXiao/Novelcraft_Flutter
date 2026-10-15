@@ -89,7 +89,6 @@ class LayeredRunOutcome {
 class RepositoryLayeredSink implements LayeredArtifactSink {
   RepositoryLayeredSink({
     required this.projectId,
-    required this.projects,
     required this.volumes,
     required this.chapters,
     required this.plots,
@@ -98,7 +97,6 @@ class RepositoryLayeredSink implements LayeredArtifactSink {
   });
 
   final String projectId;
-  final ProjectService projects;
   final VolumeService volumes;
   final ChapterService chapters;
   final PlotService plots;
@@ -157,8 +155,50 @@ class RepositoryLayeredSink implements LayeredArtifactSink {
     onLog?.call('已写入主线大纲（${content.trim().length} 字）');
   }
 
+  /// 是否已从仓库载入既有卷（保证**重复运行幂等**）。
+  ///
+  /// ⚠ 这是一个真实 BUG 的修复：`_volumeIds` / `_chapterIds` 是**每次 run 新建的 sink**
+  /// 上的实例字段。同名书第二次运行时 sink 是全新的、对既有行一无所知 →
+  /// 会把整卷整章**再建一遍**（集成测试 `layered_book_runner_test.dart` 断言
+  /// `vs.length == 1` 时实测得到 2，正是这条）。所以必须先查库回填。
+  ///
+  /// 用 `Future` 缓存而不是 bool 标记：卷是**并行**处理的，bool 标记会让第二个
+  /// 并发调用在第一个还在查询时就返回，读到空的 `_volumeIds`。
+  Future<void>? _volumesLoad;
+
+  Future<void> _ensureVolumesLoaded() => _volumesLoad ??= () async {
+        final List<VolumeRow> existing = await volumes.getByProjectId(projectId);
+        for (final VolumeRow v in existing) {
+          _volumeIds.putIfAbsent(v.orderIndex, () => v.id);
+        }
+      }();
+
+  Future<void>? _chaptersLoad;
+
+  /// 载入既有章。键是「卷序 × 卷内章序」推出的**全书序号** —— 必须与管线口径一致
+  ///（`Chapters.orderIndex` 是卷内序号，不能直接当全书序号用）。
+  Future<void> _ensureChaptersLoaded() => _chaptersLoad ??= () async {
+        await _ensureVolumesLoaded();
+        final List<ChapterRow> existing =
+            await chapters.getByProjectId(projectId);
+        for (final ChapterRow c in existing) {
+          final int? volOrder = _volumeOrderOf(c.volumeId);
+          if (volOrder == null) continue;
+          final int global = (volOrder - 1) * chaptersPerVolume + c.orderIndex;
+          if (global >= 1) _chapterIds.putIfAbsent(global, () => c.id);
+        }
+      }();
+
+  int? _volumeOrderOf(String volumeId) {
+    for (final MapEntry<int, String> e in _volumeIds.entries) {
+      if (e.value == volumeId) return e.key;
+    }
+    return null;
+  }
+
   Future<void> _writeVolumeOutline(int index, String content) async {
     if (index < 1 || content.trim().isEmpty) return;
+    await _ensureVolumesLoaded();
     String? id = _volumeIds[index];
     if (id == null) {
       id = _uuid.v4();
@@ -185,13 +225,29 @@ class RepositoryLayeredSink implements LayeredArtifactSink {
     if (order < 1 || content.trim().isEmpty) return;
     final int volumeIndex = (order - 1) ~/ chaptersPerVolume + 1;
     final int orderInVolume = (order - 1) % chaptersPerVolume + 1;
-    final String volumeId = _volumeIds[volumeIndex] ?? '';
-    if (volumeId.isEmpty) return;
+    // 幂等：先回填既有章（否则重复运行会重复建章）
+    await _ensureChaptersLoaded();
+    String volumeId = _volumeIds[volumeIndex] ?? '';
+    if (volumeId.isEmpty) {
+      // 卷大纲可能因「内容为空」被 `_writeVolumeOutline` 跳过 → 这里**兜底建卷**。
+      // 否则整卷的章节都会被下面的 early-return 静默丢弃（章节细纲 + 正文一起丢）。
+      volumeId = _uuid.v4();
+      await volumes.create(VolumesCompanion.insert(
+        id: volumeId,
+        title: '第 $volumeIndex 卷',
+        projectId: projectId,
+        orderIndex: Value(volumeIndex),
+        status: const Value('Writing'),
+      ));
+      _volumeIds[volumeIndex] = volumeId;
+      onLog?.call('第 $volumeIndex 卷无大纲，已兜底建卷以保证章节落库');
+    }
     // 细纲（8 行）与伏笔提示分列存：`summary` 有 1000 字上限，`notes` 无上限。
-    final String? section = BriefPatch.foreshadowSection(content);
-    final String briefOnly = section == null
-        ? content
-        : content.substring(0, content.indexOf('## 伏笔提示')).trim();
+    // ⚠ 用 `BriefPatch.splitBrief` 而不是 `indexOf('## 伏笔提示')` —— 后者在
+    //    「裸行 `伏笔提示：`」形态下返回 -1，`substring(0, -1)` 会抛 RangeError。
+    final ({String body, String? section}) split = BriefPatch.splitBrief(content);
+    final String briefOnly = split.body;
+    final String? section = split.section;
     final String title =
         (BriefPatch.parseFields(content)['标题'] ?? '第 $order 章')
             .replaceAll(RegExp(r'^[《【]|[》】]$'), '')
@@ -291,7 +347,6 @@ class LayeredBookRunner {
 
     final RepositoryLayeredSink sink = RepositoryLayeredSink(
       projectId: projectId,
-      projects: projects,
       volumes: volumes,
       chapters: chapters,
       plots: plots,

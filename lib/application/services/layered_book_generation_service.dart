@@ -952,6 +952,15 @@ class LayeredBookGenerationService {
   /// 只做**确定性**剥离，不改动正文语义。
   static String cleanStructured(String raw) {
     String t = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    // ⓿ **开头的 Markdown 引用块标记 `>`**
+    //
+    // ⚠ 这是本部署的**服务端模板行为**，不是模型行为：真机实测（+51）
+    //   `只回复一个字：好` → `>好`，且与 `system` / `stop_tokens` 完全无关，
+    //   每条 completion 都会带一个前缀 `>`。正文链路经
+    //   `AIOutputSanitizer._stripLeadingQuoteBlock` 已经剥掉了，**结构化链路
+    //   必须在这里自己剥** —— 否则 `>标题：《x》` 会让 `BriefPatch.parseFields`
+    //   的 `^\s*标题` 匹配失败，直接丢掉「标题」字段（章名退化成「第 N 章」）。
+    t = _stripLeadingQuotePrefix(t);
     // ① 代码围栏
     t = t.replaceAll(RegExp(r'^[ \t]*```[a-zA-Z0-9_+-]*[ \t]*$', multiLine: true), '');
     // ② 开场白：丢掉「首个契约标记之前」的所有行
@@ -997,6 +1006,28 @@ class LayeredBookGenerationService {
 
   static bool _looksLikeContractLine(String line) =>
       _contractLine.hasMatch(line.trim());
+
+  /// 引用块标记（行首可选空白 + `>` + 可选空格）。
+  static final RegExp _quotePrefix = RegExp(r'^\s*>\s?');
+
+  /// 剥掉**开头连续**的 `>` 引用块标记（跳过开头的空行后再判断）。
+  ///
+  /// 只剥「开头连续段」而不是每行都剥 —— 与 `AIOutputSanitizer` 同语义，
+  /// 避免误伤正文里合法的引用。
+  static String _stripLeadingQuotePrefix(String text) {
+    final List<String> lines = text.split('\n');
+    int i = 0;
+    while (i < lines.length && lines[i].trim().isEmpty) {
+      i++;
+    }
+    int stripped = 0;
+    while (i < lines.length && _quotePrefix.hasMatch(lines[i])) {
+      lines[i] = lines[i].replaceFirst(_quotePrefix, '');
+      i++;
+      stripped++;
+    }
+    return stripped == 0 ? text : lines.join('\n');
+  }
 
   /// 自查轮回复「无需修改」的各种写法。
   static bool _isNoChange(String patch) {

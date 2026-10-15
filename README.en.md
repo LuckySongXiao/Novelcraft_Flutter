@@ -5,7 +5,7 @@
 ![NovelCraft overview: story worlds, writing workflows and content export](docs/images/novelcraft-overview-en.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B51-5C6BC0" alt="Current source version: 1.0.0+51" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B53-5C6BC0" alt="Current source version: 1.0.0+53" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="Primary delivery platforms: Windows and Android" />
@@ -23,7 +23,7 @@
 
 Originally built with C# WPF, the project is being developed in Flutter. Its primary deliverables are a portable Windows desktop package and an Android APK. It is designed for authors managing long-form fiction, creators exploring collaboration between models, and developers studying AI writing workflows.
 
-> Current source version: **1.0.0+51**. This release lands the +50 live-benchmark findings in the product: **RWKV cloud stateful continuation is now off by default** (measured: `/state/*` ignores `think_type: none`, gate pass rate jitters 1/5→4/5→1/5 and produces 0-char chapters), **layered writing is wired into the app** (new AppBar entry: main outline → volume outlines → chapter briefs → prose, four levels with "parallel across units / serial within a unit", each level anchored by start→end and filling the middle linearly), the brief self-check now returns **a diff patch only** (measured: average repetition dropped from 0.169 to 0.032), plus deterministic cleanup for structured-output pollution and a duplicated-brief-field guard. Item-by-item list: `docs/升级列表-v1.0.0+51.md`. Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations).
+> Current source version: **1.0.0+53**. This release completes **Part II of the RWKV post-training dataset paradigm - State Tuning**, after verifying the facts against the official RWKV-PEFT repo and tutorial (State Tuning is an official fine-tuning path alongside LoRA; it tunes the **initial state**; the artifact is a separately mountable `.pth` state file; on 7B it needs 18.1 GB vs LoRA's 23.7 GB). The core insight: **the state is a bias shared by the whole dataset**, so where Part I allows heterogeneous data in one set, Part II requires **one state to embody only one output shape/persona**. It defines 6 state targets (prose writer / structural planner / brief contract / self-check patch / per-book world / chapter linker), each with its own dataset, training run and `.pth`, plus four new gates ST-G9~ST-G12. The paradigm is **implemented as code** (`StateTuningGates`, 57 assertions). This release also fixes four genuine defects in the layered-writing app path (non-idempotent repository sink, a `substring(0,-1)` crash path, silently dropped chapters when a volume outline was empty, and the server-side `>` prefix not being stripped, which degraded chapter titles to "Chapter N"). Content review and automatic revision remain experimental; see [Current Status and Known Limitations](#current-status-and-known-limitations).
 
 ## Contents
 
@@ -464,17 +464,20 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows --dart-define
 
 Live endpoint tests make network requests and depend on deployment, quotas and service availability. Do not put actual credentials in this README or test source files.
 
-**Latest recorded verification for 1.0.0+51, dated 2026-10-14:**
+**Latest recorded verification for 1.0.0+53, dated 2026-10-15:**
 
 | Check | Result |
 | --- | --- |
-| Type check (`tools/analyze_inprocess.dart`) | 248 files, 0 error / 0 warning |
-| Offline self-tests | **18 / 18 green** (`layered_pipeline_selftest` **119 assertions**, `foreshadow_ledger_selftest` 112) |
+| Type check (`tools/analyze_inprocess.dart`) | `lib` **249 files, 0 error / 0 warning**; `tools` 26 files; `test/` 1 file |
+| Offline self-tests | **19 / 19 green** (`dataset_spec_validator_selftest` **57 assertions** incl. State Tuning gates; `layered_pipeline_selftest` 146) |
+| **Integration test** `test/layered_book_runner_test.dart` | **7 / 7 passing** (real in-memory DB + stubbed model) |
 | English string coverage scan | 1296 call sites / 0 missing |
-| Interpolation lint | 292 files / 0 hits |
-| Windows release build | Success (EXIT=0 / 72.3s); `data/app.so` contains `1.0.0+51`, not `1.0.0+50` |
-| Android release build | Success (see `发布清单-v1.0.0+51.md`) |
-| Layered writing live case | 7 comparison runs; best run **5/5 past gate / 2352 chars / ngram 0.032** (baseline 5/5 / 2347 / 0.005) |
+| Interpolation lint | 294 files / 0 hits |
+| Model boundary probe (`tools/rwkv_boundary_probe.dart`) | **37 live model calls**, 7 suites (incl. attention passphrase recall) |
+| Paradigm validator + real-data audit | `dataset_spec_validator` **57 assertions**; +50 case audit **6/13 pass** (all failures are genuine defects) |
+| Encoding integrity | All touched files free of U+FFFD |
+| Windows release build | Success (see `Release manifest v1.0.0+53`) |
+| Android release build | Success (see `Release manifest v1.0.0+53`) |
 
 
 ## Current Status and Known Limitations

@@ -5,7 +5,7 @@
 ![NovelCraft 项目概览：故事世界、写作工艺与内容交付](docs/images/novelcraft-overview.png)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0%2B51-5C6BC0" alt="当前代码版本 1.0.0+51" />
+  <img src="https://img.shields.io/badge/version-1.0.0%2B53-5C6BC0" alt="当前代码版本 1.0.0+53" />
   <img src="https://img.shields.io/badge/Flutter-3.38.5-02569B?logo=flutter" alt="Flutter 3.38.5" />
   <img src="https://img.shields.io/badge/Dart-3.10.4-0175C2?logo=dart" alt="Dart 3.10.4" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-238636" alt="主要交付平台 Windows 和 Android" />
@@ -23,7 +23,7 @@
 
 项目由 C# WPF 版本迁移到 Flutter，当前主要交付 Windows 桌面便携版和 Android APK。适合需要管理长篇设定的作者、希望尝试多模型协作的创作者，以及研究 AI 写作流程的开发者。
 
-> 当前代码版本：**1.0.0+51**。本版把 +50 的真机实验结果落进产品：**RWKV 云端有状态续跑默认关闭**（实测 `/state/*` 无视 `think_type: none`，过闸率 1/5→4/5→1/5 抖动并出现 0 字章），**分层写书接入 App**（AppBar 新增入口：主线大纲 → 分卷大纲 → 章节细纲 → 正文，四级「单元间并行 / 单元内串行」，每级按起点→终点锚**线性补齐**中间过程），细纲自查改为**只回差异补丁**（实测把平均复读率从 0.169 压到 0.032），并新增结构化输出污染清洗与细纲字段重复兜底。逐项清单见 `docs/升级列表-v1.0.0+51.md`。内容审查与自动改进仍属于实验功能，具体边界见[当前状态与已知限制](#当前状态与已知限制)。文中的插图为功能流程示意，实际界面截图见[界面截图](#界面截图)。
+> 当前代码版本：**1.0.0+53**。本版完成 **RWKV 后训练数据集范式的第二部分 —— State Tuning 专项**：先从 RWKV-PEFT 官方仓库与教程核实事实（State Tuning 是与 LoRA 并列的官方微调路径，微调的是**初始 state**、产物是可单独挂载的 `.pth` state 文件、7B 上 18.1GB 显存比 LoRA 的 23.7GB 更省），再据此制定 Part II 范式 —— 核心洞见是「state 是整个数据集共享的一份全局偏置」，所以 **Part I 允许异构数据混一份，Part II 要求一个 state 只许一种输出形状/人格**；划分 6 个 state 目标（正文写手/结构规划/细纲契约/自查补丁/单书世界观/跨章续写），各自单独数据集、单独训练、单独 `.pth`，并新增 ST-G9~ST-G12 四道质量闸。范式已**实现为代码**（`StateTuningGates`，自检 57 条）。同时本版修掉分层写书 App 侧 4 个真实缺陷（落库不幂等、`substring(0,-1)` 崩溃路径、卷大纲为空静默丢章、服务端 `>` 前缀未剥导致章名退化成「第 N 章」）。内容审查与自动改进仍属于实验功能，具体边界见[当前状态与已知限制](#当前状态与已知限制)。文中的插图为功能流程示意，实际界面截图见[界面截图](#界面截图)。
 
 ## 目录
 
@@ -463,17 +463,22 @@ flutter test integration_test/rwkv_cloud_live_test.dart -d windows --dart-define
 
 真实端点测试会发起网络请求，结果受模型部署、额度和服务状态影响。不要把实际密钥填写进 README 或测试源码。
 
-**1.0.0+51 最近一次验证记录（2026-10-14）：**
+**1.0.0+53 最近一次验证记录（2026-10-15）：**
 
 | 检查 | 结果 |
 | --- | --- |
-| 类型检查（`tools/analyze_inprocess.dart`） | 248 文件，0 error / 0 warning |
-| 离线自检 | **18 个全绿**（`layered_pipeline_selftest` **119 条**、`foreshadow_ledger_selftest` 112 条） |
+| 类型检查（`tools/analyze_inprocess.dart`） | `lib` **249 文件 0 error / 0 warning**；`tools` 26 文件；`test/` 1 文件 |
+| 离线自检 | **19 个全绿**（`dataset_spec_validator_selftest` **57 条**，含 State Tuning 专项闸；`layered_pipeline_selftest` 146 条） |
+| **集成测试** `test/layered_book_runner_test.dart` | **7 / 7 通过**（真内存库 + 打桩模型） |
 | 英文界面词条缺失扫描 | 1296 调用点 / 0 缺失 |
-| 插值 lint | 292 文件 / 0 命中 |
-| Windows release 构建 | 成功（EXIT=0 / 72.3s）；`data/app.so` 含 `1.0.0+51`、不含 `1.0.0+50` |
-| Android release 构建 | 成功（见 `发布清单-v1.0.0+51.md`） |
-| 分层写书真机案例 | 7 轮对照运行；最好一轮 **5/5 过闸 / 2352 字 / ngram 0.032**（基线 5/5 / 2347 / 0.005） |
+| 插值 lint | 294 文件 / 0 命中 |
+| 模型边界实测（`tools/rwkv_boundary_probe.dart`） | **37 次真机调用**，7 套件（含 Attention 暗号复述） |
+| 范式校验器 + 真实数据审计 | `dataset_spec_validator` **57 条自检**；+50 案例审计 **6/13 通过**（失败项全为真实缺陷） |
+| 编码完整性 | 全部改动文件无 U+FFFD |
+| Windows release 构建 | 成功（见 `发布清单-v1.0.0+53.md`） |
+| Android release 构建 | 成功（见 `发布清单-v1.0.0+53.md`） |
+
+> 交付件与 SHA256 见 `F://30_Novelcraft_Flutter//发布清单-v1.0.0+53.md`。
 
 
 ## 当前状态与已知限制

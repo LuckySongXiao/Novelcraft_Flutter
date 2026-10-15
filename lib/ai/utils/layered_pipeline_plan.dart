@@ -689,6 +689,27 @@ abstract final class BriefPatch {
       RegExp(r'^\s*伏笔提示\s*[：:]?\s*$').hasMatch(line);
 
   /// 取出文本里的「伏笔提示」小节（含标题；没有则 null）。
+  /// 把细纲拆成「字段正文部分」与「伏笔提示小节」（后者为 null 表示没有）。
+  ///
+  /// ⚠ **必须用这个方法**，不要用 `content.indexOf('## 伏笔提示')` 自己切：
+  /// `_sectionOf` 也接受**不带 `##`** 的标题（如裸行 `伏笔提示：`），
+  /// 此时 `indexOf` 返回 -1，调用方做 `substring(0, -1)` 会直接抛 `RangeError`。
+  static ({String body, String? section}) splitBrief(String text) {
+    final List<String> lines = text.split(RegExp(r'\r\n|\r|\n'));
+    int start = -1;
+    for (int i = 0; i < lines.length; i++) {
+      if (_isSectionTitle(lines[i])) {
+        start = i;
+        break;
+      }
+    }
+    if (start < 0) return (body: text.trim(), section: null);
+    return (
+      body: lines.sublist(0, start).join('\n').trim(),
+      section: _sectionOf(text),
+    );
+  }
+
   static String? _sectionOf(String text) {
     final List<String> lines = text.split(RegExp(r'\r\n|\r|\n'));
     int start = -1;

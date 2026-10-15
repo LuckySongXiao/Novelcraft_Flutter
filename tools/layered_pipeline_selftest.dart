@@ -521,6 +521,104 @@ void main() {
     _check('K28 禁止复述清单', p.contains('不要复述'));
   }
 
+  // =========================================================================
+  // L 组：splitBrief（+51 修复：裸行 `伏笔提示：` 会让 indexOf 返回 -1 而崩溃）
+  // =========================================================================
+  {
+    const String withHash = '标题：《灯塔》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n'
+        '故事时间节点：g\n\n## 伏笔提示\n- T001（第1章 → 第5章）：旧线。';
+    final ({String body, String? section}) a = BriefPatch.splitBrief(withHash);
+    _check('L1 有 ## 标题时 section 非空', a.section != null);
+    _check('L2 body 不含伏笔小节', !a.body.contains('T001'));
+    _check('L3 body 保留 8 行', a.body.contains('本章目标：a') && a.body.contains('故事时间节点：g'));
+    _check('L4 section 含伏笔行', a.section!.contains('T001'));
+  }
+  {
+    // ⚠ 关键回归：裸行 `伏笔提示：`（无 ##）—— 旧实现 indexOf('## 伏笔提示') == -1
+    const String bare = '标题：《灯塔》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n'
+        '故事时间节点：g\n\n伏笔提示：\n- T002（第2章 → 第6章）：裸行形态。';
+    final ({String body, String? section}) b = BriefPatch.splitBrief(bare);
+    _check('L5 裸行标题不崩且 section 非空', b.section != null);
+    _check('L6 裸行 body 不含伏笔行', !b.body.contains('T002'));
+    _check('L7 裸行 body 保留 8 行', b.body.contains('故事时间节点：g'));
+    _check('L8 裸行 section 规范化为 ##', b.section!.startsWith('## 伏笔提示'));
+  }
+  {
+    const String none = '标题：《灯塔》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n'
+        '故事时间节点：g';
+    final ({String body, String? section}) c = BriefPatch.splitBrief(none);
+    _check('L9 无伏笔小节 → section 为 null', c.section == null);
+    _check('L10 无伏笔小节 → body 为全文', c.body.contains('故事时间节点：g'));
+  }
+  {
+    // 空小节（只有标题没有内容）→ section 为 null，但 body 必须去掉标题行
+    const String emptySec = '标题：《灯塔》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n'
+        '故事时间节点：g\n\n## 伏笔提示';
+    final ({String body, String? section}) d = BriefPatch.splitBrief(emptySec);
+    _check('L11 空小节 → section 为 null', d.section == null);
+    _check('L12 空小节 → body 不含标题行', !d.body.contains('伏笔提示'));
+    _check('L13 空小节 → body 保留 8 行', d.body.contains('故事时间节点：g'));
+  }
+  {
+    // body 必须能安全喂给 substring 类操作：长度恒 >= 0 且非负
+    for (final String t in <String>[
+      '伏笔提示：', '## 伏笔提示', '', '标题：x', '\n\n## 伏笔提示\n- T001（第1章 → 第3章）：x',
+    ]) {
+      final ({String body, String? section}) r = BriefPatch.splitBrief(t);
+      _check('L14-${t.length} splitBrief 不崩且 body 长度非负',
+          r.body.length >= 0 && r.section == null || r.section!.isNotEmpty);
+    }
+  }
+
+  // =========================================================================
+  // M 组：服务端 `>` 前缀剥离（+51 真机实测：本部署每条 completion 都带 `>`）
+  // =========================================================================
+  {
+    const String brief = '>标题：《潮声与灯塔》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n故事时间节点：g';
+    final String cleaned = LayeredBookGenerationService.cleanStructured(brief);
+    _check('M1 开头的 > 被剥离', !cleaned.startsWith('>'));
+    _check('M2 剥离后仍是合格细纲',
+        BriefPatch.looksLikeBrief(cleaned));
+    _check('M3 剥离后「标题」字段可解析',
+        BriefPatch.parseFields(cleaned)['标题'] == '《潮声与灯塔》');
+    _check('M4 剥离后 8 字段齐全',
+        BriefPatch.parseFields(cleaned).length == 8);
+  }
+  {
+    const String json = '> [{"index":1,"label":"卷名","endState":"状态"}]';
+    final String cleaned = LayeredBookGenerationService.cleanStructured(json);
+    _check('M5 JSON 前的 > 被剥离', cleaned.trimLeft().startsWith('['));
+  }
+  {
+    // 只剥「开头连续段」：正文里合法的引用不能被误伤
+    const String mixed = '标题：x\n本章目标：a\n承接上文：b\n核心冲突：c\n'
+        '关键转折：d\n章末钩子：e\n出场人物：f\n故事时间节点：g\n'
+        '> 这是一行正文里的引用';
+    final String cleaned = LayeredBookGenerationService.cleanStructured(mixed);
+    _check('M6 非开头的 > 保留', cleaned.contains('> 这是一行正文里的引用'));
+  }
+  {
+    const String blankThenQuote = '\n\n>标题：《x》\n本章目标：a\n承接上文：b\n'
+        '核心冲突：c\n关键转折：d\n章末钩子：e\n出场人物：f\n故事时间节点：g';
+    final String cleaned =
+        LayeredBookGenerationService.cleanStructured(blankThenQuote);
+    _check('M7 空行之后的 > 也被剥离', !cleaned.contains('>标题'));
+    _check('M8 剥离后标题可解析',
+        BriefPatch.parseFields(cleaned)['标题'] == '《x》');
+  }
+  {
+    // 幂等：已经干净的输入不应被改变
+    const String clean = '标题：《x》\n本章目标：a\n承接上文：b\n核心冲突：c\n'
+        '关键转折：d\n章末钩子：e\n出场人物：f\n故事时间节点：g';
+    _check('M9 干净输入保持不变',
+        LayeredBookGenerationService.cleanStructured(clean) == clean);
+  }
+
   print('layered_pipeline_selftest: $_passed passed, $_failed failed');
   if (_failed > 0) {
     throw StateError('layered_pipeline_selftest FAILED: $_failed assertion(s)');
