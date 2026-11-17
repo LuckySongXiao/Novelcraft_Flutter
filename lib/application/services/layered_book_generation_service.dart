@@ -24,6 +24,7 @@ import 'dart:convert';
 
 import '../../ai/utils/foreshadow_ledger.dart';
 import '../../ai/utils/layered_pipeline_plan.dart';
+import '../../ai/rwkv/writing_step_state_plan.dart';
 
 /// 一次模型调用请求。
 class LayeredChatRequest {
@@ -35,6 +36,7 @@ class LayeredChatRequest {
     required this.temperature,
     this.prose = false,
     this.stateful = false,
+    this.step,
   });
 
   /// 单元内串行链的会话键；空串 = 无状态单次调用。
@@ -55,6 +57,11 @@ class LayeredChatRequest {
   /// 因为实测 `/state/*` 的**首轮必定输出思考**（无视 `think_type: none`），
   /// 会把 JSON 输出的预算吃光（首轮实测只回 128 字的畸形片段）。
   final bool stateful;
+
+  /// 本调用属于哪个工艺步骤；调用方据此选「基模 + 对应 state」的模型。
+  ///
+  /// null = 无固定形状 / 不绑定 state（走 provider 默认模型）。
+  final WritingCraftStep? step;
 }
 
 /// 一次模型调用。
@@ -168,7 +175,8 @@ class LayeredBookConfig {
 
   int get totalChapters => volumeCount * chaptersPerVolume;
 
-  String get worldContext => '书名：《$bookTitle》　题材：$genre\n'
+  String get worldContext =>
+      '书名：《$bookTitle》　题材：$genre\n'
       '主题：$theme\n'
       '背景：$background\n'
       '主角：$protagonist\n'
@@ -203,16 +211,16 @@ class LayeredChapterResult {
   int get chars => prose.length;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'chapter': order,
-        'label': label,
-        'chars': chars,
-        'ngram': double.parse(ngram.toStringAsFixed(4)),
-        'para': double.parse(paragraphRepeat.toStringAsFixed(4)),
-        'pass': pass,
-        'note': note,
-        'slices': slices,
-        'attempts': attempts,
-      };
+    'chapter': order,
+    'label': label,
+    'chars': chars,
+    'ngram': double.parse(ngram.toStringAsFixed(4)),
+    'para': double.parse(paragraphRepeat.toStringAsFixed(4)),
+    'pass': pass,
+    'note': note,
+    'slices': slices,
+    'attempts': attempts,
+  };
 }
 
 /// 管线结果。
@@ -243,46 +251,46 @@ class LayeredBookResult {
   double get avgChars => chapters.isEmpty
       ? 0
       : chapters
-              .map((LayeredChapterResult c) => c.chars.toDouble())
-              .reduce((double a, double b) => a + b) /
-          chapters.length;
+                .map((LayeredChapterResult c) => c.chars.toDouble())
+                .reduce((double a, double b) => a + b) /
+            chapters.length;
   double get avgNgram => chapters.isEmpty
       ? 0
       : chapters
-              .map((LayeredChapterResult c) => c.ngram)
-              .reduce((double a, double b) => a + b) /
-          chapters.length;
+                .map((LayeredChapterResult c) => c.ngram)
+                .reduce((double a, double b) => a + b) /
+            chapters.length;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'chapters': <Map<String, Object?>>[
-          for (final LayeredChapterResult c in chapters) c.toJson(),
+    'chapters': <Map<String, Object?>>[
+      for (final LayeredChapterResult c in chapters) c.toJson(),
+    ],
+    'volumeMilestones': <Map<String, Object?>>[
+      for (final PipelineMilestone m in volumeMilestones) m.toJson(),
+    ],
+    'chapterMilestones': <String, Object?>{
+      for (final MapEntry<int, List<PipelineMilestone>> e
+          in chapterMilestones.entries)
+        '${e.key}': <Map<String, Object?>>[
+          for (final PipelineMilestone m in e.value) m.toJson(),
         ],
-        'volumeMilestones': <Map<String, Object?>>[
-          for (final PipelineMilestone m in volumeMilestones) m.toJson(),
-        ],
-        'chapterMilestones': <String, Object?>{
-          for (final MapEntry<int, List<PipelineMilestone>> e
-              in chapterMilestones.entries)
-            '${e.key}': <Map<String, Object?>>[
-              for (final PipelineMilestone m in e.value) m.toJson(),
-            ],
-        },
-        'foreshadow': <String, Object?>{
-          'entries': ledger.entries.length,
-          'open': ledger.openCount,
-          'errors': ledger.errors.length,
-          'warnings': ledger.warnings.length,
-        },
-        'stageSeconds': stageSeconds,
-        'calls': calls,
-        'failures': failures,
-        'summary': <String, Object?>{
-          'passed': passed,
-          'total': chapters.length,
-          'avgChars': avgChars.round(),
-          'avgNgram': double.parse(avgNgram.toStringAsFixed(4)),
-        },
-      };
+    },
+    'foreshadow': <String, Object?>{
+      'entries': ledger.entries.length,
+      'open': ledger.openCount,
+      'errors': ledger.errors.length,
+      'warnings': ledger.warnings.length,
+    },
+    'stageSeconds': stageSeconds,
+    'calls': calls,
+    'failures': failures,
+    'summary': <String, Object?>{
+      'passed': passed,
+      'total': chapters.length,
+      'avgChars': avgChars.round(),
+      'avgNgram': double.parse(avgNgram.toStringAsFixed(4)),
+    },
+  };
 }
 
 /// 分层写书服务。
@@ -325,17 +333,21 @@ class LayeredBookGenerationService {
       required bool prose,
       required String stage,
       bool stateful = false,
+      WritingCraftStep? step,
     }) async {
       bump(stage);
-      final String raw = await chat(LayeredChatRequest(
-        sessionKey: sessionKey,
-        system: system,
-        user: user,
-        maxTokens: maxTokens,
-        temperature: temperature,
-        prose: prose,
-        stateful: stateful,
-      ));
+      final String raw = await chat(
+        LayeredChatRequest(
+          sessionKey: sessionKey,
+          system: system,
+          user: user,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          prose: prose,
+          stateful: stateful,
+          step: step,
+        ),
+      );
       final String stripped = _stripThink(raw);
       // 正文只剥思考；结构化输出再走一道「去开场白 / 去围栏 / 去模板行」。
       return prose ? stripped : cleanStructured(stripped);
@@ -363,32 +375,40 @@ class LayeredBookGenerationService {
       temperature: cfg.structuredTemperature,
       prose: false,
       stage: 'L1.milestone',
+      step: WritingCraftStep.mainOutline,
     );
     List<PipelineMilestone> volumeMilestones = MilestoneCodec.normalise(
       MilestoneCodec.parse(milestoneRaw, total: planCount),
       planCount,
     );
-    List<String> msIssues =
-        MilestoneCodec.validate(volumeMilestones, anchor: cfg.bookAnchor);
+    List<String> msIssues = MilestoneCodec.validate(
+      volumeMilestones,
+      anchor: cfg.bookAnchor,
+    );
     // 格式/结构不合格 → **纠正重试一次**（把问题反馈给模型，只重跑这一步）
     if (msIssues.isNotEmpty) {
       failures.add('L1 里程碑首次不合格：${msIssues.join('；')} → 纠正重试');
       milestoneRaw = await call(
         sessionKey: '${cfg.bookTitle}::main',
         system: '你是长篇小说总编剧。只输出要求的 JSON 数组，不要解释、不要 Markdown 围栏。',
-        user: '$l1Prompt\n\n⚠ 上一次输出被拒绝：${msIssues.join('；')}。'
+        user:
+            '$l1Prompt\n\n⚠ 上一次输出被拒绝：${msIssues.join('；')}。'
             '请重新输出**完整**的 JSON 对象数组（$planCount 个对象，'
             '每个都要有非空的 label 与 endState）。',
         maxTokens: 1400,
         temperature: cfg.structuredTemperature,
         prose: false,
         stage: 'L1.milestoneRetry',
+        step: WritingCraftStep.mainOutline,
       );
       volumeMilestones = MilestoneCodec.normalise(
         MilestoneCodec.parse(milestoneRaw, total: planCount),
         planCount,
       );
-      msIssues = MilestoneCodec.validate(volumeMilestones, anchor: cfg.bookAnchor);
+      msIssues = MilestoneCodec.validate(
+        volumeMilestones,
+        anchor: cfg.bookAnchor,
+      );
       for (final String i in msIssues) {
         failures.add('L1 里程碑纠正后仍不合格：$i');
       }
@@ -406,7 +426,8 @@ class LayeredBookGenerationService {
     final String mainOutline = await call(
       sessionKey: '${cfg.bookTitle}::main',
       system: '你是长篇小说总编剧。只输出大纲正文，不要解释。',
-      user: '${cfg.worldContext}\n\n'
+      user:
+          '${cfg.worldContext}\n\n'
           '${cfg.bookAnchor.render()}\n\n'
           '【各卷推进里程碑（按序）】\n'
           '${volumeMilestones.map((PipelineMilestone m) => '第 ${m.index} 卷（${m.ratioLabel}）：${m.endState}').join('\n')}\n\n'
@@ -416,6 +437,7 @@ class LayeredBookGenerationService {
       temperature: cfg.structuredTemperature,
       prose: false,
       stage: 'L1.outline',
+      step: WritingCraftStep.mainOutline,
     );
     await sink.write('mainOutline', 'main', mainOutline);
     stageSeconds['L1'] = sw.elapsedMilliseconds / 1000;
@@ -429,12 +451,14 @@ class LayeredBookGenerationService {
       for (int i = 1; i <= cfg.volumeCount; i++) i,
     ];
     final Map<int, ({String outline, List<PipelineMilestone> chapters})>
-        volumePlans =
-        <int, ({String outline, List<PipelineMilestone> chapters})>{};
+    volumePlans = <int, ({String outline, List<PipelineMilestone> chapters})>{};
 
     await _forEachUnit(volumeIndexes, cfg.concurrency, (int volIndex) async {
-      final PipelineMilestone vMilestone =
-          _milestoneFor(volumeMilestones, volIndex, planCount);
+      final PipelineMilestone vMilestone = _milestoneFor(
+        volumeMilestones,
+        volIndex,
+        planCount,
+      );
       final String prevTail = volIndex <= 1
           ? cfg.bookAnchor.start
           : (volumePlans[volIndex - 1]?.outline ?? '');
@@ -448,7 +472,8 @@ class LayeredBookGenerationService {
         count: cfg.chaptersPerVolume,
         unitZh: '章',
         worldContext: cfg.worldContext,
-        extra: '本卷在第 ${vMilestone.index}/${vMilestone.total} 卷，'
+        extra:
+            '本卷在第 ${vMilestone.index}/${vMilestone.total} 卷，'
             '整卷结束时必须到达：${vMilestone.endState}',
         labelHint: '章名（8~14 字，文学化，不要写「第N章名」这种占位）',
         stateHint: '本章结束时必须到达的剧情状态（40~80 字）',
@@ -461,6 +486,7 @@ class LayeredBookGenerationService {
         temperature: cfg.structuredTemperature,
         prose: false,
         stage: 'L2.milestone',
+        step: WritingCraftStep.volumeOutline,
       );
       List<PipelineMilestone> chMs = MilestoneCodec.normalise(
         MilestoneCodec.parse(raw, total: cfg.chaptersPerVolume),
@@ -472,13 +498,15 @@ class LayeredBookGenerationService {
         raw = await call(
           sessionKey: '${cfg.bookTitle}::vol$volIndex',
           system: '你是长篇小说分卷编剧。只输出要求的 JSON 数组，不要解释、不要 Markdown 围栏。',
-          user: '$l2Prompt\n\n⚠ 上一次输出被拒绝：${issues.join('；')}。'
+          user:
+              '$l2Prompt\n\n⚠ 上一次输出被拒绝：${issues.join('；')}。'
               '请重新输出**完整**的 JSON 对象数组（${cfg.chaptersPerVolume} 个对象，'
               'label = 章名，endState = 章末状态，两者都不能空、不要填反）。',
           maxTokens: 1800,
           temperature: cfg.structuredTemperature,
           prose: false,
           stage: 'L2.milestoneRetry',
+          step: WritingCraftStep.volumeOutline,
         );
         chMs = MilestoneCodec.normalise(
           MilestoneCodec.parse(raw, total: cfg.chaptersPerVolume),
@@ -498,7 +526,8 @@ class LayeredBookGenerationService {
       final String outline = await call(
         sessionKey: '${cfg.bookTitle}::vol$volIndex',
         system: '你是长篇小说分卷编剧。只输出大纲正文，不要解释。',
-        user: '本卷是第 $volIndex/${cfg.volumeCount} 卷'
+        user:
+            '本卷是第 $volIndex/${cfg.volumeCount} 卷'
             '（${vMilestone.label.isEmpty ? '卷名待定' : vMilestone.label}）。\n\n'
             '【本卷起点】\n${prevTail.trim().isEmpty ? '本卷开篇' : _clip(prevTail, 200)}\n\n'
             '【本卷终点（本卷结束时必须到达）】\n${vMilestone.endState}\n\n'
@@ -511,6 +540,7 @@ class LayeredBookGenerationService {
         temperature: cfg.structuredTemperature,
         prose: false,
         stage: 'L2.outline',
+        step: WritingCraftStep.volumeOutline,
       );
       volumePlans[volIndex] = (outline: outline, chapters: chMs);
       await sink.write('volumeOutline', '$volIndex', outline);
@@ -558,11 +588,11 @@ class LayeredBookGenerationService {
       );
       final String prevState = unit.idxInVol <= 1
           ? (unit.volIndex <= 1
-              ? cfg.bookAnchor.start
-              : '上一卷结束：${_clip(volumePlans[unit.volIndex - 1]?.outline ?? '', 160)}')
+                ? cfg.bookAnchor.start
+                : '上一卷结束：${_clip(volumePlans[unit.volIndex - 1]?.outline ?? '', 160)}')
           : (chMs.length >= unit.idxInVol - 1
-              ? chMs[unit.idxInVol - 2].endState
-              : '');
+                ? chMs[unit.idxInVol - 2].endState
+                : '');
       final String label = m.label.isEmpty
           ? '第${unit.order}章'
           : '第${unit.order}章·《${m.label}》';
@@ -585,6 +615,7 @@ class LayeredBookGenerationService {
         temperature: cfg.structuredTemperature,
         prose: false,
         stage: 'L3.brief',
+        step: WritingCraftStep.chapterBrief,
       );
       String finalBrief = cleanStructured(brief);
       if (!BriefPatch.looksLikeBrief(finalBrief)) {
@@ -612,6 +643,7 @@ class LayeredBookGenerationService {
           temperature: cfg.structuredTemperature,
           prose: false,
           stage: 'L3.selfcheck',
+          step: WritingCraftStep.repair,
         );
         final String patch = cleanStructured(patchRaw);
         if (_isNoChange(patch)) {
@@ -648,7 +680,9 @@ class LayeredBookGenerationService {
       const JsonEncoder.withIndent('  ').convert(<String, Object?>{
         'entries': ledger.entries.length,
         'open': ledger.openCount,
-        'errors': <String>[for (final ForeshadowIssue i in ledger.errors) i.message],
+        'errors': <String>[
+          for (final ForeshadowIssue i in ledger.errors) i.message,
+        ],
         'warnings': <String>[
           for (final ForeshadowIssue i in ledger.warnings) i.message,
         ],
@@ -699,7 +733,11 @@ class LayeredBookGenerationService {
       LayeredChapterResult r = await _writeChapter(
         cfg: cfg,
         order: unit.order,
-        label: _labelFor(chapterMilestones[unit.order] ?? const <PipelineMilestone>[], unit.idxInVol, unit.order),
+        label: _labelFor(
+          chapterMilestones[unit.order] ?? const <PipelineMilestone>[],
+          unit.idxInVol,
+          unit.order,
+        ),
         brief: brief,
         foreshadowBlock: foreshadowBlock,
         prevTail: prevTail,
@@ -732,11 +770,14 @@ class LayeredBookGenerationService {
         );
       }
       results[unit.order] = r;
-      chapterTails[unit.order] =
-          r.prose.length > 500 ? r.prose.substring(r.prose.length - 500) : r.prose;
+      chapterTails[unit.order] = r.prose.length > 500
+          ? r.prose.substring(r.prose.length - 500)
+          : r.prose;
       await sink.write('chapterProse', '${unit.order}', r.prose);
-      onProgress?.call('L4 第 ${unit.order}/${cfg.totalChapters} 章完成'
-          '（${r.chars} 字${r.pass ? '' : '，未过闸：${r.note}'}）');
+      onProgress?.call(
+        'L4 第 ${unit.order}/${cfg.totalChapters} 章完成'
+        '（${r.chars} 字${r.pass ? '' : '，未过闸：${r.note}'}）',
+      );
     });
     stageSeconds['L4'] = sw.elapsedMilliseconds / 1000;
 
@@ -772,7 +813,9 @@ class LayeredBookGenerationService {
       required bool prose,
       required String stage,
       bool stateful,
-    }) call,
+      WritingCraftStep? step,
+    })
+    call,
   }) async {
     final StringBuffer body = StringBuffer();
     int sliceNo = 0;
@@ -782,7 +825,8 @@ class LayeredBookGenerationService {
       await call(
         sessionKey: '${cfg.bookTitle}::ch$order',
         system: '你是专业中文小说主笔作家。只输出简短要点，不要写正文。',
-        user: '本章细纲：\n${brief.trim()}\n\n'
+        user:
+            '本章细纲：\n${brief.trim()}\n\n'
             '${foreshadowBlock.trim().isEmpty ? '' : '${foreshadowBlock.trim()}\n\n'}'
             '请用 3~5 句列出本章的**开场画面**与**第一个冲突点**，'
             '并说明第一段从哪一句起笔。不要写正文，不要思考。',
@@ -791,6 +835,7 @@ class LayeredBookGenerationService {
         prose: false,
         stateful: cfg.proseStateful,
         stage: 'L4.warmup',
+        step: WritingCraftStep.prose,
       );
     }
     while (body.length < cfg.minChapterChars + 400 &&
@@ -802,11 +847,12 @@ class LayeredBookGenerationService {
       final String curTail = body.isEmpty
           ? localTail
           : (body.length > 500
-              ? body.toString().substring(body.length - 500)
-              : body.toString());
+                ? body.toString().substring(body.length - 500)
+                : body.toString());
       final String raw = await call(
         sessionKey: '${cfg.bookTitle}::ch$order',
-        system: '你是专业中文小说主笔作家。严格中文、第三人称、只用给定的人物与设定；'
+        system:
+            '你是专业中文小说主笔作家。严格中文、第三人称、只用给定的人物与设定；'
             '只输出章节正文，不要标题、分节标记、解释、字数统计或大纲复述；'
             '开头抓眼球，结尾留钩子；必须写满要求的字数。',
         user: LayeredPrompts.proseSlice(
@@ -825,6 +871,7 @@ class LayeredBookGenerationService {
         prose: true,
         stateful: cfg.proseStateful,
         stage: 'L4.prose',
+        step: WritingCraftStep.prose,
       );
       final String piece = cleanProse?.call(raw) ?? raw;
       if (piece.trim().isEmpty) break;
@@ -902,13 +949,15 @@ class LayeredBookGenerationService {
     final List<ForeshadowFlatChapter> flat = <ForeshadowFlatChapter>[];
     for (int order = 1; order <= cfg.totalChapters; order++) {
       final int volIndex = (order - 1) ~/ cfg.chaptersPerVolume + 1;
-      flat.add(ForeshadowFlatChapter(
-        id: 'ch$order',
-        volumeId: 'vol$volIndex',
-        title: '第$order章',
-        outline: briefs[order] ?? '',
-        hasContent: false,
-      ));
+      flat.add(
+        ForeshadowFlatChapter(
+          id: 'ch$order',
+          volumeId: 'vol$volIndex',
+          title: '第$order章',
+          outline: briefs[order] ?? '',
+          hasContent: false,
+        ),
+      );
     }
     return ForeshadowFlattener.flatten(
       chapters: flat,
@@ -938,7 +987,10 @@ class LayeredBookGenerationService {
       RegExp(r'^\s*<think(?:ing)?>[\s\S]*$', caseSensitive: false),
       '',
     );
-    t = t.replaceAll(RegExp(r'</?(?:think|thinking)>', caseSensitive: false), '');
+    t = t.replaceAll(
+      RegExp(r'</?(?:think|thinking)>', caseSensitive: false),
+      '',
+    );
     return t.trim();
   }
 
@@ -962,7 +1014,10 @@ class LayeredBookGenerationService {
     //   的 `^\s*标题` 匹配失败，直接丢掉「标题」字段（章名退化成「第 N 章」）。
     t = _stripLeadingQuotePrefix(t);
     // ① 代码围栏
-    t = t.replaceAll(RegExp(r'^[ \t]*```[a-zA-Z0-9_+-]*[ \t]*$', multiLine: true), '');
+    t = t.replaceAll(
+      RegExp(r'^[ \t]*```[a-zA-Z0-9_+-]*[ \t]*$', multiLine: true),
+      '',
+    );
     // ② 开场白：丢掉「首个契约标记之前」的所有行
     final List<String> lines = t.split('\n');
     int start = 0;
@@ -1047,7 +1102,12 @@ class LayeredBookGenerationService {
   /// 改写，字段被填成了其它章的里程碑）。
   static bool looksLikeChapterBrief(String text) {
     const List<String> markers = <String>[
-      '本章目标', '承接上文', '核心冲突', '关键转折', '章末钩子', '出场人物',
+      '本章目标',
+      '承接上文',
+      '核心冲突',
+      '关键转折',
+      '章末钩子',
+      '出场人物',
     ];
     int hit = 0;
     for (final String m in markers) {

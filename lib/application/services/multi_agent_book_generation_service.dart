@@ -39,6 +39,8 @@ import '../../ai/models/chat.dart';
 import '../../ai/models/provider.dart';
 import '../../ai/providers/openai_compatible_provider.dart'
     show OpenAICompatibleProvider;
+import '../../ai/rwkv/writing_step_state_plan.dart';
+import '../../ai/rwkv/state_tuning_registry.dart' show RwkvAgentRole;
 import '../../ai/providers/rwkv_cloud_provider.dart'
     show
         RwkvCloudConfiguration,
@@ -80,6 +82,7 @@ typedef AgentChatExecutor =
       List<ChatMessage> messages, {
       required int maxTokens,
       double temperature,
+
       /// 客户端 state 会话标识（`<项目或大纲分组>::<智能体角色>`）。
       ///
       /// 仅当底层 provider 是开启客户端 state 管理的 RWKV 云端 provider 时
@@ -477,6 +480,7 @@ class _AgentChannel {
     required int maxTokens,
     double temperature = 0.85,
     bool isolated = false,
+    AgentChatExecutor? through,
   }) async {
     final List<ChatMessage> history = !keepHistory
         ? const <ChatMessage>[]
@@ -489,7 +493,7 @@ class _AgentChannel {
       ...history,
       ChatMessage.user(userPrompt),
     ];
-    final String out = await _chat(
+    final String out = await (through ?? _chat)(
       systemPrompt,
       messages,
       maxTokens: maxTokens,
@@ -532,6 +536,7 @@ class MultiAgentBookGenerationService {
     this.styleRuleResolver,
     this.chapterRewriter,
     this.promptTemplates,
+    this.stepStatePlan,
   }) : stateManager = stateManager ?? AgentStateManager();
 
   final ProjectRepository projects;
@@ -550,10 +555,10 @@ class MultiAgentBookGenerationService {
     if (id.trim().isEmpty) return;
     final StyleRuleSet? set = styleRuleResolver?.call(id.trim());
     if (set == null || !set.isUsable) return;
-    _activeStyleBlock =
-        set.toPromptBlock(maxChars: styleBlockMaxChars).trim();
-    _activeStyleBlockBrief =
-        set.toPromptBlockBrief(maxChars: styleBlockBriefMaxChars).trim();
+    _activeStyleBlock = set.toPromptBlock(maxChars: styleBlockMaxChars).trim();
+    _activeStyleBlockBrief = set
+        .toPromptBlockBrief(maxChars: styleBlockBriefMaxChars)
+        .trim();
   }
 
   /// 注入提示词的「文风要求」整段文本。
@@ -567,10 +572,9 @@ class MultiAgentBookGenerationService {
   String _styleSection({bool brief = false}) {
     final String block = brief ? _activeStyleBlockBrief : _activeStyleBlock;
     if (block.isEmpty) return '';
-    return brief
-        ? '【文风要求（摘要）】\n$block'
-        : '【文风要求（必须遵守，优先于你个人的表达习惯）】\n$block';
+    return brief ? '【文风要求（摘要）】\n$block' : '【文风要求（必须遵守，优先于你个人的表达习惯）】\n$block';
   }
+
   final PlotRepository plots;
   final VolumeRepository volumes;
   final ChapterRepository chapters;
@@ -592,6 +596,96 @@ class MultiAgentBookGenerationService {
   /// 注入式聊天执行器（测试打桩；为空时按 writingProvider 构建）。
   final AgentChatExecutor? chatExecutor;
   final AgentChatExecutor? planningChatExecutor;
+
+  /// 工艺步骤 → 「基模 + state」的绑定解析（可空 = 全部步骤统一用基模）。
+  ///
+  /// 自动化写作的每个工艺步骤（主/分卷/章大纲、正文、润色、返工、审查……）
+  /// 都通过这里取自己要用的模型：绑定了 state 且已合并成独立模型的步骤，
+  /// 走 `基模+state` 的执行器；未绑定的步骤原样回落基模。
+  final WritingStepStatePlan? Function()? stepStatePlan;
+
+  /// 本次生成按步骤解析出的专用执行器（步骤 → 基模+state 模型）。
+  Map<WritingCraftStep, AgentChatExecutor> _stepChats =
+      const <WritingCraftStep, AgentChatExecutor>{};
+
+  /// 本次生成按**角色**解析出的专用执行器（写手/组长/读者/审查员…）。
+  Map<RwkvAgentRole, AgentChatExecutor> _roleChats =
+      const <RwkvAgentRole, AgentChatExecutor>{};
+
+  /// 本次生成使用的工作计划（建项目后据此复制出「按书覆盖」版本）。
+  WritingStepStatePlan? _activePlan;
+
+  /// 本次生成实际使用的写作 / 规划 provider（重建按书执行器时复用）。
+  IModelProvider? _writerProvider;
+  IModelProvider? _plannerProvider;
+
+  /// 取某步骤的执行器；该步骤没有可用 state 时回落 [fallback]。
+  AgentChatExecutor _stepChat(
+    WritingCraftStep step,
+    AgentChatExecutor fallback,
+  ) => _stepChats[step] ?? fallback;
+
+  /// 按角色取执行器：角色优先（不同写手/组长各用各的 state），其次步骤，最后基模。
+  AgentChatExecutor _chatFor({
+    WritingCraftStep? step,
+    RwkvAgentRole? role,
+    required AgentChatExecutor fallback,
+  }) {
+    final AgentChatExecutor? byRole = role == null ? null : _roleChats[role];
+    if (byRole != null) return byRole;
+    final AgentChatExecutor? byStep = step == null ? null : _stepChats[step];
+    return byStep ?? fallback;
+  }
+
+  /// 为每个「有可用 state」的**角色**单独建执行器。
+  Map<RwkvAgentRole, AgentChatExecutor> _buildRoleChats(
+    WritingStepStatePlan plan, {
+    required IModelProvider writer,
+    required IModelProvider planner,
+  }) {
+    final Map<RwkvAgentRole, AgentChatExecutor> out =
+        <RwkvAgentRole, AgentChatExecutor>{};
+    for (final RwkvAgentRole role in RwkvAgentRole.values) {
+      final RoleStateBinding binding = plan.resolveForRole(role);
+      if (!binding.applied) continue;
+      final bool planning = role == RwkvAgentRole.mainAgent ||
+          role == RwkvAgentRole.outliner;
+      out[role] = _buildProviderExecutor(
+        planning ? planner : writer,
+        model: binding.requestModel,
+        stateId: binding.engineStateId,
+      );
+    }
+    return out;
+  }
+
+  /// 为每个「有可用 state」的步骤单独建执行器。
+  ///
+  /// 规划类步骤（主/分卷/章大纲、章节命名）走规划 provider，其余走写作 provider；
+  /// 模型 id 用 state 产物登记的可加载模型（[RwkvStateArtifact.mergedModelId]）。
+  Map<WritingCraftStep, AgentChatExecutor> _buildStepChats(
+    WritingStepStatePlan plan, {
+    required IModelProvider writer,
+    required IModelProvider planner,
+  }) {
+    final Map<WritingCraftStep, AgentChatExecutor> out =
+        <WritingCraftStep, AgentChatExecutor>{};
+    for (final WritingCraftStep step in WritingCraftStep.values) {
+      final StepStateBinding binding = plan.resolve(step);
+      if (!binding.applied) continue;
+      final bool planning =
+          step == WritingCraftStep.mainOutline ||
+          step == WritingCraftStep.volumeOutline ||
+          step == WritingCraftStep.chapterOutline ||
+          step == WritingCraftStep.chapterNames;
+      out[step] = _buildProviderExecutor(
+        planning ? planner : writer,
+        model: binding.requestModel,
+        stateId: binding.engineStateId,
+      );
+    }
+    return out;
+  }
 
   /// 写作档案钩子（项目/分卷/章节三档；失败只记 warning）。
   final TeamArchiveHook? archiveHook;
@@ -767,6 +861,34 @@ class MultiAgentBookGenerationService {
       final IModelProvider writer = temporaryWriter ?? provider;
       chat = _buildProviderExecutor(writer, model: resolvedSubModel);
       planningChat = _buildProviderExecutor(planner, model: resolvedMainModel);
+
+      // 每个工艺步骤按自己的 state 绑定选模型：有可用 state 的步骤走
+      // 「基模+state」执行器，其余回落基模（缺失只影响该步骤，不拖垮整本书）。
+      final WritingStepStatePlan? statePlan = stepStatePlan?.call();
+      _activePlan = statePlan;
+      _writerProvider = writer;
+      _plannerProvider = planner;
+      if (statePlan != null) {
+        _stepChats = _buildStepChats(
+          statePlan,
+          writer: writer,
+          planner: planner,
+        );
+        _roleChats = _buildRoleChats(
+          statePlan,
+          writer: writer,
+          planner: planner,
+        );
+        _logger.info(
+          '工艺步骤 state 绑定：${statePlan.appliedCount}/'
+          '${WritingCraftStep.values.length} 个步骤、'
+          '${_roleChats.length}/${RwkvAgentRole.values.length} 个角色使用「基模+state」\n'
+          '${statePlan.summary()}\n${statePlan.roleSummary()}',
+        );
+      } else {
+        _stepChats = const <WritingCraftStep, AgentChatExecutor>{};
+        _roleChats = const <RwkvAgentRole, AgentChatExecutor>{};
+      }
       useG1kPair =
           writer is RwkvCloudProvider &&
           planner is RwkvCloudProvider &&
@@ -824,6 +946,37 @@ class MultiAgentBookGenerationService {
           await _createProject(cfg);
       final String projectId = created.id;
       final String projectName = created.name;
+
+      // 建项目之后才知道本书 id：把 state 计划切换到「按书覆盖」再重建执行器，
+      // 使正文/写手角色优先使用本书的 ST-5（`book_world_<bookId>`），
+      // 没训练过这本书时解析结果与建项目前完全一致（回落 ST-1 基模+state）。
+      final WritingStepStatePlan? basePlan = _activePlan;
+      final IModelProvider? writerProvider = _writerProvider;
+      final IModelProvider? plannerProvider = _plannerProvider;
+      if (basePlan != null &&
+          writerProvider != null &&
+          plannerProvider != null) {
+        final WritingStepStatePlan scoped = basePlan.forBook(
+          projectId,
+          title: projectName,
+        );
+        _stepChats = _buildStepChats(
+          scoped,
+          writer: writerProvider,
+          planner: plannerProvider,
+        );
+        _roleChats = _buildRoleChats(
+          scoped,
+          writer: writerProvider,
+          planner: plannerProvider,
+        );
+        _logger.info(
+          '按书覆盖 state（$projectId）：'
+          '${scoped.appliedCount}/${WritingCraftStep.values.length} 个步骤、'
+          '${_roleChats.length}/${RwkvAgentRole.values.length} 个角色\n'
+          '${scoped.summary()}\n${scoped.roleSummary()}',
+        );
+      }
       if (created.revived) {
         warnings.add(
           '检测到已被删除的同名项目「${created.name}」，已复活复用该条目'
@@ -977,20 +1130,14 @@ class MultiAgentBookGenerationService {
       };
       final List<ChapterNameResult> resolvedNames = <ChapterNameResult>[
         for (final String outline in chapterOutlines)
-          ChapterTitleParser.extractName(
-            outline,
-            forbidden: forbiddenNames,
-          ),
+          ChapterTitleParser.extractName(outline, forbidden: forbiddenNames),
       ];
       final List<int> unnamed = <int>[
         for (int i = 0; i < resolvedNames.length; i++)
           if (resolvedNames[i].isEmpty || !resolvedNames[i].reliable) i,
       ];
       if (unnamed.isNotEmpty) {
-        onProgress?.call(
-          '${unnamed.length} 个章节名格式不规范，正在统一整理…',
-          0.50,
-        );
+        onProgress?.call('${unnamed.length} 个章节名格式不规范，正在统一整理…', 0.50);
         final Map<int, String> synthesised = await _synthesiseChapterNames(
           chat: planningChat,
           cfg: cfg,
@@ -1053,18 +1200,19 @@ class MultiAgentBookGenerationService {
       // 正文写作用的「大纲 + 本章伏笔义务」。**只影响提示词**：落库的 summary 仍取自
       // 原始 `chapterOutlines[i]`，所以提示块不会污染梗概。
       String outlineForWriter(int seq) {
-        final String base =
-            seq < chapterOutlines.length ? chapterOutlines[seq] : '';
+        final String base = seq < chapterOutlines.length
+            ? chapterOutlines[seq]
+            : '';
         if (foreshadowLedger.isEmpty) return base;
         final String block = ForeshadowPrompt.build(
           ledger: foreshadowLedger,
           order: seq + 1,
-          outlineAt: (int o) =>
-              o >= 1 && o <= chapterOutlines.length ? chapterOutlines[o - 1] : '',
-          titleAt: (int o) =>
-              o >= 1 && o <= resolvedNames.length
-                  ? (resolvedNames[o - 1].name ?? '')
-                  : '',
+          outlineAt: (int o) => o >= 1 && o <= chapterOutlines.length
+              ? chapterOutlines[o - 1]
+              : '',
+          titleAt: (int o) => o >= 1 && o <= resolvedNames.length
+              ? (resolvedNames[o - 1].name ?? '')
+              : '',
         );
         return block.isEmpty ? base : '$base\n\n$block';
       }
@@ -1082,8 +1230,9 @@ class MultiAgentBookGenerationService {
         // 于是「解析器判不可靠 → 批量重命名又没成功」时，污染名（如
         // `净化仪式（约700字）开局状态`）照样落库。判不可靠就回落「第N章」。
         final ChapterNameResult resolvedName = resolvedNames[i];
-        final String resolved =
-            resolvedName.reliable ? (resolvedName.name ?? '') : '';
+        final String resolved = resolvedName.reliable
+            ? (resolvedName.name ?? '')
+            : '';
         final String name = resolved.isEmpty ? '第${_cn(cIdx)}章' : resolved;
         final String title = '第${_cn(vIdx + 1)}卷·第${_cn(cIdx)}章·《$name》';
         // 梗概只留一句话 —— 章节记录里不放大纲草稿与过程数据。
@@ -1175,10 +1324,7 @@ class MultiAgentBookGenerationService {
         WritingCraft.duo => '每章 1 主笔（分段串行）',
         WritingCraft.solo => '每章 1 主笔（单笔直书）',
       };
-      onProgress?.call(
-        '激活 $lanes 个章节流水线并行写作（$teamShape，每章一条 state 链）…',
-        0.56,
-      );
+      onProgress?.call('激活 $lanes 个章节流水线并行写作（$teamShape，每章一条 state 链）…', 0.56);
       int written = 0;
       int teamStarted = 0;
       final List<({int order, String title, String status, int wordCount})>
@@ -1301,7 +1447,7 @@ class MultiAgentBookGenerationService {
                 repaired.add(part);
                 continue;
               }
-              final raw = await chat(
+              final raw = await _chatFor(step: WritingCraftStep.repair, role: RwkvAgentRole.copyeditor, fallback: chat)(
                 _renderPrompt('Book/repairSystem', {}),
                 [
                   ChatMessage.user(
@@ -1408,7 +1554,7 @@ class MultiAgentBookGenerationService {
                 writerChat: (int writerSlot, String prompt) => _AgentChannel(
                   stateManager.stateOf(team.groupId, 'writer-$writerSlot'),
                   _writerSystemPrompt(writerSlot),
-                  chat,
+                  _stepChat(WritingCraftStep.stateUpdate, chat),
                   sessionKeyPrefix: chapterPrefix,
                 ).send(prompt, maxTokens: 1600, temperature: 0.7),
               );
@@ -1715,6 +1861,7 @@ class MultiAgentBookGenerationService {
   AgentChatExecutor _buildProviderExecutor(
     IModelProvider provider, {
     String model = '',
+    String stateId = '',
   }) {
     return (
       String systemPrompt,
@@ -1789,6 +1936,9 @@ class MultiAgentBookGenerationService {
       final Map<String, dynamic> requestParams = <String, dynamic>{
         ...sampling,
         if (clientState) 'rwkvSessionKey': sessionKey,
+        // 引擎侧初始 state（rwkv_lightning_cuda ≥ v1.8.13）：
+        // 基模只加载一份，请求里带 state_id 即从该初始状态接着算。
+        if (stateId.isNotEmpty) 'state_id': stateId,
       };
       for (int attempt = 1; attempt <= 2; attempt++) {
         final ChatRequest req = ChatRequest(
@@ -1903,7 +2053,7 @@ class MultiAgentBookGenerationService {
   }) => _AgentChannel(
     stateManager.stateOf(planning.groupId, 'leader'),
     _renderPrompt('Book/planningLeader', {}),
-    chat,
+    _chatFor(step: WritingCraftStep.mainOutline, role: RwkvAgentRole.outliner, fallback: chat),
     sessionKeyPrefix: sessionKeyPrefix,
   );
 
@@ -1916,7 +2066,7 @@ class MultiAgentBookGenerationService {
       _AgentChannel(
         stateManager.stateOf(planning.groupId, 'writer-$s'),
         _renderPrompt('Book/planningWriter', {'slot': '$s'}),
-        chat,
+        _chatFor(step: WritingCraftStep.volumeOutline, role: RwkvAgentRole.outliner, fallback: chat),
         sessionKeyPrefix: sessionKeyPrefix,
       ),
   ];
@@ -2015,7 +2165,7 @@ class MultiAgentBookGenerationService {
     final _AgentChannel lead = _AgentChannel(
       team.leader!,
       _leadWriterSystemPrompt(),
-      chat,
+      _chatFor(step: WritingCraftStep.prose, role: RwkvAgentRole.writer, fallback: chat),
       keepHistory: false,
       sessionKeyPrefix: sessionKeyPrefix,
     );
@@ -2116,7 +2266,10 @@ class MultiAgentBookGenerationService {
         continue;
       }
       if (polishChat != null) {
-        final String polished = await _polishDraft(polishChat, best);
+        final String polished = await _polishDraft(
+          _stepChat(WritingCraftStep.polish, polishChat),
+          best,
+        );
         if (polished.length >= (best.length * 0.9).floor() &&
             _scoreCandidate(polished, ask, tail) >=
                 _scoreCandidate(best, ask, tail) - 1) {
@@ -2207,6 +2360,25 @@ class MultiAgentBookGenerationService {
     return result.toString();
   }
 
+  /// 去掉大纲文本里的 Markdown 标记、行首序号与字数注记。
+  ///
+  /// 真机实测（3B，3717 字章）：大纲里带 `##唐朝初年·…（约1000字）` 时，模型会把
+  /// 这一整行原样抄进正文——读者看到的就是「小说里突然冒出一个二级标题 + 字数注记」。
+  /// 小模型对「不要写标题」这类否定指令服从度很低，最稳的是**注入前就剥掉**。
+  static String _stripOutlineMarkers(String raw) {
+    if (raw.trim().isEmpty) return raw;
+    final List<String> lines = <String>[];
+    for (final String line in raw.split(RegExp(r'\r?\n'))) {
+      var s = line.replaceFirst(RegExp(r'^\s*(?:>+\s*)?#{1,6}\s*'), '');
+      s = s.replaceFirst(RegExp(r'^\s*[-*•·]\s+'), '');
+      s = s.replaceFirst(RegExp(r'^\s*\d+\s*[.、)]\s*'), '');
+      // `（约1000字）` / `(约 1000 字)` 这类字数注记
+      s = s.replaceAll(RegExp(r'[（(]\s*约?\s*\d+\s*[字词]\s*[）)]'), '');
+      if (s.trim().isNotEmpty) lines.add(s.trimRight());
+    }
+    return lines.join('\n');
+  }
+
   /// 续写候选提示词 —— **刻意极简**。
   ///
   /// 实测：提示词越像「一段被截断的小说」，产出越像小说；指令、大纲、
@@ -2225,8 +2397,8 @@ class MultiAgentBookGenerationService {
       _ => '侧重视觉细节与叙事节奏。',
     };
     return _renderPrompt('Book/beamCandidate', <String, String>{
-      'chText': (chText).toString(),
-      'volBrief': (volBrief).toString(),
+      'chText': _stripOutlineMarkers(chText),
+      'volBrief': _stripOutlineMarkers(volBrief),
       'context3':
           (tail.isEmpty
                   ? '请从本章第一句开始写。'
@@ -2302,7 +2474,7 @@ class MultiAgentBookGenerationService {
     final _AgentChannel lead = _AgentChannel(
       team.leader!,
       _leadWriterSystemPrompt(),
-      chat,
+      _chatFor(step: WritingCraftStep.prose, role: RwkvAgentRole.writer, fallback: chat),
       keepHistory: false,
       sessionKeyPrefix: sessionKeyPrefix,
     );
@@ -2395,7 +2567,7 @@ class MultiAgentBookGenerationService {
     final _AgentChannel lead = _AgentChannel(
       team.leader!,
       _leadWriterSystemPrompt(),
-      chat,
+      _chatFor(step: WritingCraftStep.prose, role: RwkvAgentRole.writer, fallback: chat),
       keepHistory: false,
       sessionKeyPrefix: sessionKeyPrefix,
     );
@@ -2556,7 +2728,11 @@ class MultiAgentBookGenerationService {
     final _AgentChannel leader = _AgentChannel(
       team.leader!,
       _leaderSystemPrompt(),
-      chat,
+      _chatFor(
+        step: WritingCraftStep.prose,
+        role: RwkvAgentRole.teamLeader,
+        fallback: chat,
+      ),
       sessionKeyPrefix: sessionKeyPrefix,
     );
     final List<_AgentChannel> writers = <_AgentChannel>[
@@ -2564,7 +2740,7 @@ class MultiAgentBookGenerationService {
         _AgentChannel(
           stateManager.stateOf(team.groupId, 'writer-$s'),
           _writerSystemPrompt(s),
-          chat,
+          _chatFor(step: WritingCraftStep.prose, role: RwkvAgentRole.writer, fallback: chat),
           // 正文写手不累积历史：同一写手可能被派到本章多段，
           // 回灌自己的上一段会导致整段自我复读（RWKV 尤甚）。
           keepHistory: false,
@@ -2687,6 +2863,7 @@ class MultiAgentBookGenerationService {
         _reworkPrompt(plan[i], verdict.problems, finalDrafts[i]),
         maxTokens: 4000,
         temperature: 0.8,
+        through: _chatFor(step: WritingCraftStep.repair, role: RwkvAgentRole.copyeditor, fallback: chat),
       );
       final int threshold = (plan[i].wordTarget * 0.5).floor().clamp(
         60,
@@ -2707,6 +2884,7 @@ class MultiAgentBookGenerationService {
         _leaderRewritePrompt(plan[i], verdict.problems),
         maxTokens: 4000,
         temperature: 0.7,
+        through: _chatFor(step: WritingCraftStep.repair, role: RwkvAgentRole.copyeditor, fallback: chat),
       );
       if (fixed.trim().isNotEmpty) {
         finalDrafts[i] = fixed;
@@ -2751,6 +2929,7 @@ class MultiAgentBookGenerationService {
         _assemblyPrompt(mainOutline, chText, plan.length, sections.toString()),
         maxTokens: 8000,
         temperature: 0.6,
+        through: _chatFor(step: WritingCraftStep.polish, role: RwkvAgentRole.copyeditor, fallback: chat),
       ),
     );
     // —— 质量闸：字数不足 / 复读率超阈值 → 放大预算二次删重定稿一次 ——
@@ -2783,6 +2962,7 @@ class MultiAgentBookGenerationService {
         '正文不得少于 ${cfg.minFinalWords} 字。',
         maxTokens: 12000,
         temperature: 0.55,
+        through: _chatFor(step: WritingCraftStep.polish, role: RwkvAgentRole.copyeditor, fallback: chat),
       );
       final String retryClean = _cleanFinalChapter(retryRaw);
       // 二次稿「不更差」才采纳：字数不低于原稿 90%，且复读率不升。
@@ -2948,6 +3128,17 @@ class MultiAgentBookGenerationService {
     // **正文之前**的东西一并吐进章节（用户实测 BUG，见 output_sanitizer.dart
     // 顶部三种真实形态注释）。必须在这里做 —— 质量闸与复读判重都在其后。
     t = AIOutputSanitizer.stripMetaPreambles(t);
+    // 「重复格式的无效文本」按规则过滤：内联大纲标题（`##标题（约1000字）`）、
+    // 整行章名、提示词回声、`Assistant:` 模板标记 —— 都是模型按模板成片吐的残渣。
+    // 必须在 Markdown/复读处理之前做，否则它们会参与段落判重、把正常段落挤下去。
+    final int beforeScrub = t.replaceAll(RegExp(r'\s'), '').length;
+    t = FictionQuality.scrubArtifacts(t);
+    // 剥完只剩残渣 = 整篇都是模板而非正文（1B 实测：1013 字里 900+ 字是规划模板）。
+    // 直接返空，让上层按「清洗后正文为空」失败并重试，绝不把残渣当正文落库。
+    if (beforeScrub >= 500 &&
+        t.replaceAll(RegExp(r'\s'), '').length < beforeScrub * 0.4) {
+      return '';
+    }
     t = t.replaceAll(
       RegExp(
         r'<think>[\s\S]*?</think>|<thinking>[\s\S]*?</thinking>',
@@ -2997,9 +3188,7 @@ class MultiAgentBookGenerationService {
   }
 
   /// 句末边界（含引号/括号收尾）。用于识别「被 max_tokens 截断的半句」。
-  static final RegExp _sentenceBoundaryRegex = RegExp(
-    r'[。！？!?…；;”』」）)\]】]',
-  );
+  static final RegExp _sentenceBoundaryRegex = RegExp(r'[。！？!?…；;”』」）)\]】]');
 
   /// 把新段 [next] 并入已累积正文 [accumulated]，去掉**跨段重复**。
   ///
@@ -3226,12 +3415,15 @@ class MultiAgentBookGenerationService {
     String chapterOutline, {
     required int targetChars,
   }) => _renderPrompt('Book/soloChapter', <String, String>{
-    'context1': (_ref(mainOutline, 0.20)).toString(),
-    'context2': (volumeOutline.isEmpty ? '（见主线大纲）' : _ref(volumeOutline, 0.15))
+    'context1': (_ref(_stripOutlineMarkers(mainOutline), 0.20)).toString(),
+    'context2': (volumeOutline.isEmpty
+            ? '（见主线大纲）'
+            : _ref(_stripOutlineMarkers(volumeOutline), 0.15))
         .toString(),
-    'context3':
-        (chapterOutline.isEmpty ? '（见主线大纲与分卷大纲）' : _ref(chapterOutline, 0.22))
-            .toString(),
+    'context3': (chapterOutline.isEmpty
+            ? '（见主线大纲与分卷大纲）'
+            : _ref(_stripOutlineMarkers(chapterOutline), 0.22))
+        .toString(),
     'targetChars': (targetChars).toString(),
     'styleRules': _styleSection(),
   });
@@ -3248,9 +3440,9 @@ class MultiAgentBookGenerationService {
   }) {
     final bool first = tail.trim().isEmpty;
     return _renderPrompt('Book/serialSegment', <String, String>{
-      'context1': (_ref(mainOutline, 0.20)).toString(),
-      'volText': (volText).toString(),
-      'chText': (chText).toString(),
+      'context1': (_ref(_stripOutlineMarkers(mainOutline), 0.20)).toString(),
+      'volText': _stripOutlineMarkers(volText),
+      'chText': _stripOutlineMarkers(chText),
       'context4':
           (first
                   ? '请从本章开篇写起。'
@@ -3291,9 +3483,9 @@ class MultiAgentBookGenerationService {
     SectionPlan plan,
     int total,
   ) => _renderPrompt('Book/writer', <String, String>{
-    'context1': (_ref(mainOutline, 0.20)).toString(),
-    'volText': (volText).toString(),
-    'chText': (chText).toString(),
+    'context1': (_ref(_stripOutlineMarkers(mainOutline), 0.20)).toString(),
+    'volText': _stripOutlineMarkers(volText),
+    'chText': _stripOutlineMarkers(chText),
     'plan_agent': (plan.agent).toString(),
     'total': (total).toString(),
     'plan_title': (plan.title).toString(),
@@ -3356,7 +3548,7 @@ class MultiAgentBookGenerationService {
       final _AgentChannel probe = _AgentChannel(
         leaderEntry,
         _leadWriterSystemPrompt(),
-        chat,
+        _stepChat(WritingCraftStep.stateUpdate, chat),
         keepHistory: false,
       );
       final String raw = await probe.send(
@@ -3409,8 +3601,7 @@ class MultiAgentBookGenerationService {
         if (_needsRewrite(ch, cfg)) ch,
     ];
     if (failed.isEmpty) return 0;
-    onProgress?.call(
-      '正在按前后章节调整 ${failed.length} 章的大纲并重写…', 0.972);
+    onProgress?.call('正在按前后章节调整 ${failed.length} 章的大纲并重写…', 0.972);
     int fixed = 0;
     for (int i = 0; i < failed.length; i++) {
       final ChapterRow ch = failed[i];
@@ -3431,13 +3622,13 @@ class MultiAgentBookGenerationService {
 
       emit(MultiAgentChapterPhase.outlineRepair, 0.05, '正在按前后章节调整本章大纲…');
       try {
-        final ChapterOutlineRepairResult res =
-            await rewriter.repairOutlineAndRewrite(
-          chapterId: ch.id,
-          projectId: projectId,
-          onProgress: (String phase) => onProgress?.call(
-              '调整大纲并重写《${ch.title}》· $phase（$tag）…', null),
-        );
+        final ChapterOutlineRepairResult res = await rewriter
+            .repairOutlineAndRewrite(
+              chapterId: ch.id,
+              projectId: projectId,
+              onProgress: (String phase) =>
+                  onProgress?.call('调整大纲并重写《${ch.title}》· $phase（$tag）…', null),
+            );
         if (res.applied) {
           fixed++;
           emit(MultiAgentChapterPhase.done, 1, res.message);
@@ -3465,8 +3656,9 @@ class MultiAgentBookGenerationService {
   Future<void> _refreshProgress(String projectId) async {
     try {
       final List<ChapterRow> rows = await chapters.getByProjectId(projectId);
-      final int completed =
-          rows.where((ChapterRow c) => c.status == 'Completed').length;
+      final int completed = rows
+          .where((ChapterRow c) => c.status == 'Completed')
+          .length;
       await projects.updateProgress(
         projectId,
         progressFromChapterCounts(completed, rows.length).round(),
@@ -3762,10 +3954,7 @@ class MultiAgentBookGenerationService {
   ///
   /// [allowed] 是**全书 1-based 序号**白名单；不在表里的条目一律忽略，
   /// 避免模型多吐/错位把章名安到别的章上。
-  static Map<int, String> _parseChapterNameMap(
-    String raw,
-    List<int> allowed,
-  ) {
+  static Map<int, String> _parseChapterNameMap(String raw, List<int> allowed) {
     final Map<int, String> out = <int, String>{};
     final Set<int> allowedSet = <int>{for (final int i in allowed) i + 1};
     String text = raw.trim();

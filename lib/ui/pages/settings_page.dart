@@ -6,6 +6,7 @@ import '../../theme/app_theme.dart';
 import 'ai_health_page.dart';
 import 'agent_batch_config_page.dart';
 import 'style_study_page.dart';
+import 'state_posts_page.dart';
 import 'writing_prompt_settings_page.dart';
 
 /// 设置页 —— 对应 C# 的「选项 / 设置」对话框
@@ -59,6 +60,18 @@ class SettingsPage extends ConsumerWidget {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
             builder: (_) => const StyleStudyPage(),
+          )),
+        )),
+
+        const SizedBox(height: 16),
+
+        Card(child: ListTile(
+          leading: const Icon(Icons.badge_outlined),
+          title: const Text('State 岗位配置'),
+          subtitle: const Text('基模固定；每个岗位绑定各自的 state，单独重训即可'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const StatePostsPage(),
           )),
         )),
 

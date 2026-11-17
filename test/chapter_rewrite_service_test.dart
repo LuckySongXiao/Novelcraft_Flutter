@@ -5,6 +5,8 @@
 //   ④ 上下文装配 → 提示词里必须带上「上一章结尾」与「下一章开头」。
 //
 // 运行：flutter test test/chapter_rewrite_service_test.dart
+import 'dart:io';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +32,12 @@ class _Model implements IModelProvider {
   @override
   bool get isAvailable => true;
 
+  /// 必须给：`_generateOnce` 会用 `isRwkvFamilyProvider(providerName)` 决定是否
+  /// 下发 RWKV 专用采样参数；缺了这个 getter，noSuchMethod 抛错会被静默吞掉，
+  /// 整条 provider 通道被当成「模型没返回内容」。
+  @override
+  String get providerName => 'fake';
+
   @override
   Future<ChatResponse> chat(ChatRequest request) async {
     requests.add(request);
@@ -40,19 +48,13 @@ class _Model implements IModelProvider {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// 合格正文：300 个互不相同的段落（≈1.1 万字，复读率 0）。
+/// 合格正文：真实生成稿（3657 字，12-gram 重复率 <0.10）。
 ///
-/// 与 `writing_quality_gate_test.dart` 的合格稿同构 —— 已被既有质量闸用例验证过
-/// 能通过 `FictionQuality.issue` / 复读率 / 大纲式输出三道判据。
-String _goodText() {
-  final StringBuffer sb = StringBuffer();
-  for (int i = 1; i <= 300; i++) {
-    sb
-      ..writeln('第 $i 段：主角沿山道前行，遇见第 $i 位试炼者，剑意与心境各不相同。')
-      ..writeln();
-  }
-  return sb.toString();
-}
+/// ⚠ 不能用「第 N 段：…」这种模板句：模板只改数字，12-gram 重复率高达 0.39，
+/// 会被 `RepetitionGuard.isDegenerate`（阈值 0.30）正确判成整段复读 —— 那是
+/// 产品该有的行为，问题在夹具。夹具必须是真的合格稿。
+String _goodText() =>
+    File('test/fixtures/good_chapter.txt').readAsStringSync().trim();
 
 void main() {
   const Uuid uuid = Uuid();
@@ -126,11 +128,11 @@ void main() {
     final ChapterRow before = await reload();
     final ChapterRewriteResult r = await build().rewrite(chapterId: chapterId);
 
-    expect(r.isSuccess, isTrue);
-    expect(r.persisted, isTrue);
-    expect(r.applied, isTrue);
+    expect(r.isSuccess, isTrue, reason: r.message);
+    expect(r.persisted, isTrue, reason: r.message);
+    expect(r.applied, isTrue, reason: r.message);
     final ChapterRow after = await reload();
-    expect(after.content, contains('第 300 段'));
+    expect(after.content, contains('林晚'));
     expect(after.versionNumber, before.versionNumber + 1);
     expect(after.status, 'Completed', reason: '重写通过质量闸后应把草稿扶正');
     expect(after.wordCount, after.content!.trim().length);

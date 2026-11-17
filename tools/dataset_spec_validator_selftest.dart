@@ -10,6 +10,10 @@
 //      案例目录需含 `chapterBrief/N.txt` / `chapterProse/N.txt` / `milestone/*.txt`
 //      / `report.json`（可选，用于取 askChars 与全书章数）。
 //
+//   3) 审计 State Tuning 数据集（Part II §S3 外壳）：
+//        dart --disable-dart-dev tools/dataset_spec_validator_selftest.dart state <sft_state 目录>
+//      按 `state_target` 分组跑 ST-G9（同质性）/ ST-G12（单轮）。
+//
 //     ⚠ 审计模式会让「范式的纸面规则」对上「真实模型的真实毛病」——
 //       这是制定范式时最该做的一步：规则写漏了哪条，一眼就看出来。
 library;
@@ -712,8 +716,71 @@ void _selftest() {
 // ---------------------------------------------------------------------------
 
 /// 把一个案例目录里的真实产物过一遍范式。
-int _audit(String dir) {
-  print('=== 审计案例目录：$dir ===');
+/// 审计 `sft_state/*.jsonl`：按 `state_target` 分组跑 ST-G9 / ST-G12。
+int _auditState(String dir) {
+  final Directory d = Directory(dir);
+  if (!d.existsSync()) {
+    print('目录不存在：$dir');
+    return 2;
+  }
+  final Map<String, List<StateTuningSample>> groups =
+      <String, List<StateTuningSample>>{};
+  int badLines = 0;
+  for (final FileSystemEntity e in d.listSync()) {
+    if (e is! File || !e.path.toLowerCase().endsWith('.jsonl')) continue;
+    for (final String line in e.readAsLinesSync()) {
+      final String t = line.trim();
+      if (t.isEmpty) continue;
+      try {
+        final Object? raw = jsonDecode(t);
+        if (raw is! Map) {
+          badLines++;
+          continue;
+        }
+        final Map<String, Object?> m = Map<String, Object?>.from(raw);
+        final StateTarget? target =
+            StateTarget.byName('${m['state_target'] ?? ''}');
+        if (target == null) {
+          badLines++;
+          continue;
+        }
+        final Object? fp = m['state_fingerprint'];
+        final Map<Object?, Object?> f =
+            fp is Map ? fp : const <Object?, Object?>{};
+        groups.putIfAbsent(
+          target.name,
+          () => <StateTuningSample>[],
+        ).add(StateTuningSample(
+          stateTarget: target,
+          completion: '${m['completion'] ?? ''}',
+          persona: '${f['persona'] ?? ''}',
+          pov: '${f['pov'] ?? ''}',
+          tense: '${f['tense'] ?? ''}',
+        ));
+      } on Object {
+        badLines++;
+      }
+    }
+  }
+
+  print('=== 审计 sft_state：$dir（坏行 $badLines）===');
+  int failedGroups = 0;
+  groups.forEach((String name, List<StateTuningSample> samples) {
+    final StateGateVerdict v = StateTuningGates.checkGroup(samples);
+    if (!v.ok) failedGroups++;
+    print('${v.ok ? 'PASS' : 'FAIL'}  $name（${samples.length} 条）');
+    if (!v.ok) {
+      print('      gates=${v.failedGates.join(",")}');
+      for (final String r in v.reasons) {
+        print('      $r');
+      }
+    }
+  });
+  if (groups.isEmpty) print('未找到任何带 state_target 的样本');
+  return failedGroups == 0 && groups.isNotEmpty ? 0 : 1;
+}
+
+int _audit(String dir) {  print('=== 审计案例目录：$dir ===');
   final File report = File('$dir/report.json');
   Map<String, Object?>? rep;
   if (report.existsSync()) {
@@ -829,6 +896,9 @@ int _audit(String dir) {
 void main(List<String> args) {
   if (args.length >= 2 && args[0] == 'audit') {
     exit(_audit(args[1]));
+  }
+  if (args.length >= 2 && args[0] == 'state') {
+    exit(_auditState(args[1]));
   }
   _selftest();
 }

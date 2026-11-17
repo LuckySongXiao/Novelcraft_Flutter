@@ -1,6 +1,203 @@
 # NovelCraft Flutter 版 — 交接文档（HANDOFF）
 
-## 最新交接：1.0.0+52（2026-10-14）—— 项目逻辑/GUI 校验 + 模型边界实测 + 数据集范式（**源码已更新，未出包**）
+## 2026-11-15 State Tuning 训练落地 + 配置接口
+
+**环境**（`F:\30_Novelcraft_Flutter\_state_tuning`，不污染主工程）：
+RWKV-PEFT（JL-er，depth 1）+ Python 3.12.9 + torch 2.7.1+cu118 +
+triton-windows 3.3.1.post21 + rwkv-fla 0.7（Windows 下可运行，官方不保证支持）。
+
+**基底与产物**：`rwkv7-g1l-1.5b-20261031-ctx34304.pth`（24 层 / 2048 维 / 词表
+65536）；ST-1 试点产物 `rwkv_models/states/st1_prose-v1.pth`（6.01MB，
+24 个 `blocks.N.att.time_state`）。15 步 loss 2.28 → 2.23，仅验证链路，
+**质量未验收**。
+
+**训练配方（实测踩坑后确定）**：
+- `--precision bf16-true`：`bf16`（autocast）会触发 Lightning
+  「AdamW 不支持 gradient clipping」错误；
+- `--lr_init 1e-5 --lr_final 1e-5`：官方 state 脚本值。**`lr=1` 会发散**
+  （实测 loss 2.28 → 6.87 → 7.56）；
+- `--num_workers 0`：Windows 默认 8 会把训练卡在 DataLoader 阶段；
+- `--op fla --peft state`（CUDA 算子不支持 state）；
+- 8GB 卡约 45–60 秒/步，300 步约 4–5 小时。
+- 复现脚本：`_state_tuning\train_state.ps1 -StateKey st1_prose -Steps 300`；
+  数据准备 `_state_tuning\prepare_data.py`（已生成 st1/st2/st3/st4/st6）。
+
+**配置接口**（已提交）：`lib/ai/rwkv/state_tuning_registry.dart`
+—— 6 个 state 目标（ST-1~ST-6）、角色绑定、基底一致性校验、
+合并/挂载命令生成；`di.dart` 的 `stateTuningRegistryProvider` 负责
+KVStore(`ai_config/state_tuning.registry`) 持久化。单测 10 条全过。
+
+**关键约束（务必遵守）**：
+1. state 必须与训练它的**同款基底模型**配套（`checkMount` 已强制校验）；
+2. 当前 `rwkv_lightning_cuda` **没有 `--state-path`**，产物需用官方
+   `demo-state-merge.sh` 合并进模型，或改用 Runner/Ai00 自托管；
+3. 云端 RWKV API 无法挂载本地 state 文件；
+4. 一个 state 只许一种输出形状（Part II 同质性），ST-1 与 ST-5 必须分开训练。
+
+**未完成**：ST-2/3/4/6 仅生成数据集、未训练；ST-5 需按书构建；
+产物质量（ST-G10 反塌缩 / ST-G11 基底保留）尚未验收。
+
+### 2026-11-15 追加：每个工艺步骤「基模 + 对应 state」
+
+**新文件** `lib/ai/rwkv/writing_step_state_plan.dart`：把自动化写作的每个工艺
+步骤（主/分卷/章大纲、章节细纲、正文、润色、返工、审查、跨章续写…）解析成
+「这次该用哪个模型」，产物是 `StepStateBinding`（applied / requestModel / 阻塞原因）。
+
+- **生效条件**：该步骤对应目标已注册 state 产物、产物启用、基底一致、且产物
+  已合并成可加载模型（`RwkvStateArtifact.mergedModelId` 非空）。任一不满足 →
+  **只回落该步骤**到基模，并在日志/HANDOFF 里写明原因，绝不假装生效。
+- **接线**：
+  - 多智能体协同写书 `multi_agent_book_generation_service.dart`：`_stepChats`
+    按步骤建执行器；正文/润色/返工/大纲各走各的 state；`_AgentChannel.send`
+    支持 `through:` 覆盖单次调用的执行器（返工、补写、拼装走对应 state）。
+  - 分层写书 `layered_book_generation_service.dart`：`LayeredChatRequest.step`
+    携带工艺步骤，L1→outlinerStruct、L3.brief→briefContract、
+    L3.selfcheck→copyeditorPatch、L4→novelistProse。
+  - `di.dart`：`writingStepStatePlanProvider`（按当下注册表 + SubAgent 模型
+    重新解析）；分层管线与多智能体服务都从这里取模型。
+- **验证**：`test/writing_step_state_plan_test.dart` 10 条 + 原有 10 条全过；
+  相关 5 个测试文件 38 条全过；`flutter analyze lib` 无 error（仅历史 info）。
+- **ST-1 长训**：150 步（300 samples / bsz2），loss 稳定 2.0–2.6，产物
+  `rwkv_models/states/st1_prose-v2.pth`。A/B（同 prompt 同种子，见
+  `_state_tuning/compare_state.py` 与 `_state_tuning/out/state_ab_report.txt`）：
+  基线在对话短句里空转，带 state 能落回叙事（"在火海中，他发现了一个被火海
+  吞噬的女子…萧逸枫的脑袋嗡的一声炸开…"）。**仍属小样本效果，非质量验收。**
+
+---
+
+## 最新交接：1.0.0+53（2026-10-15）—— State Tuning 专项范式（Part II）+ 4 个真实缺陷修复 ✅ 已出包
+
+> **后训练数据集范式（两部，本版主交付物）**：
+> - Part I `docs/RWKV后训练数据集格式范式-v1.0.md`（SFT/DPO：25 任务族 / 17 类负例 / 8 道质量闸）
+> - **Part II `docs/后训练数据集格式范式-StateTuning追加-v1.0.md`（State Tuning 专项）**
+>
+> 模型边界实测报告：`docs/模型边界能力实测-v1.0.0+52.md`（37 次真机调用，含 Attention 套件）
+> **发布清单（含 SHA256）：`F:\30_Novelcraft_Flutter\发布清单-v1.0.0+53.md`**
+> 上一版：`1.0.0+52`（见下方，源码级、未出包）
+
+### 1. 本版主题
+
+用户提出「state tuning 微调对 RWKV 写小说也许更好，要针对该方式追加制定一套数据集范式」，
+并要求出包。本版完成三件事：
+
+1. **核实事实**：从 RWKV-PEFT 官方仓库 + 官方教程确认 State Tuning 是与 LoRA 并列的
+   **官方独立微调路径**（`--peft state` / `--train_type state`），微调的是**初始 state**，
+   产物是可单独挂载的 `.pth` state 文件；7B 上显存 **18.1GB < LoRA 23.7GB << 全量 OOM**。
+2. **追加制定 Part II 范式**（核心洞见见 §2）。
+3. **修掉分层写书 App 侧 4 个真实缺陷**（见 §3），并出包。
+
+### 2. Part II 的核心洞见（与 Part I 的本质差异）
+
+> **state 是「整个数据集共享的一份全局偏置」。**
+
+这一句推翻了 Part I 的数据组织方式：
+
+| | Part I（SFT/DPO） | Part II（State Tuning） |
+|---|---|---|
+| 数据同质性 | **可异构**，不同任务混一份 | **必须同质**：一个 state 只许一种输出形状/人格 |
+| 输入多样性 | 中等 | **必须尽量大**（state 学的是「忽略输入哪部分」） |
+| 数据重复 | 1~3× | **10×**（`make_data.py <jsonl> 10 512`） |
+| 学习率 | 1e-5 | **1.0 → 0.01**（`warmup_steps 10`） |
+| ctx_len | 可长 | 官方 **512 起越短越好**；本项目 prose 类改 **infctx** |
+| 产物 | 权重 | `.pth` state 文件（可单独挂载，⚠ 必须配同款基底模型） |
+| 多轮 | 可以 | **不行**（官方明确「炼的都是单轮问答」） |
+
+**6 个 state 目标**（各自**单独数据集 / 单独训练 / 单独 `.pth`**）：
+
+| ID | state 名 | 职责 | 输出形状 |
+|---|---|---|---|
+| ST-1 | `novelist_prose` | 正文写手 | `prose` |
+| ST-2 | `outliner_struct` | 结构化规划（里程碑/大纲） | `json_array` |
+| ST-3 | `brief_contract` | 细纲 8 字段契约 | `textLines` |
+| ST-4 | `copyeditor_patch` | 自查补丁 | `textLines` |
+| ST-5 | `book_world_<bookId>` | 单本书世界观与文风 | `prose` |
+| ST-6 | `chapter_linker` | 跨章续写 + 伏笔义务 | `prose` |
+
+⚠ **ST-1 与 ST-5 必须分开**（通用手感 vs 单书设定），否则得到「都不像」的平均人格。
+
+**State Tuning 专用样本外壳**新增字段：`state_target` / `sample_kind` /
+`priming`（书级设定语料）/ `state_fingerprint`（同质性指纹：形状、字段数、
+中文比例、平均长度、persona、pov、tense）。
+
+**新增 4 道质量闸**：
+
+| 闸 | 名称 | 判据 | 阶段 |
+|---|---|---|---|
+| **ST-G9** | 同质性闸 | 形状/字段数零分歧；中文比例极差 ≤0.10；长度在中位数 ±30% 外占比 ≤5%；persona/pov/tense 零分歧 | 数据阶段 |
+| ST-G10 | 反塌缩闸 | 训练后抽样长度标准差不得低于样本集 50% | 训练后 |
+| ST-G11 | 基底保留闸 | 挂载后仍能完成 state 职责外普通指令 ≥80%（防 `lr_init=1` 灾难性遗忘） | 训练后 |
+| ST-G12 | 单轮闸 | 不得出现 `User:`/`Assistant:` 成对结构 | 数据阶段 |
+
+**训练配置**照官方教程落地（`lr_init 1` / `lr_final 0.01` / `warmup 10` / `ctx_len 512` /
+`epoch_steps 1000` / `QUANT nf4|int8`），本项目 deviation：prose 类改
+`--train_type infctx --chunk_ctx 512 --ctx_len 2048` 以吃长正文片。
+
+### 2.1 ⚠ 两个必须先定的决策（写进 Part II §S9/§S10，未替用户决定）
+
+1. **部署路径**：本项目线上走 RWKV **云端** API，那个端点**无法挂载本地 state 文件**。
+   ⇒ 要么 `demo-state-merge.sh` 合并后**自托管**（Runner / Ai00 / rwkv.cpp），
+   要么此路暂只做实验。
+2. **知识 vs 人格**：state 参数极少，装不下大量规则 ⇒ 契约 / JSON schema 仍交给 SFT/LoRA，
+   State Tuning 只教「人格与文风」。
+
+### 3. 修掉的 4 个真实缺陷（分层写书 App 侧）
+
+| # | 缺陷 | 实测表现 | 修法 |
+|---|---|---|---|
+| 1 | `RepositoryLayeredSink` **不幂等** | 同名书第二次运行 `vs.length == 2`（再建一整卷 + 一整套章） | 落库前 `getByProjectId` 回填 `_volumeIds`/`_chapterIds`；用 `Future` 缓存而非 bool（卷是并行的，bool 会让第二个并发调用读到空表） |
+| 2 | `substring(0,-1)` **崩溃路径** | 伏笔小节写成裸行 `伏笔提示：` 时 `indexOf('## 伏笔提示') == -1` | 新增 `BriefPatch.splitBrief()` 返回 `(body, section)` record |
+| 3 | **卷大纲为空 → 整卷章节被静默丢弃** | `volumeId` 空 → early-return，细纲 + 正文一起没 | 兜底建卷 |
+| 4 | **服务端 `>` 前缀没有剥** | `>标题：《x》` 让 `BriefPatch.parseFields` 匹配失败 → 「标题」字段丢失 → 章名退化成「第 N 章」 | `cleanStructured` 开头剥开头连续的 `>`，补 9 条回归 |
+
+### 4. 可执行部分
+
+- `lib/ai/utils/dataset_spec_validator.dart`：Part I 的 G1~G8 + Part II 的
+  `StateTarget` / `StateTuningSample` / `StateTuningGates.checkGroup()`（ST-G9 + ST-G12）
+- `tools/dataset_spec_validator_selftest.dart`：**57 条自检**（Part I 45 条 + Part II F1~F12）
+  + `audit <案例目录>` 模式（把真实模型产物过一遍范式）
+- `tools/rwkv_boundary_probe.dart`：模型边界探针，7 套件
+- `test/layered_book_runner_test.dart`：7 条集成测试（真内存库 + 打桩 chat）
+
+### 5. 发布件（本版）
+
+| 文件 | 字节数 | SHA256 |
+|---|---:|---|
+| `novelcraft_1.0.0+53_windows_release.zip` | 15,671,020 | `BADF4419305BF2AB7CF5CAD59528055C27B05B0285A3D74529A6C020EE1F7051` |
+| `novelcraft_1.0.0+53_source.zip` | 4,542,794 | `71E7CE0EE5787AFFA01AB79CB80F645A75C5541DA77F9C38709365208D8522C4` |
+| `novelcraft_1.0.0+53_release.apk` | 75,325,569 | `6D6BED209B534B01637A20918B7545F46C82DA6977F8FC6B6DC1FCD874148146` |
+
+源码快照目录 `novelcraft_1.0.0+53_source\`（577 条目，含 `备份说明-v1.0.0+53.md`，
+零构建缓存 / 零 `.dart_tool` / 零密钥）。
+
+**构建与验证**：Windows release **EXIT=0 / 236.7s**，`data/app.so` 含 `1.0.0+53`、
+不含旧版；**启动存活验证通过**（PID 8772）。Android release **EXIT=0 / 460.3s / 71.8MB**，
+`versionCode='53'`，验签通过、证书与 +47 一致（SHA-256 `4fc478771c…b466289d`）。
+完整记录见 `F:\30_Novelcraft_Flutter\发布清单-v1.0.0+53.md`。
+
+> ⚠ **本版构建踩坑（返工两次）**：Android 构建**必须先 `subst S:` 映射 ASCII 盘符**
+> （`subst S: 'F:\30_Novelcraft_Flutter\novelcraft_en'` → `Set-Location S:\` → 构建 → `subst S: /D`）。
+> junction 路径本身是 ASCII，但它解析到的真实路径含中文（`Flutter版代码\novelcraft`），
+> Gradle 在中文路径下会报 `Cannot invoke "java.io.File.exists()" because "parent" is null`
+> 并让 `:app:compileFlutterBuildRelease` 失败。**脚本本身必须纯 ASCII。**
+
+### 6. 验证
+
+**19/19** 离线自检（`dataset_spec_validator_selftest` **57 条**；`layered_pipeline_selftest` 146 条）·
+`analyze_inprocess lib` **249 文件 0 error / 0 warning** · `tools` 26 文件 0/0 · `test/` 1 文件 0/0 ·
+i18n 1296 调用点 0 缺失 · 插值 lint 294 文件 0 命中 ·
+**集成测试 7/7** · 37 次真机模型边界调用 · 全部改动文件无 U+FFFD ·
+Windows release 构建 EXIT=0（`app.so` 含 `1.0.0+53`、不含旧版）·
+Android release 构建 EXIT=0 · 版本三处一致（`1.0.0+53`）。
+
+### 7. 下一步（State Tuning 真要落地的前置）
+
+1. **定部署路径**（§2.1 决策 1）—— 决定这条路是「可用方案」还是「只能实验」。
+2. **小规模试跑**：按 Part II §S5 的配置先跑一个 state（建议 ST-3 brief_contract，
+   样本量小、闸位确定），验证 `lr_init 1` 會不會灾难性遗忘（ST-G11）。
+3. **确认 RWKV-7 的 `n_layer` / `n_embd`**（官方表是 v5/v6 的；本项目线上是 `rwkv7-g1k-7.2b`）。
+4. 解码参数实测：官方示例 `top_p 0.3` vs 本项目 +48 结论 `top_p 0.6 + dry 0.8`。
+
+## 历史：1.0.0+52（2026-10-14）—— 项目逻辑/GUI 校验 + 模型边界实测 + 数据集范式（源码已更新，未出包）
 
 > **实测报告：`docs/模型边界能力实测-v1.0.0+52.md`（37 次真机调用，含 Attention 套件）**
 > **后训练数据集范式（两部）**：

@@ -84,7 +84,9 @@ void main() {
     expect(r.counts.characters, 2, reason: '单字名「影」不该命中：${r.counts}');
     expect(r.counts.timelineEvents, 1);
     final CharacterRow a = await character(charAId);
-    expect(a.history, contains('第1章《宗门大比》'));
+    // orderIndex=0（缺失）时生产端**刻意**退化为不带章号的 marker
+    //（不猜章号，见 ChapterSyncService 的注入注释），这里断言标记本身已带上。
+    expect(a.history, contains('《宗门大比》'));
     expect(a.firstAppearanceChapterId, chapterId);
     expect(a.lastAppearanceChapterId, chapterId);
     final CharacterRow c = await character(charCId);

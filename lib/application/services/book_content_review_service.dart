@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' show Value;
 
 import '../../ai/models/chat.dart';
 import '../../ai/models/provider.dart';
+import '../../ai/rwkv/state_tuning_registry.dart' show RwkvAgentRole;
 import '../../ai/utils/json_scan.dart';
 import '../../ai/utils/output_sanitizer.dart';
 import '../../ai/utils/fiction_quality.dart';
@@ -87,6 +88,8 @@ class BookContentReviewService {
     required IModelProvider? Function() seniorReviewer,
     required IModelProvider? Function() writer,
     IModelProvider? Function(GuestReaderProfile profile)? guestProvider,
+    this.stateModelFor,
+    this.stateIdFor,
     this.guestReaders = _emptyGuests,
     this.outline = _emptyOutline,
     this.promptTemplates,
@@ -103,6 +106,25 @@ class BookContentReviewService {
   String _prompt(String id, Map<String, String> values) =>
       (promptTemplates ?? WritingPromptTemplates.defaults()).render(id, values);
   final Future<KeyValueStore> Function() _store;
+
+  /// 角色 → 「基模 + state」模型 id（空 = 用 provider 默认模型）。
+  ///
+  /// 审查员/读者/润色写手各自的工作要求不同，由调用方注入解析结果；
+  /// 该角色没有可用 state 时返回空串即可（回落基模）。
+  final String Function(RwkvAgentRole role)? stateModelFor;
+
+  /// 角色 → 引擎侧初始 state id（空 = 不带；仅新推理引擎路线用）。
+  final String Function(RwkvAgentRole role)? stateIdFor;
+
+  String _modelFor(RwkvAgentRole role) => stateModelFor?.call(role) ?? '';
+
+  String _stateIdFor(RwkvAgentRole role) => stateIdFor?.call(role) ?? '';
+
+  /// 角色的请求参数（目前只有引擎侧 `state_id`）。
+  Map<String, dynamic> _paramsFor(RwkvAgentRole role) {
+    final String sid = _stateIdFor(role);
+    return <String, dynamic>{if (sid.isNotEmpty) 'state_id': sid};
+  }
   final IModelProvider? Function() _reviewer;
   final IModelProvider? Function() _seniorReviewer;
   final IModelProvider? Function() _writer;
@@ -154,12 +176,14 @@ class BookContentReviewService {
       for (final BookReviewComment comment in guestComments) comment.toJson(),
     ]);
     final ChatResponse response = await reviewer.chat(ChatRequest(
+      model: _modelFor(RwkvAgentRole.reviewer),
       systemPrompt: _prompt('Review/reviewerSystem', {}),
       messages: <ChatMessage>[ChatMessage.user(
         _prompt('Review/reviewer', {'title': chapter.title, 'synopsis': synopsis, 'context': context, 'guestAdvice': guestAdvice}),
       )],
       temperature: .5,
       maxTokens: 1600,
+      parameters: _paramsFor(RwkvAgentRole.reviewer),
     ));
     if (!response.isSuccess) return null;
     final String raw = AIOutputSanitizer.extractCleanOutput(response.content);
@@ -175,12 +199,14 @@ class BookContentReviewService {
     final IModelProvider? senior = _seniorReviewer();
     if (senior != null && senior.isAvailable) {
       final ChatResponse seniorResponse = await senior.chat(ChatRequest(
+        model: _modelFor(RwkvAgentRole.reviewer),
         systemPrompt: _prompt('Review/seniorSystem', {}),
         messages: <ChatMessage>[ChatMessage.user(
           _prompt('Review/senior', {'title': chapter.title, 'synopsis': synopsis, 'context': context, 'comments': jsonEncode(<Object?>[for (final BookReviewComment comment in allComments) comment.toJson()])}),
         )],
         temperature: .35,
         maxTokens: 1400,
+        parameters: _paramsFor(RwkvAgentRole.reviewer),
       ));
       if (seniorResponse.isSuccess) {
         final Map<String, dynamic>? verdict =
@@ -299,12 +325,14 @@ class BookContentReviewService {
       for (final BookReviewComment c in report.comments) c.toJson(),
     ]);
     final ChatResponse response = await writer.chat(ChatRequest(
+      model: _modelFor(RwkvAgentRole.writer),
       systemPrompt: _prompt('Review/writerSystem', {}),
       messages: <ChatMessage>[ChatMessage.user(
         _prompt('Review/writer', {'outline': outlineText, 'comments': comments, 'original': original}),
       )],
       temperature: .88,
       maxTokens: 1400,
+      parameters: _paramsFor(RwkvAgentRole.writer),
     ));
     if (!response.isSuccess) return report;
     final String revised = AIOutputSanitizer.extractCleanOutput(response.content).trim();
@@ -369,14 +397,16 @@ class BookContentReviewService {
       jobs.add(() async {
         final IModelProvider? guest = _guestProvider?.call(profile) ?? _reviewer();
         if (guest == null || !guest.isAvailable) return const <BookReviewComment>[];
+        final String readerStateModel = _modelFor(RwkvAgentRole.reader);
         final ChatResponse response = await guest.chat(ChatRequest(
-          model: profile.model,
+          model: readerStateModel.isEmpty ? profile.model : readerStateModel,
           systemPrompt: _prompt('Review/guestSystem', {'name': profile.name, 'taste': profile.taste}),
           messages: <ChatMessage>[ChatMessage.user(
             _prompt('Review/guest', {'title': chapter.title, 'synopsis': synopsis, 'text': text}),
           )],
           temperature: .8,
           maxTokens: 900,
+          parameters: _paramsFor(RwkvAgentRole.reader),
         ));
         if (!response.isSuccess) return const <BookReviewComment>[];
         return _parseComments(

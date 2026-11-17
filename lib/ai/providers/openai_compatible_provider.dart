@@ -604,6 +604,9 @@ class OpenAICompatibleProvider implements IModelProvider {
       'alpha_decay',
       'stop_tokens',
       'chunk_size',
+      // 引擎侧初始 state（rwkv_lightning_cuda `/v1/state/upload` 的返回值）：
+      // 请求体顶层传 `state_id`，服务端从该初始状态接着算。
+      'state_id',
       // RWKV 云无状态路由的思考控制（官方文档 http-api.zh-CN.md）：
       // `think_type`（none/fast/free/preferChinese/…）与 `enable_think`。
       // 不放进白名单的话，App 里「关闭思维链」在云路由上无法生效 ——

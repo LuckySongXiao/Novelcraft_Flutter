@@ -52,6 +52,17 @@ app.*.map.json
 /rwkv_models/*.part
 /rwkv_models/*.tmp
 /rwkv_models/*.gguf
+# 基底权重不入库（2.8GB）；states/ 下的 state tuning 产物（约 6MB）保留
+/rwkv_models/*.pth
+# 目录化后的分类：基模/合并体/量化产物/失效代 state 一律不进仓库
+/rwkv_models/bases/
+/rwkv_models/merged/
+/rwkv_models/quantized/
+/rwkv_models/states/3b/
+# 量化产物（`.rwkvq` 1GB 级，由 rwkv_quantize 按需重新生成）
+/rwkv_models/*.rwkvq
+/rwkv_models/*.rwkvq.source.json
+/rwkv_models/*.rwkvq.manifest.json
 
 # 签名与本地凭据（双保险：android/.gitignore 已含，此处兜底）
 key.properties

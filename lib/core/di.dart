@@ -1,5 +1,6 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../application/services/writing_prompt_templates.dart';
 import '../application/services/writing_prompt_catalog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -114,6 +115,9 @@ import '../ai/workflow/dispatch_planner.dart';
 import '../ai/rwkv/rwkv_concurrency.dart' show RwkvServerCapacity;
 import '../ai/models/chat.dart' show ChatMessage, ChatRequest, ChatResponse;
 import '../ai/rwkv/rwkv_sampling.dart' show isRwkvFamilyProvider;
+import '../ai/rwkv/rwkv_engine_state_index.dart';
+import '../ai/rwkv/state_tuning_registry.dart';
+import '../ai/rwkv/writing_step_state_plan.dart';
 import '../ai/runtime_settings.dart';
 import '../ai/providers/openai_compatible_provider.dart';
 import '../ai/workflow/task_queue.dart';
@@ -252,6 +256,8 @@ final appBootstrapProvider = FutureProvider<bool>((ref) async {
   await ref.read(bookReviewSettingsProvider.notifier).load();
   // 拆书规则集：整书生成每章都要读「当前启用规则」，必须常驻内存。
   await ref.read(styleRuleLibraryProvider.notifier).load();
+  // State Tuning 注册表：首次启动自动登记已知产物，之后以 KVStore 为准。
+  await ref.read(stateTuningRegistryProvider.notifier).load();
   final profileJson = await kv.readJson('ai_config', 'rwkv.cloud_profiles');
   if (profileJson != null) {
     try {
@@ -264,6 +270,21 @@ final appBootstrapProvider = FutureProvider<bool>((ref) async {
       ref.read(aiLoggerProvider).warning('Agent 端点配置恢复失败：${e.runtimeType}');
     }
   }
+  // 引擎已上传的初始 state：引擎重启后 state_id 会变，所以每次启动按文件名
+  // 重新反查一次（引擎没起就静默失败，计划会回落产物上手工填的 id）。
+  try {
+    await ref
+        .read(rwkvEngineStateIndexProvider.notifier)
+        .refreshAll(ref.read(localEngineBaseUrlsProvider));
+  } on Object catch (_) {}
+  // 启动即打印「每个工艺步骤用基模还是基模+state」，便于在诊断日志里核对。
+  final WritingStepStatePlan stepPlan = ref.read(writingStepStatePlanProvider);
+  ref.read(aiLoggerProvider).info(
+    'State 绑定：${stepPlan.appliedCount}/${WritingCraftStep.values.length} 个工艺步骤'
+    '可用「基模+state」（引擎已上传 '
+    '${stepPlan.engineStates.byFilename.length} 个 state）\n'
+    '${stepPlan.summary()}\n${stepPlan.roleSummary()}',
+  );
   final seeder = ref.watch(databaseSeederProvider);
   await seeder.ensureSeeded();
   // 预热提示词模板：否则首个双 Agent 调用时 `_lazyTemplates` 读到的是 null，
@@ -295,9 +316,8 @@ final chapterServiceProvider = Provider<ChapterService>(
 
 /// 「项目体检 → 一键清洗」：批量修复章节标题/梗概的历史污染（不动正文）。
 final projectMetaCleanupServiceProvider = Provider<ProjectMetaCleanupService>(
-  (ref) => ProjectMetaCleanupService(
-    chapters: ref.watch(chapterRepositoryProvider),
-  ),
+  (ref) =>
+      ProjectMetaCleanupService(chapters: ref.watch(chapterRepositoryProvider)),
 );
 
 /// 「逐章复读体检」：定位正文复读并给出截断修复稿（**逐章确认**后才写库）。
@@ -382,11 +402,31 @@ final layeredBookRunnerProvider = Provider<LayeredBookRunner>((ref) {
     chat: (LayeredChatRequest r) async {
       final IModelProvider? provider =
           resolveAgentProvider(ref, main: true) ??
-              ref.read(modelManagerProvider).getDefaultProvider();
+          ref.read(modelManagerProvider).getDefaultProvider();
       if (provider == null || !provider.isAvailable) {
         throw StateError('没有可用的写作模型，请先到「AI 配置」注册并设置默认模型');
       }
       final bool rwkv = isRwkvFamilyProvider(provider.providerName);
+      // 分层写书每个工艺阶段（L1 主线 / L2 分卷 / L3 细纲 / L4 正文…）各用
+      // 自己绑定的「基模 + state」模型；未绑定或未合并时该阶段回落基模。
+      //
+      // 单书覆盖：分层流程的会话键形如 `<书名>::main` / `<书名>::ch3`，
+      // 从中取书名交给计划做 ST-5 匹配（正文阶段优先用本书的单书 state）。
+      final String bookTitle = r.sessionKey.contains('::')
+          ? r.sessionKey.split('::').first.trim()
+          : '';
+      final WritingStepStatePlan plan = bookTitle.isEmpty
+          ? ref.read(writingStepStatePlanProvider)
+          : ref.read(writingStepStatePlanProvider).forBook('', title: bookTitle);
+      final StepStateBinding? stepBinding = r.step == null
+          ? null
+          : plan.resolve(r.step!);
+      final String stepModel = stepBinding != null && stepBinding.applied
+          ? stepBinding.requestModel
+          : '';
+      final String stepStateId = stepBinding != null && stepBinding.applied
+          ? stepBinding.engineStateId
+          : '';
       final Map<String, dynamic> params = <String, dynamic>{
         if (r.prose)
           ...SelectionEditService.writingSamplingParams(provider)
@@ -396,14 +436,18 @@ final layeredBookRunnerProvider = Provider<LayeredBookRunner>((ref) {
         if (r.stateful && provider is RwkvCloudProvider)
           'rwkvSessionKey': r.sessionKey,
         if (rwkv && !aiRuntimeSettings.thinkingEnabled) 'think_type': 'none',
+        if (stepStateId.isNotEmpty) 'state_id': stepStateId,
       };
-      final ChatResponse resp = await provider.chat(ChatRequest(
-        systemPrompt: r.system,
-        messages: <ChatMessage>[ChatMessage.user(r.user)],
-        temperature: r.temperature,
-        maxTokens: r.maxTokens,
-        parameters: params,
-      ));
+      final ChatResponse resp = await provider.chat(
+        ChatRequest(
+          model: stepModel,
+          systemPrompt: r.system,
+          messages: <ChatMessage>[ChatMessage.user(r.user)],
+          temperature: r.temperature,
+          maxTokens: r.maxTokens,
+          parameters: params,
+        ),
+      );
       if (!resp.isSuccess) {
         throw StateError(resp.errorMessage ?? '模型调用失败');
       }
@@ -615,8 +659,11 @@ final rwkvCloudSessionLedgerProvider = Provider<RwkvCloudSessionLedger>((ref) {
   return RwkvCloudSessionLedger(
     read: (String key) async =>
         (await kv()).readJson(scope, RwkvCloudSessionLedger.storageKey(key)),
-    write: (String key, String value) async =>
-        (await kv()).writeJson(scope, RwkvCloudSessionLedger.storageKey(key), value),
+    write: (String key, String value) async => (await kv()).writeJson(
+      scope,
+      RwkvCloudSessionLedger.storageKey(key),
+      value,
+    ),
     remove: (String key) async =>
         (await kv()).remove(scope, RwkvCloudSessionLedger.storageKey(key)),
   );
@@ -893,14 +940,20 @@ final promptTemplatesProvider = FutureProvider<PromptTemplateRegistry>(
 
 /// 惰性取模板注册表（未就绪 = 空注册表，不阻塞业务流程）。
 PromptTemplateRegistry _lazyTemplates(Ref ref) {
-  final base = ref.read(promptTemplatesProvider).value ??
+  final base =
+      ref.read(promptTemplatesProvider).value ??
       const PromptTemplateRegistry.empty();
   return ref.read(writingPromptTemplatesProvider).value?.overlay(base) ?? base;
 }
 
-final writingPromptTemplatesProvider = AsyncNotifierProvider<WritingPromptTemplatesNotifier, WritingPromptTemplates>(WritingPromptTemplatesNotifier.new);
+final writingPromptTemplatesProvider =
+    AsyncNotifierProvider<
+      WritingPromptTemplatesNotifier,
+      WritingPromptTemplates
+    >(WritingPromptTemplatesNotifier.new);
 
-class WritingPromptTemplatesNotifier extends AsyncNotifier<WritingPromptTemplates> {
+class WritingPromptTemplatesNotifier
+    extends AsyncNotifier<WritingPromptTemplates> {
   bool _saving = false;
 
   @override
@@ -915,23 +968,36 @@ class WritingPromptTemplatesNotifier extends AsyncNotifier<WritingPromptTemplate
       'Workflow/SubAgentRefine.System': '双代理 · 草稿精修',
     };
     for (final id in kPromptTemplateIds) {
-      if (!id.startsWith('Workflow/') && !id.startsWith('Prerequisite/')) continue;
+      if (!id.startsWith('Workflow/') && !id.startsWith('Prerequisite/'))
+        continue;
       for (final lang in kPromptTemplateLangs) {
         final body = base.getForLang(id, lang);
         if (body == null) continue;
-        stages.add(WritingPromptStage(
-          id: 'Asset/$id/$lang', title: '${titles[id] ?? id} · ${lang == 'zh' ? '中文' : 'English'}',
-          defaultBody: body, asset: true,
-          variables: {
-            for (final match in RegExp(r'\{([A-Za-z]\w*)\}').allMatches(body)) match[1]!: '运行时填入，保留原变量名',
-          },
-        ));
+        stages.add(
+          WritingPromptStage(
+            id: 'Asset/$id/$lang',
+            title: '${titles[id] ?? id} · ${lang == 'zh' ? '中文' : 'English'}',
+            defaultBody: body,
+            asset: true,
+            variables: {
+              for (final match in RegExp(r'\{([A-Za-z]\w*)\}').allMatches(body))
+                match[1]!: '运行时填入，保留原变量名',
+            },
+          ),
+        );
       }
     }
-    return WritingPromptTemplates.load(await ref.watch(keyValueStoreProvider.future), stages);
+    return WritingPromptTemplates.load(
+      await ref.watch(keyValueStoreProvider.future),
+      stages,
+    );
   }
 
-  Future<void> saveStage(String id, List<WritingPromptVariant> items, String active) async {
+  Future<void> saveStage(
+    String id,
+    List<WritingPromptVariant> items,
+    String active,
+  ) async {
     if (_saving) throw StateError('正在保存模板，请稍后重试');
     _saving = true;
     try {
@@ -1040,7 +1106,471 @@ class G1kBookPresetNotifier extends Notifier<G1kBookPreset> {
 
 final g1kBookPresetProvider =
     NotifierProvider<G1kBookPresetNotifier, G1kBookPreset>(
-        G1kBookPresetNotifier.new);
+      G1kBookPresetNotifier.new,
+    );
+
+// ---------------------------------------------------------------------------
+// RWKV State Tuning 配置接口
+//
+// 训练产物（24 个 blocks.N.att.time_state 的 .pth）在此注册、绑定到智能体
+// 角色，并持久化到 KVStore。挂载前必须校验基底模型一致（官方硬约束）；
+// 当前 rwkv_lightning_cuda 无 --state-path，需先合并或换 Runner/Ai00
+// （详见 `ai/rwkv/state_tuning_registry.dart` 顶部说明）。
+// ---------------------------------------------------------------------------
+
+class StateTuningRegistryNotifier extends Notifier<RwkvStateRegistry> {
+  static const String _scope = 'ai_config';
+  static const String _key = 'state_tuning.registry';
+
+  @override
+  RwkvStateRegistry build() => RwkvStateRegistry();
+
+  /// 本机推理引擎上的量化基模 id（`.rwkvq` 文件名去掉扩展名）。
+  ///
+  /// 由 `rwkv_quantize` / `tools/calibration/export_calibrated.py` 产出；
+  /// 改名或重新量化后这里要跟着改（`/v1/models` 可查实际 id）。
+  static const String kLocalEngineModelId =
+      'rwkv-g1m-1b-temp-6629-ctx65536.w8a16';
+
+  /// 本机已训练、随仓库分发的 state 产物（首次启动自动登记，用户可改可删）。
+  ///
+  /// `statePath` 用仓库内相对路径：合并/挂载命令由用户在自己的训练环境里执行，
+  /// 相对路径比写死某台机器的绝对路径更可移植。
+  ///
+  /// `uploadedStateId` 不再写死在这里：引擎重启后它必变，启动时会按
+  /// `statePath` 的文件名从 `/v1/state/list` 自动反查（见
+  /// [RwkvEngineStateIndex]）。用户手动填的值只作为「引擎未同步」时的兜底。
+  static const List<RwkvStateArtifact> knownArtifacts = <RwkvStateArtifact>[
+    RwkvStateArtifact(
+      id: 'st1_prose-v2',
+      target: RwkvStateTarget.novelistProse,
+      statePath: 'rwkv_models/states/1.5b/st1_prose-v2.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st1_prose-v2-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-1 正文写手 v2（150 步）',
+      steps: 150,
+      finalLoss: 2.5,
+      sampleCount: 300,
+      notes: '合并进基底后在端点注册成独立模型，把该模型 id 填进 mergedModelId，'
+          '正文类工艺步骤就会自动改用它。',
+    ),
+    RwkvStateArtifact(
+      id: 'st2_plan-v1',
+      target: RwkvStateTarget.outlinerStruct,
+      statePath: 'rwkv_models/states/1.5b/st2_plan-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st2_plan-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-2 大纲规划 v1（140 步）',
+      steps: 140,
+      finalLoss: 2.25,
+      sampleCount: 280,
+      notes: '主/分卷/章节大纲步骤用它；同样需要合并成独立模型并填 mergedModelId。',
+    ),
+    RwkvStateArtifact(
+      id: 'st3_brief-v1',
+      target: RwkvStateTarget.briefContract,
+      statePath: 'rwkv_models/states/1.5b/st3_brief-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st3_brief-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-3 章节细纲 v1（60 步）',
+      steps: 60,
+      finalLoss: 1.95,
+      sampleCount: 120,
+      notes: '章节细纲与章节命名（8 字段契约行）。',
+    ),
+    RwkvStateArtifact(
+      id: 'st4_patch-v1',
+      target: RwkvStateTarget.copyeditorPatch,
+      statePath: 'rwkv_models/states/1.5b/st4_patch-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st4_patch-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-4 自查补丁 v1（150 步）',
+      steps: 150,
+      finalLoss: 2.32,
+      sampleCount: 300,
+      notes: '润色/返工：只回差异行，不自作主张重写全文。',
+    ),
+    RwkvStateArtifact(
+      id: 'st6_linker-v1',
+      target: RwkvStateTarget.chapterLinker,
+      statePath: 'rwkv_models/states/1.5b/st6_linker-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st6_linker-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-6 跨章续写 v1（100 步）',
+      steps: 100,
+      finalLoss: 2.33,
+      sampleCount: 200,
+      notes: '接住前章结尾并兑现伏笔义务。',
+    ),
+    RwkvStateArtifact(
+      id: 'st7_review-v1',
+      target: RwkvStateTarget.reviewReport,
+      statePath: 'rwkv_models/states/1.5b/st7_review-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-st7_review-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      displayName: 'ST-7 审查反馈 v1（100 步）',
+      steps: 100,
+      finalLoss: 1.59,
+      sampleCount: 200,
+      notes: '审查员/读者：输出问题清单（严重度/位置/建议）。',
+    ),
+    RwkvStateArtifact(
+      id: 'book_world_hehuanzong-v1',
+      target: RwkvStateTarget.bookWorld,
+      statePath: 'rwkv_models/states/1.5b/book_world_hehuanzong-v1.pth',
+      baseModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304',
+      baseModelPath: 'rwkv_models/bases/rwkv7-g1l-1.5b-20261031-ctx34304.pth',
+      mergedModelId: 'rwkv7-g1l-1.5b-book_world_hehuanzong-v1-merged',
+      engineModelId: 'rwkv7-g1l-1.5b-20261031-ctx34304.sb6_w4',
+      // 1.5B（G1l）已退役：底座切到 G1m-1B，旧 state 与新底座不匹配，
+      // 只保留在册（便于回溯），不再参与绑定。
+      enabled: false,
+      bookId: '合欢宗',
+      displayName: 'ST-5 单书设定 · 合欢宗 v1（400 步）',
+      steps: 400,
+      finalLoss: 2.2,
+      sampleCount: 800,
+      notes: '单书世界观+文风（1295 章原文采样 800 段）。bookId 可填书名或项目 id；'
+          '命中后正文/写手优先用它，未命中回落 ST-1（通用手感）。',
+    ),
+
+    // ---- 1B 底座（rwkv-g1m-1b-temp-6629-ctx65536）重训的一代 ----
+    //
+    // 训练工具 `rwkv_state_tune.exe`（C++，BF16 backbone + FP32 state），
+    // 350 步 / ctx 768 / chunk 128 / batch 1 / lr 5e-4 → 5e-5 / warmup 20。
+    // 本轮没有合并进基底（`mergedModelId` 留空），统一走引擎上传路线：
+    // 启动时按 `statePath` 的文件名从 `/v1/state/list` 反查 `state_id`。
+    RwkvStateArtifact(
+      id: 'st1_prose-1b-v1',
+      target: RwkvStateTarget.novelistProse,
+      statePath: 'rwkv_models/states/1b/st1_prose-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st1_prose-1b-v1-01a1e4e6-6275-7e12-bd41-b27fcb354fe7',
+      displayName: 'ST-1 正文写手 · 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 2.275,
+      sampleCount: 1500,
+      notes: '1B 底座重训；巡检 2 段输出通顺，偶发续出对话模板行（引擎侧不影响正文写手）。',
+    ),
+    RwkvStateArtifact(
+      id: 'st2_plan-1b-v1',
+      target: RwkvStateTarget.outlinerStruct,
+      statePath: 'rwkv_models/states/1b/st2_plan-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st2_plan-1b-v1-01a1e4e6-62b5-7b4a-8654-fabee49d3bba',
+      displayName: 'ST-2 大纲规划 · 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 1.449,
+      sampleCount: 69,
+      notes: '1B 底座重训；巡检输出「卷/章 + 核心冲突」大纲结构，复读率 0.016。',
+    ),
+    RwkvStateArtifact(
+      id: 'st3_brief-1b-v1',
+      target: RwkvStateTarget.briefContract,
+      statePath: 'rwkv_models/states/1b/st3_brief-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st3_brief-1b-v1-01a1e4e6-62f4-780b-8cac-cebb1da03d43',
+      displayName: 'ST-3 章节细纲 · 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 0.737,
+      sampleCount: 40,
+      notes: '1B 底座重训；巡检输出【标题】【目录】等字段行，复读率 0.011。',
+    ),
+    RwkvStateArtifact(
+      id: 'st4_patch-1b-v1',
+      target: RwkvStateTarget.copyeditorPatch,
+      statePath: 'rwkv_models/states/1b/st4_patch-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st4_patch-1b-v1-01a1e4e6-633e-7cd0-87a3-bc1e95597e0f',
+      displayName: 'ST-4 自查补丁 · 1B v1（350 步，已废弃）',
+      steps: 350,
+      finalLoss: 2.387,
+      sampleCount: 398,
+      enabled: false,
+      notes: '巡检不合格：输出 4-gram 复读（0.48~0.81）且不成补丁形状。'
+          '根因在数据集本身：st4_patch.jsonl 398 条全是原文散文，'
+          '没有任何「原文→差异行」样本，state 只能学到散文偏置。'
+          '已由 st4_patch-1b-v2 取代，此条仅留档。',
+    ),
+    RwkvStateArtifact(
+      id: 'st4_patch-1b-v2',
+      target: RwkvStateTarget.copyeditorPatch,
+      statePath: 'rwkv_models/states/1b/st4_patch-1b-v2.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      uploadedStateId: 'st4_patch-1b-v2-01a1e4e6-637b-73a5-8de6-f0b16cba481f',
+      engineModelId: kLocalEngineModelId,
+      displayName: 'ST-4 自查补丁 · 1B v2（500 步，重构数据集）',
+      steps: 500,
+      finalLoss: 1.419,
+      sampleCount: 350,
+      notes: '数据集重建：199 条「脏原文→干净原文」对做行级 diff，'
+          '生成 1179 条差异行、按每份 2~4 行合成 350 条样本（首行锚点「修改补丁：」，'
+          '格式「把「旧片段」改为「新片段」」）。'
+          '巡检：复读率 0.00~0.28（v1 为 0.48~0.81），能定位并修掉重复字（说道说道→说道），'
+          '但 1B 下实际输出是「修正后的整段」而非严格差异行 —— 可直接用于润色/返工，'
+          '若要求严格差异行需 SFT/更大底座。',
+    ),
+    RwkvStateArtifact(
+      id: 'st6_linker-1b-v1',
+      target: RwkvStateTarget.chapterLinker,
+      statePath: 'rwkv_models/states/1b/st6_linker-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st6_linker-1b-v1-01a1e4e6-63ba-7384-b753-00a02846fc55',
+      displayName: 'ST-6 跨章续写 · 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 2.152,
+      sampleCount: 199,
+      notes: '1B 底座重训；巡检两段都能接住前章结尾续写，复读率 0.000。',
+    ),
+    RwkvStateArtifact(
+      id: 'st7_review-1b-v1',
+      target: RwkvStateTarget.reviewReport,
+      statePath: 'rwkv_models/states/1b/st7_review-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId: 'st7_review-1b-v1-01a1e4e6-63f9-7c99-bf09-d7bd21067a55',
+      displayName: 'ST-7 审查反馈 · 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 0.553,
+      sampleCount: 200,
+      notes: '1B 底座重训；巡检输出「审查意见：1./2./3.」问题清单，复读率 0.018。',
+    ),
+    RwkvStateArtifact(
+      id: 'book_world_hehuanzong-1b-v1',
+      target: RwkvStateTarget.bookWorld,
+      statePath: 'rwkv_models/states/1b/book_world_hehuanzong-1b-v1.pth',
+      baseModelId: 'rwkv-g1m-1b-temp-6629-ctx65536',
+      baseModelPath: 'rwkv_models/bases/rwkv-g1m-1b-temp-6629-ctx65536.pth',
+      engineModelId: kLocalEngineModelId,
+      uploadedStateId:
+          'book_world_hehuanzong-1b-v1-01a1e4e6-6227-71bc-a7a5-fcba0ea496c2',
+      bookId: '合欢宗',
+      displayName: 'ST-5 单书设定 · 合欢宗 1B v1（350 步）',
+      steps: 350,
+      finalLoss: 1.983,
+      sampleCount: 800,
+      notes: '1B 底座重训；巡检两段都保持合欢宗人物/文风，复读率 0.016。',
+    ),
+  ];
+
+  /// 把随包产物并进注册表。
+  ///
+  /// - 缺失的 id：整条补登记；
+  /// - 已存在但 `mergedModelId` / `uploadedStateId` / `engineModelId` 为空：
+  ///   只补这些字段（其余用户改动一律保留），这样随包产出的挂载信息
+  ///   能自动接上，不必手动改 KVStore。
+  static RwkvStateRegistry withKnownArtifacts(RwkvStateRegistry registry) {
+    final List<RwkvStateArtifact> artifacts =
+        List<RwkvStateArtifact>.of(registry.artifacts);
+    bool changed = false;
+    for (final RwkvStateArtifact known in knownArtifacts) {
+      final int i = artifacts.indexWhere((RwkvStateArtifact a) => a.id == known.id);
+      if (i < 0) {
+        artifacts.add(known);
+        changed = true;
+        continue;
+      }
+      final RwkvStateArtifact current = artifacts[i];
+      final String? merged = current.mergedModelId.trim().isEmpty &&
+              known.mergedModelId.trim().isNotEmpty
+          ? known.mergedModelId
+          : null;
+      final String? uploaded = current.uploadedStateId.trim().isEmpty &&
+              known.uploadedStateId.trim().isNotEmpty
+          ? known.uploadedStateId
+          : null;
+      final String? engine = current.engineModelId.trim().isEmpty &&
+              known.engineModelId.trim().isNotEmpty
+          ? known.engineModelId
+          : null;
+      if (merged != null || uploaded != null || engine != null) {
+        artifacts[i] = current.copyWith(
+          mergedModelId: merged,
+          uploadedStateId: uploaded,
+          engineModelId: engine,
+        );
+        changed = true;
+      }
+    }
+    if (!changed) return registry;
+    return RwkvStateRegistry(
+      artifacts: artifacts,
+      bindings: registry.bindings,
+    );
+  }
+
+  /// 从 KVStore 装入已注册产物与绑定（并在缺失时补登记随包产物）。
+  Future<void> load() async {
+    RwkvStateRegistry registry = RwkvStateRegistry();
+    try {
+      final kv = await ref.read(keyValueStoreProvider.future);
+      final raw = await kv.readJson(_scope, _key);
+      if (raw != null && raw.isNotEmpty) {
+        final parsed = jsonDecode(raw);
+        if (parsed is Map<String, Object?>) {
+          registry = RwkvStateRegistry.fromJson(parsed);
+        }
+      }
+    } on Object catch (e) {
+      ref.read(aiLoggerProvider).warning('读取 State Tuning 注册表失败：$e');
+    }
+    final RwkvStateRegistry merged = withKnownArtifacts(registry);
+    state = merged;
+    if (!identical(merged, registry)) await _save();
+  }
+
+  Future<void> _save() async {
+    try {
+      final kv = await ref.read(keyValueStoreProvider.future);
+      await kv.writeJson(_scope, _key, jsonEncode(state.toJson()));
+    } on Object catch (e) {
+      ref.read(aiLoggerProvider).warning('保存 State Tuning 注册表失败：$e');
+    }
+  }
+
+  /// 注册 / 覆盖一个训练产物。
+  Future<void> upsert(RwkvStateArtifact artifact) async {
+    state.upsert(artifact);
+    state = RwkvStateRegistry(
+      artifacts: state.artifacts,
+      bindings: state.bindings,
+    );
+    await _save();
+  }
+
+  Future<void> remove(String id) async {
+    state.remove(id);
+    state = RwkvStateRegistry(
+      artifacts: state.artifacts,
+      bindings: state.bindings,
+    );
+    await _save();
+  }
+
+  /// 绑定角色 → state。
+  Future<void> bind(RwkvAgentRole role, String stateId) async {
+    state.bind(role, stateId);
+    state = RwkvStateRegistry(
+      artifacts: state.artifacts,
+      bindings: state.bindings,
+    );
+    await _save();
+  }
+
+  Future<void> unbind(RwkvAgentRole role) async {
+    state.unbind(role);
+    state = RwkvStateRegistry(
+      artifacts: state.artifacts,
+      bindings: state.bindings,
+    );
+    await _save();
+  }
+}
+
+final stateTuningRegistryProvider =
+    NotifierProvider<StateTuningRegistryNotifier, RwkvStateRegistry>(
+      StateTuningRegistryNotifier.new,
+    );
+
+/// 「自动化写作每个工艺步骤用 基模 + 对应 state」的解析器。
+///
+/// 每次生成时按**当下的**注册表与 SubAgent 模型重新解析：
+/// 某步骤的 state 已合并成独立模型 → 该步骤走它；否则该步骤回落基模。
+/// 当前基底以双代理配置里的 SubAgent 模型 id 为准（state 必须同款基底）。
+final writingStepStatePlanProvider = Provider<WritingStepStatePlan>((ref) {
+  final agentSettings = ref.watch(dualAgentSettingsProvider);
+  return WritingStepStatePlan(
+    registry: ref.watch(stateTuningRegistryProvider),
+    currentBaseModelId: agentSettings.subAgentModel,
+    plannerModelId: agentSettings.mainAgentModel,
+    // 引擎已上传的 state（文件名 → state_id）：引擎重启后 id 会变，
+    // 所以每次构建计划都取最新索引，而不是依赖产物上写死的 id。
+    engineStates: ref.watch(rwkvEngineStateIndexProvider),
+  );
+});
+
+/// 推理引擎「已上传初始 state」索引（内存态，不持久化）。
+///
+/// 启动时（以及用户在岗位配置页点「同步引擎」时）查询一次
+/// `GET <base>/v1/state/list`，把 `original_filename → state_id` 记下来。
+class RwkvEngineStateIndexNotifier extends Notifier<RwkvEngineStateIndex> {
+  @override
+  RwkvEngineStateIndex build() => const RwkvEngineStateIndex();
+
+  /// 按候选 base URL 依次查询，第一个成功的生效。
+  Future<void> refreshAll(Iterable<String> baseUrls) async {
+    for (final String raw in baseUrls) {
+      final String base = raw.trim().replaceAll(RegExp(r'/+$'), '');
+      if (base.isEmpty) continue;
+      final Uri? uri = Uri.tryParse('$base/state/list');
+      if (uri == null) continue;
+      try {
+        final http.Response resp = await http
+            .get(uri, headers: const <String, String>{'Accept': 'application/json'})
+            .timeout(const Duration(seconds: 5));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
+        final RwkvEngineStateIndex index = RwkvEngineStateIndex.parse(
+          utf8.decode(resp.bodyBytes),
+          source: base,
+        );
+        if (index.fetched) {
+          state = index;
+          return;
+        }
+      } on Object {
+        // 引擎没起 / 地址不对：继续试下一个候选。
+      }
+    }
+    state = const RwkvEngineStateIndex();
+  }
+}
+
+final rwkvEngineStateIndexProvider =
+    NotifierProvider<RwkvEngineStateIndexNotifier, RwkvEngineStateIndex>(
+      RwkvEngineStateIndexNotifier.new,
+    );
 
 class BookReviewSettingsNotifier extends Notifier<BookReviewSettings> {
   @override
@@ -1062,8 +1592,8 @@ class BookReviewSettingsNotifier extends Notifier<BookReviewSettings> {
 
 final bookReviewSettingsProvider =
     NotifierProvider<BookReviewSettingsNotifier, BookReviewSettings>(
-  BookReviewSettingsNotifier.new,
-);
+      BookReviewSettingsNotifier.new,
+    );
 
 /// 拆书规则集库（全局一份）—— 启动时载入，UI 与整书生成都读它。
 ///
@@ -1113,8 +1643,8 @@ class StyleRuleLibraryNotifier extends Notifier<StyleRuleLibrary> {
 
 final styleRuleLibraryProvider =
     NotifierProvider<StyleRuleLibraryNotifier, StyleRuleLibrary>(
-  StyleRuleLibraryNotifier.new,
-);
+      StyleRuleLibraryNotifier.new,
+    );
 
 /// 双 Agent 的提供者表：先取 ModelManager 注册表，再用**全部内置单例**兜底。
 ///
@@ -1130,6 +1660,21 @@ final agentEndpointRegistryProvider = Provider<AgentEndpointRegistry>((ref) {
   final registry = AgentEndpointRegistry();
   ref.onDispose(registry.dispose);
   return registry;
+});
+
+/// 本机（127.0.0.1 / localhost）推理端点，用于同步「引擎已上传的 state」。
+///
+/// 只认本地回环地址：云端端点不会有我们的 `/v1/state/list`。
+final localEngineBaseUrlsProvider = Provider<List<String>>((ref) {
+  final AgentEndpointRegistry registry = ref.watch(agentEndpointRegistryProvider);
+  final Set<String> out = <String>{};
+  for (final RwkvCloudEndpointProfile profile in registry.profiles.values) {
+    final String base = profile.baseUrl.trim();
+    if (base.isEmpty) continue;
+    final String host = Uri.tryParse(base)?.host ?? '';
+    if (host == '127.0.0.1' || host == 'localhost') out.add(base);
+  }
+  return out.toList(growable: false);
 });
 
 Map<String, IModelProvider> _dualAgentProviders(Ref ref) {
@@ -1177,13 +1722,19 @@ IModelProvider? resolveExactProvider(Ref ref, String name) {
 
 IModelProvider? resolveAgentProvider(Ref ref, {bool main = false}) {
   final s = ref.read(dualAgentSettingsProvider);
-  final p = resolveExactProvider(ref, main ? s.mainAgentProvider : s.subAgentProvider);
-  return p == null ? null : BoundModelProvider(p, main ? s.mainAgentModel : s.subAgentModel);
+  final p = resolveExactProvider(
+    ref,
+    main ? s.mainAgentProvider : s.subAgentProvider,
+  );
+  return p == null
+      ? null
+      : BoundModelProvider(p, main ? s.mainAgentModel : s.subAgentModel);
 }
 
-final agentProviderResolverProvider = Provider<IModelProvider? Function(String)>((ref) {
-  return (name) => resolveExactProvider(ref, name);
-});
+final agentProviderResolverProvider =
+    Provider<IModelProvider? Function(String)>((ref) {
+      return (name) => resolveExactProvider(ref, name);
+    });
 
 /// MainAgent / SubAgent 双 Agent 写作流单例。
 final dualAgentWorkflowProvider = Provider<DualAgentWorkflowService>((ref) {
@@ -1285,14 +1836,16 @@ final writingArchiveServiceProvider = Provider<WritingArchiveService>((ref) {
   );
 });
 
-final projectArchiveAuditServiceProvider = Provider<ProjectArchiveAuditService>((ref) {
-  return ProjectArchiveAuditService(
-    projects: ref.watch(projectRepositoryProvider),
-    volumes: ref.watch(volumeRepositoryProvider),
-    chapters: ref.watch(chapterRepositoryProvider),
-    archive: ref.watch(projectContentArchiveProvider),
-  );
-});
+final projectArchiveAuditServiceProvider = Provider<ProjectArchiveAuditService>(
+  (ref) {
+    return ProjectArchiveAuditService(
+      projects: ref.watch(projectRepositoryProvider),
+      volumes: ref.watch(volumeRepositoryProvider),
+      chapters: ref.watch(chapterRepositoryProvider),
+      archive: ref.watch(projectContentArchiveProvider),
+    );
+  },
+);
 
 /// Every database module uses the same structured Agent contract. The model
 /// binding is role-local and never mutates a provider's global default model.
@@ -1306,7 +1859,9 @@ final agentModuleRouterProvider = Provider<AgentModuleRouter>((ref) {
   );
 });
 
-final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref) {
+final bookContentReviewServiceProvider = Provider<BookContentReviewService>((
+  ref,
+) {
   final BookReviewSettings settings = ref.watch(bookReviewSettingsProvider);
   IModelProvider? reviewProvider() {
     final G1kBookPreset preset = ref.read(g1kBookPresetProvider);
@@ -1320,17 +1875,24 @@ final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref
   IModelProvider? writingProvider() {
     final G1kBookPreset preset = ref.read(g1kBookPresetProvider);
     if (!preset.enabled) return resolveAgentProvider(ref, main: false);
-    final IModelProvider? base = resolveExactProvider(
-      ref,
-      AgentEndpointRegistry.key(preset.writerEndpointId),
-    ) ?? resolveAgentProvider(ref, main: false);
+    final IModelProvider? base =
+        resolveExactProvider(
+          ref,
+          AgentEndpointRegistry.key(preset.writerEndpointId),
+        ) ??
+        resolveAgentProvider(ref, main: false);
     return base == null ? null : BoundModelProvider(base, preset.writerModel);
   }
+
   IModelProvider? seniorProvider() {
-    final IModelProvider? base = resolveExactProvider(ref, settings.seniorProvider);
+    final IModelProvider? base = resolveExactProvider(
+      ref,
+      settings.seniorProvider,
+    );
     if (base == null || settings.seniorModel.trim().isEmpty) return base;
     return BoundModelProvider(base, settings.seniorModel);
   }
+
   return BookContentReviewService(
     promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
     chapters: ref.watch(chapterRepositoryProvider),
@@ -1338,6 +1900,20 @@ final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref
     reviewer: reviewProvider,
     seniorReviewer: seniorProvider,
     writer: writingProvider,
+    // 审查员/读者/修订写手按各自角色取「基模 + state」；无对应 state 时返回空串。
+    stateModelFor: (RwkvAgentRole role) {
+      final RoleStateBinding b = ref
+          .read(writingStepStatePlanProvider)
+          .resolveForRole(role);
+      return b.applied ? b.requestModel : '';
+    },
+    // 新推理引擎路线：角色对应的初始 state id（空 = 不带）。
+    stateIdFor: (RwkvAgentRole role) {
+      final RoleStateBinding b = ref
+          .read(writingStepStatePlanProvider)
+          .resolveForRole(role);
+      return b.applied ? b.engineStateId : '';
+    },
     guestReaders: () => settings.guestReaders,
     guestProvider: (GuestReaderProfile profile) {
       final IModelProvider? base = resolveExactProvider(ref, profile.provider);
@@ -1348,7 +1924,9 @@ final bookContentReviewServiceProvider = Provider<BookContentReviewService>((ref
       final ProjectContextData context = await ref
           .read(projectContextAssemblerProvider)
           .build(projectId);
-      return context.promptSummary.isEmpty ? chapter.summary ?? '' : context.promptSummary;
+      return context.promptSummary.isEmpty
+          ? chapter.summary ?? ''
+          : context.promptSummary;
     },
     // 功能 C：审查/审核通过（13B 认可）后自动同步人物管理与世界观子项。
     // 此前该路径未挂钩子 —— 审查跑完正文回写了，设定档案却纹丝不动。
@@ -1362,31 +1940,27 @@ final multiAgentBookGenerationServiceProvider =
       final agentSettings = ref.watch(dualAgentSettingsProvider);
       return MultiAgentBookGenerationService(
         promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
+        // 自动化写作的每个工艺步骤按自己的 state 绑定取模型（未合并的 state 自动回落基模）。
+        stepStatePlan: () => ref.read(writingStepStatePlanProvider),
         projects: ref.watch(projectRepositoryProvider),
         plots: ref.watch(plotRepositoryProvider),
         volumes: ref.watch(volumeRepositoryProvider),
         chapters: ref.watch(chapterRepositoryProvider),
         // G1K 专属写书预设只作用于本服务，其余入口维持原双代理设置。
-        writingProvider: () => resolveExactProvider(
-          ref,
-          g1k.enabled
-              ? AgentEndpointRegistry.key(g1k.writerEndpointId)
-              : agentSettings.subAgentProvider,
-        ) ?? (g1k.enabled
-            ? resolveExactProvider(ref, 'RWKV Cloud')
-            : null),
+        writingProvider: () =>
+            resolveExactProvider(
+              ref,
+              g1k.enabled
+                  ? AgentEndpointRegistry.key(g1k.writerEndpointId)
+                  : agentSettings.subAgentProvider,
+            ) ??
+            (g1k.enabled ? resolveExactProvider(ref, 'RWKV Cloud') : null),
         planningProvider: () => resolveExactProvider(
           ref,
-          g1k.enabled
-              ? 'RWKV Cloud'
-              : agentSettings.mainAgentProvider,
+          g1k.enabled ? 'RWKV Cloud' : agentSettings.mainAgentProvider,
         ),
-        mainModel: g1k.enabled
-            ? g1k.mainModel
-            : agentSettings.mainAgentModel,
-        subModel: g1k.enabled
-            ? g1k.writerModel
-            : agentSettings.subAgentModel,
+        mainModel: g1k.enabled ? g1k.mainModel : agentSettings.mainAgentModel,
+        subModel: g1k.enabled ? g1k.writerModel : agentSettings.subAgentModel,
         postProcess: ref.watch(chapterPostProcessServiceProvider),
         // 团队 state 分组与健康页快照共享同一实例 → 运行期可见。
         stateManager: ref.watch(agentStateManagerProvider),
@@ -1467,10 +2041,22 @@ final chapterPostProcessServiceProvider = Provider<ChapterPostProcessService>((
     texts: ref.watch(aiTextSourceProvider),
   );
   // 功能 C 二级：AI 状态抽取（默认关，开关见上方卡片）
+  //
+  // 该步骤现在有专用 state（ST-8 设定抽取）：把 `WritingCraftStep.stateUpdate`
+  // 解析出的引擎 `state_id` 带上，让 3B 只输出「类别|名称|字段|一句话变化」登记行。
+  // 未注册 / 未上传 / 基底不匹配时 `applied=false`，照旧走基模（不阻塞抽取）。
   final ModuleStateService aiState = ModuleStateService(
     promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
     db: ref.watch(databaseProvider),
-    provider: () => resolveAgentProvider(ref, main: true),
+    provider: () {
+      final IModelProvider? base = resolveAgentProvider(ref, main: true);
+      if (base == null) return null;
+      final StepStateBinding binding = ref
+          .read(writingStepStatePlanProvider)
+          .resolve(WritingCraftStep.stateUpdate);
+      if (!binding.applied || binding.engineStateId.isEmpty) return base;
+      return BoundModelProvider(base, '', stateId: binding.engineStateId);
+    },
   );
   post.aiStage = aiState.extractAndApply;
   return post;
@@ -1504,17 +2090,18 @@ final chapterRewriteServiceProvider = Provider<ChapterRewriteService>((ref) {
 /// 抽取负责「这一章发生了什么变化」（按章、增量、写进 `history` 流水），
 /// 归纳负责「到这一卷为止，这个角色/势力/设定是什么样」（按卷、收敛、写进
 /// 结构化档案字段）。前者是证据链，后者是档案。
-final entityProfileSynthesizerProvider =
-    Provider<EntityProfileSynthesizer>((ref) {
-      return EntityProfileSynthesizer(
-        db: ref.watch(databaseProvider),
-        promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
-        texts: ref.watch(aiTextSourceProvider),
-        // 与设定抽取同源（主 Agent / 7.2B）：归纳是「规划级」任务，
-        // 而且这样档案口径与设定抽取口径一致。
-        provider: () => resolveAgentProvider(ref, main: true),
-      );
-    });
+final entityProfileSynthesizerProvider = Provider<EntityProfileSynthesizer>((
+  ref,
+) {
+  return EntityProfileSynthesizer(
+    db: ref.watch(databaseProvider),
+    promptTemplates: ref.watch(writingPromptTemplatesProvider).value,
+    texts: ref.watch(aiTextSourceProvider),
+    // 与设定抽取同源（主 Agent / 7.2B）：归纳是「规划级」任务，
+    // 而且这样档案口径与设定抽取口径一致。
+    provider: () => resolveAgentProvider(ref, main: true),
+  );
+});
 
 /// 文风规则集存储 —— 拆书产物是**可复用素材**，全局一份，按项目标记启用哪一个。
 ///

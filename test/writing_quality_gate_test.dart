@@ -97,7 +97,7 @@ class _ScriptedChat {
         _segRound++;
         return _segText(1 + _segRound * 20);
       }
-      if (user.contains('接着上文继续写')) {
+      if (user.contains('紧接上文继续写')) {
         _segRound++;
         // 每轮返回不同的 900 字文本（复读检测会因此判定为健康）
         return _segRound <= 1 ? segmentNext : _segText(11 + _segRound * 20);

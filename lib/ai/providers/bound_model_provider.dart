@@ -2,10 +2,16 @@ import '../models/chat.dart';
 import '../models/provider.dart';
 
 /// Binds a role's model without mutating the shared platform configuration.
+///
+/// [stateId] 非空时给每次请求都带上 `state_id` —— `rwkv_lightning_cuda` 会从
+/// 这个**已上传的初始 state** 接着算（设定抽取等单步骤专用 state 就走这条路）。
 class BoundModelProvider implements IModelProvider {
-  BoundModelProvider(this.inner, this.model);
+  BoundModelProvider(this.inner, this.model, {this.stateId = ''});
   final IModelProvider inner;
   final String model;
+
+  /// 引擎侧已上传的初始 state id（空 = 不携带）。
+  final String stateId;
 
   ChatRequest _bind(ChatRequest r) => ChatRequest(
     model: r.model.isEmpty ? model : r.model,
@@ -14,7 +20,10 @@ class BoundModelProvider implements IModelProvider {
     temperature: r.temperature,
     maxTokens: r.maxTokens,
     stream: r.stream,
-    parameters: Map.of(r.parameters),
+    parameters: <String, dynamic>{
+      ...Map.of(r.parameters),
+      if (stateId.isNotEmpty) 'state_id': stateId,
+    },
   );
 
   @override
