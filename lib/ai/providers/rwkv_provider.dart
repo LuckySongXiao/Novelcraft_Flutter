@@ -6,7 +6,7 @@
 // 关键增强（相对于阶段二的空壳 extends）：
 // 1. **RwkvEngine 内嵌**：不再 extends `OpenAICompatibleProvider`；内部组合
 //    一个 [RwkvEngine] 负责真正的 State 管理、会话隔离、并发限流、
-//    本地 server 进程桥接、GGUF 模型自动扫描。
+//    本地 server 进程桥接、本地权重自动扫描。
 // 2. **配置签名保持 3 参数**：`{baseUrl, defaultModel, defaultMaxTokens}`
 //    与阶段三修复的 ai_configuration_page.dart#L202-L206 精确对齐；
 //    绝不随意加 named 参数以免 analyze 爆。
@@ -58,15 +58,15 @@ class RwkvConfiguration implements IModelConfiguration {
   /// 本地模型文件绝对路径（可空；若空则扫描 `rwkv_models/` 找最大的）。
   final String? localModelPath;
 
-  /// 本地 server 的引擎变体（可空 = 默认 llama.cpp 路线）。
+  /// 本地引擎档位（`cuda12` / `cuda13`）。
   ///
-  /// 选 `cuda12` / `cuda13` 表示走**内置引擎 rwkv_lightning_cuda**：
-  /// 此时 `localModelPath` 必须是 `.pth` / `.rwkvq`（不能是 GGUF），
+  /// 本项目**唯一**的本地推理引擎是内置的 **rwkv_lightning_cuda**：
+  /// `localModelPath` 必须是 `.pth` / `.rwkvq`（不能是 GGUF），
   /// 且必须额外提供 [localVocabPath]（PITFALLS §27.1）。
-  final OfficialServerVariant? localServerVariant;
+  final OfficialServerVariant localServerVariant;
 
   /// 内置引擎**强制外置**的词表路径（`rwkv_vocab_v20230424.txt`）。
-  /// llama.cpp 路线不需要；`rwkv_lightning_cuda` 缺它必秒退（PITFALLS §27.1）。
+  /// `rwkv_lightning_cuda` 缺它必秒退（PITFALLS §27.1）。
   final String? localVocabPath;
 
   @override
@@ -79,7 +79,7 @@ class RwkvConfiguration implements IModelConfiguration {
     this.engineConfig,
     this.localExecutable,
     this.localModelPath,
-    this.localServerVariant,
+    this.localServerVariant = OfficialServerVariant.cuda13,
     this.localVocabPath,
   });
 
@@ -101,7 +101,7 @@ class RwkvConfiguration implements IModelConfiguration {
         'engineConfig': engineConfig?.toMap(),
         'localExecutable': localExecutable,
         'localModelPath': localModelPath,
-        'localServerVariant': localServerVariant?.name,
+        'localServerVariant': localServerVariant.name,
         'localVocabPath': localVocabPath,
       };
 
@@ -120,11 +120,12 @@ class RwkvConfiguration implements IModelConfiguration {
         localModelPath: map['localModelPath'] as String?,
         localServerVariant: (() {
           final Object? v = map['localServerVariant'];
-          if (v is! String || v.isEmpty) return null;
-          for (final OfficialServerVariant e in OfficialServerVariant.values) {
-            if (e.name == v) return e;
+          if (v is String && v.isNotEmpty) {
+            for (final OfficialServerVariant e in OfficialServerVariant.values) {
+              if (e.name == v) return e;
+            }
           }
-          return null;
+          return OfficialServerVariant.cuda13;
         })(),
         localVocabPath: map['localVocabPath'] as String?,
       );
@@ -181,14 +182,19 @@ class RwkvProvider implements IModelProvider {
       _connectionChangedController =
       StreamController<ConnectionStatusChangedEventArgs>.broadcast();
 
-  /// 构造 RWKV 提供者。
+  /// [globalConcurrency] 是客户端侧的保守并发闸（默认 16）。
+  ///
+  /// 唯一引擎 `rwkv_lightning_cuda` 的服务端 admission 队列实测可扛 100+；
+  /// 早期这里写死 4，直接把多智能体 9 写手的并行压成 4，是「并发上不去」
+  /// 的主要客户端原因之一。真正的硬上限仍在引擎配置
+  /// [RwkvEngineConfig.maxConcurrentSessions]。
   RwkvProvider({
     this.registeredProviderName = 'RWKV',
     http.Client? client,
     Logger? logger,
     RwkvEngine? engine,
     RwkvOfficialResourcesBridge? officialResources,
-    int globalConcurrency = 4,
+    int globalConcurrency = 16,
   })  : _httpClient = client ?? http.Client(),
         _logger = logger ?? Logger('RwkvProvider.$registeredProviderName'),
         _globalSemaphore = Semaphore(globalConcurrency) {
@@ -290,7 +296,7 @@ class RwkvProvider implements IModelProvider {
     }
   }
 
-  /// 扫描本地 `rwkv_models/` 下的 GGUF 模型列表（UI 可选下拉）。
+  /// 扫描本地 `rwkv_models/` 下的 `.pth` / `.rwkvq` 权重列表（UI 可选下拉）。
   Future<List<RwkvLocalModel>> listLocalModels() => _engine.scanLocalModels();
 
   /// 引擎级并发上限（P4-26 健康面板用）。
@@ -308,42 +314,14 @@ class RwkvProvider implements IModelProvider {
   /// 本地 server 当前是否在运行（探测成功并保持 alive 后为 true）。
   bool get localServerRunning => _engine.localServerRunning;
 
-  /// 查询 llama.cpp 官方最新 Windows 预编译包信息（返回 tag、大小、下载 URL）。
-  Future<RwkvServerBuildInfo> fetchOfficialServerBuild({
-    OfficialServerVariant variant = OfficialServerVariant.vulkan,
-    void Function(RwkvDownloadProgress)? onProgress,
-  }) =>
-      _officialResources.fetchLatestServerBuild(
-        variant: variant,
-        onProgress: onProgress,
-      );
+  // ---------------------------------------------------------------------------
+  // 内置推理引擎：rwkv_lightning_cuda（albatross）—— 本项目唯一推理引擎
+  //
+  // 只吃 .pth / .rwkvq + 强制外置词表。
+  // 官方 release 带 .sha256，安装时强校验（PITFALLS §30）。
+  // ---------------------------------------------------------------------------
 
-  /// 安装官方 llama-server.exe 到 `rwkv_models/_tools/` 下；
-  /// 返回安装好的可执行文件绝对路径，方便写入 RwkvConfiguration.localExecutable。
-  Future<String> installOfficialLlamaServer({
-    OfficialServerVariant variant = OfficialServerVariant.vulkan,
-    RwkvServerBuildInfo? buildInfo,
-    String? installDir,
-    void Function(RwkvDownloadProgress)? onProgress,
-    void Function(RwkvCancelHandle handle)? onHandleReady,
-  }) =>
-      _officialResources.installLlamaServer(
-        variant: variant,
-        buildInfo: buildInfo,
-        installDir: installDir,
-        onProgress: onProgress,
-        onHandleReady: onHandleReady,
-      );
-
-  /// 获取 RWKV 官方 HuggingFace 仓库内所有可用 GGUF 模型（带量化级别、体积、URL）。
-  Future<List<RwkvOfficialModel>> listOfficialModels({
-    void Function(RwkvDownloadProgress)? onProgress,
-  }) =>
-      _officialResources.listOfficialRwkvModels(
-        onProgress: onProgress,
-      );
-
-  /// 下载一个官方原生 RWKV GGUF 模型到 `rwkv_models/` 下；
+  /// 下载一个官方 `.pth` / `.rwkvq` 权重到 `rwkv_models/` 下；
   /// 支持断点续传；下载完返回文件绝对路径。
   Future<String> downloadOfficialModel(
     RwkvOfficialModel model, {
@@ -357,13 +335,6 @@ class RwkvProvider implements IModelProvider {
         onProgress: onProgress,
         onHandleReady: onHandleReady,
       );
-
-  // ---------------------------------------------------------------------------
-  // 内置推理引擎：rwkv_lightning_cuda（albatross）
-  //
-  // 与上面的 llama.cpp 路线完全独立：只吃 .pth / .rwkvq + 强制外置词表。
-  // 官方 release 带 .sha256，安装时强校验（PITFALLS §30）。
-  // ---------------------------------------------------------------------------
 
   /// 查询内置引擎官方最新预编译包（Windows/Linux × CUDA 12.9 / 13.2）。
   Future<RwkvLightningRelease> fetchBuiltInEngineRelease({
@@ -463,33 +434,21 @@ class RwkvProvider implements IModelProvider {
 
   /// 尝试自动拉起本地 server（需要配置了 localExecutable 或扫描到模型）。
   ///
-  /// [serverVariant] / [vocabPath] 用于内置引擎 `rwkv_lightning_cuda`：
-  /// 传 `cuda12` / `cuda13` 时走它的 CLI（`--model-path` / `--vocab-path`），
+  /// 唯一引擎 `rwkv_lightning_cuda` 走 `--model-path` / `--vocab-path`，
   /// 并在启动前做「GGUF 混入」「词表缺失」两项硬拦（PITFALLS §27.1）。
   Future<bool> launchLocalServer({
     String? overrideExecutable,
     String? overrideModelPath,
     String? overrideVocabPath,
-    OfficialServerVariant? serverVariant,
     int port = 8000,
     List<String> extraArgs = const [],
   }) async {
     final exec = overrideExecutable ?? _configuration.localExecutable;
     if (exec == null || exec.isEmpty) return false;
-    final variant = serverVariant ?? _configuration.localServerVariant;
-    final bool isBuiltInEngine =
-        variant == OfficialServerVariant.cuda12 ||
-            variant == OfficialServerVariant.cuda13;
     String? model = overrideModelPath ?? _configuration.localModelPath;
     if (model == null || model.isEmpty) {
-      // 内置引擎走 .pth/.rwkvq；llama.cpp 走 .gguf —— 两者扫描口径不同
       final models = await listLocalModels();
-      final matching = models.where((RwkvLocalModel m) =>
-          isBuiltInEngine
-              ? !m.filePath.toLowerCase().endsWith('.gguf')
-              : m.filePath.toLowerCase().endsWith('.gguf'));
-      final pick = matching.isNotEmpty ? matching : models;
-      if (pick.isNotEmpty) model = pick.first.filePath;
+      if (models.isNotEmpty) model = models.first.filePath;
     }
     if (model == null) return false;
     return _engine.ensureLocalServer(
@@ -497,7 +456,6 @@ class RwkvProvider implements IModelProvider {
       modelFilePath: model,
       port: port,
       extraArgs: extraArgs,
-      serverVariant: variant,
       vocabPath: overrideVocabPath ?? _configuration.localVocabPath,
     );
   }
@@ -574,7 +532,7 @@ class RwkvProvider implements IModelProvider {
     final startTime = DateTime.now();
     final base = _configuration.baseUrl.trim().replaceAll(RegExp(r'/$'), '');
     try {
-      // 先探 /health，再探 /v1/models，兼容 llama.cpp / rwkv.cpp server。
+      // 依次探基础地址 + `/openai/v1` + `/v1` 三种前缀，兼容不同反代配置。
       String resolvedBase = base;
       for (final suffix in const ['', '/openai/v1', '/v1']) {
         final probe = '$base$suffix/models';

@@ -1,21 +1,22 @@
 // 多智能体协同写书 —— 用户填定向向导（书名/作者/分卷数/每卷章数/并发），
-// 按三级大纲 + 固定编制章节写作团队编排：
+// 按三级大纲 + 逐章串行管线编排：
+//   主线大纲（串行）→ 分卷大纲（并行）→ 章节大纲（并行）→
+//   每章一条「主笔分段串行」管线（章内严格串行、章间并行）→ 润色/设定抽取。
 //
-//   ① 主智能体（规划组组长）规划【主线大纲】
-//   ② 规划组写手按主线大纲并行规划各【分卷大纲】（空结果自动重试，杜绝空卷）
-//   ③ 规划组写手继续并行规划各【章节大纲】
-//   ④ 每一章由固定编制团队完成：1 名组长 + 9 名偏向写手（强制 10 人，用户不可改）：
-//        · 组长结合主线/分卷/本章大纲，把本章切分为前后衔接的段落任务，
-//          按 9 位写手的偏向参数派活（打斗/聊天/搭讪/耍流氓/安抚人心/
-//          环境景物/心理刻画/悬疑伏笔/诙谐幽默）；
-//        · 写手并行成稿（各自独享 state，互不串号）；
-//        · 组长逐段验收：不合格段打回对应写手返工一轮，仍不合格由组长补写；
-//        · 组长拼接全部段落 → 润色去重 → 统一排版 → 产出整章正文落库；
-//        · 验收通过后生成章节档案（时间范围+主题任务+得失总结+规避措施），
-//          并按固定模板接口把待更新项分派给 9 位写手更新人物/世界观。
+//   ① 主线大纲：规划 provider 单链串行产出全书骨架
+//   ② 分卷大纲：规划组按主线大纲并行规划（空结果自动重试，杜绝空卷）
+//   ③ 章节大纲：规划组继续并行规划各章
+//   ④ 章节正文：每章一条「主笔分段串行」管线
+//        · 章内严格串行：章纲 → 2200 字/段正文（只带上一段尾部 300 字）→ 润色定稿
+//        · 章与章之间并行：每章独立 state 链，互不串号
+//        · 定稿后补一次设定/履历抽取，驱动人物管理与世界观更新
 //
-// 并发语义：并发 N = N 个章节团队并行写 N 章（每队固定 1 组长 + 9 写手）；
-// 模型调用受全局在途闸（32）保护，超时尊重 AI 配置页的 timeoutSeconds。
+// 每个工艺步骤自动解析「基模 + 该岗位的 state」：大纲→outlinerStruct、
+// 正文→novelistProse、润色/返工→copyeditorPatch、设定抽取→stateUpdates；
+// 未注册 / 基底不匹配的步骤只回落该步骤到基模，绝不影响其它步骤。
+//
+// 并发语义：并发 N = N 条章节管线并行（每章同一时刻只有 1 个请求在飞）；
+// 模型调用受全局在途闸保护，超时尊重 AI 配置页的 timeoutSeconds。
 //
 // 所有编排只依赖可注入的 [AgentChatExecutor]（生产环境由 writingProvider 构建，
 // 测试注入假执行器）；纯解析逻辑（parseSectionPlan / parseAcceptanceReport /
@@ -26,11 +27,13 @@ import 'dart:async';
 import 'writing_prompt_templates.dart';
 import 'dart:convert';
 import '../../ai/utils/chapter_title.dart';
+import '../../ai/utils/entity_update_text.dart' show pipeRowCells;
 import '../../ai/utils/fiction_quality.dart';
 import '../../ai/utils/foreshadow_ledger.dart';
 import '../../ai/utils/repetition_guard.dart';
 
 import 'package:drift/drift.dart' show Value;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
 
@@ -115,6 +118,14 @@ typedef TeamUpdatesDispatcher =
       writerChat,
     });
 
+/// 按章节顺序回放履历：专用 state 岗位产出的登记行 → 直接落库。
+typedef ArchiveHistoryApplier =
+    Future<List<String>> Function({
+      required String projectId,
+      required List<Map<String, Object?>> items,
+      required String chapterLabel,
+    });
+
 /// 章节写作阶段（矩阵化实时进度展示用）。
 enum MultiAgentChapterPhase {
   queued, // 排队等待团队
@@ -190,12 +201,15 @@ const int kSoloBudgetTokens = 3600;
 /// 依据：7.2B 单次输出方差极大（实测同提示词 156~2937 字），**择优是
 /// 方差问题的标准解**；服务端实测可扛 169 并发（`/v1/server/status`
 /// `available_bsz`），App 全局在途闸 32，所以并发几乎不增加墙钟时间。
-/// 每轮并发的续写候选数。
+/// 每轮并发的续写候选数（默认值；单章可按 [MultiAgentBookConfig.beamWidth] 覆盖）。
 ///
 /// ⚠ 这些候选是 `Future.wait` **并发**发起的，因此一律走**无状态链路**
 /// （`_AgentChannel.send(isolated: true)`）—— 共用 lead 的 state 会话会让候选
 /// 之间互相污染，并触发台账串行化白给并发。详见 [_writeChapterBeam]。
-const int kBeamWidth = 5;
+///
+/// 2026-11-18 起默认 5 → 3：本地单卡 3B 实测「每轮 5 份」的墙钟收益抵不上
+/// 5 倍生成 token（利用率约 20%），且 5 份前缀要重复 prefill 5 次。
+const int kBeamWidth = 3;
 
 /// 每个候选段的目标字数：**刻意取短**（600~900 字远离退化区），
 /// 靠轮数堆出整章长度。
@@ -245,7 +259,7 @@ class MultiAgentBookConfig {
   /// 固定编制 10（1 组长 + 9 写手），用户不可再配置（历史字段保留兼容）。
   final int subAgentCount;
 
-  /// 并行章节数（N = N 个章节团队并行写 N 章）。
+  /// 并行章节管线数（每章 1 条串行管线；章与章之间并行）。
   final int concurrency;
 
   /// 定稿质量闸：整章正文字数低于该值不得标记「已完成」，按草稿保存。
@@ -255,8 +269,14 @@ class MultiAgentBookConfig {
   /// 仍超限则按草稿保存 —— 专治 RWKV7-G1J 长文整段复读。
   final double maxRepeatRatio;
 
-  /// 写作工艺：单笔直书 / 主笔分段串行（推荐）/ 组长+9 写手（旧工艺）。
+  /// 写作工艺：单笔直书 / 主笔分段串行（默认）/ 组长+9 写手（旧工艺）。
   final WritingCraft craft;
+
+  /// 续写优选的每轮候选数（仅 [WritingCraft.beam] 生效；1 = 严格串行）。
+  ///
+  /// 默认 3：本地单卡下单轮 5 份的 token 成本约为 3 份的 1.7 倍，而择优收益
+  /// 在 3 份时已基本吃满（见 [kBeamWidth] 注释）。
+  final int beamWidth;
 
   /// 本次生成使用的**拆书文风规则集 id**（空 = 不注入文风约束）。
   ///
@@ -278,7 +298,8 @@ class MultiAgentBookConfig {
     //   4200 目标 / 3200 下限后，正文仍是 3000+ 字的完整章节。）
     this.minFinalWords = 3200,
     this.maxRepeatRatio = 0.5,
-    this.craft = WritingCraft.beam,
+    this.craft = WritingCraft.duo,
+    this.beamWidth = kBeamWidth,
     this.styleRuleSetId = '',
   });
 
@@ -314,13 +335,14 @@ class MultiAgentBookConfig {
         // 固定编制：任何输入都强制 1 组长 + 9 写手（修复「单章节分配超过
         // 十个智能体」——此前允许钳制到 32）。
         subAgentCount: kChapterTeamSize,
-        // 并发语义（2026-09-29 用户实测后修订）：并发 N = N 个章节团队并行写
-        // N 章（每队固定 1 组长 + 9 写手）。范围 1~9999；实际并行道数还会被
-        // 章节数收口，模型调用受全局在途闸（32）保护。
+        // 并发语义：并发 N = N 条章节管线并行（每章内严格串行，同一时刻只有
+        // 1 个请求在飞）。范围 1~9999；实际并行道数还会被章节数收口，
+        // 模型调用受全局在途闸保护。
         concurrency: concurrency.clamp(1, 9999),
         minFinalWords: minFinalWords.clamp(200, 20000),
         maxRepeatRatio: maxRepeatRatio.clamp(0.1, 0.95),
         craft: craft,
+        beamWidth: beamWidth.clamp(1, 8),
         styleRuleSetId: styleRuleSetId.trim(),
       ),
     );
@@ -531,6 +553,7 @@ class MultiAgentBookGenerationService {
     this.subModel = '',
     this.archiveHook,
     this.updateDispatch,
+    this.archiveHistoryApplier,
     this.exportService,
     this.profileSynthesizer,
     this.styleRuleResolver,
@@ -692,6 +715,9 @@ class MultiAgentBookGenerationService {
 
   /// 验收后更新分派（可空 —— 未装配时跳过更新分派阶段）。
   final TeamUpdatesDispatcher? updateDispatch;
+
+  /// 全书完成后按章节顺序回放人物 / 世界观履历（可空 —— 未装配时跳过）。
+  final ArchiveHistoryApplier? archiveHistoryApplier;
 
   /// 章节结构化导出（可空 —— 未装配时不落盘；失败折叠为 warning）。
   final ChapterExportService? exportService;
@@ -1031,9 +1057,12 @@ class MultiAgentBookGenerationService {
       // ⚠ 不能按「任务序号 % 通道数」轮转：章节大纲的序号是**卷内序号**
       // （每卷都从 1 重新数），池宽 9 时第 10 个任务就会退回通道 0，
       // 与仍在飞行中的第 1 个任务撞同一条会话。
-      final int outlineWorkers = AgentStateManager.quantizeConcurrency(
-        cfg.concurrency,
-      ).clamp(1, planners.length);
+      // 大纲阶段提示词最长（主线 + 分卷 + 本章），并发过高只会互相拖慢
+      // prefill；单卡实测 4 条已能打满，再多不缩短墙钟时间。
+      const int kMaxOutlineWorkers = 4;
+      final int outlineWorkers = cfg.concurrency
+          .clamp(1, planners.length)
+          .clamp(1, kMaxOutlineWorkers);
       final List<String> volumeOutlines = await _runPoolIndexed<int, String>(
         outlineWorkers,
         [for (int i = 1; i <= cfg.targetVolumes; i++) i],
@@ -1274,11 +1303,11 @@ class MultiAgentBookGenerationService {
         final ChapterRow? row = await chapters.getById(cid);
         if (row != null) outlineRows.add(row);
         if (outline.isEmpty) {
-          warnings.add('《$title》（${vol.title}）大纲生成失败，写作团队将依据主线与分卷大纲直接成稿。');
+          warnings.add('《$title》（${vol.title}）大纲生成失败，章节管线将依据主线与分卷大纲直接成稿。');
         }
       }
 
-      // ---- 7. 章节写作团队（并发 N = N 个团队并行写 N 章）----
+      // ---- 7. 章节写作管线（并发 N = N 条管线并行写 N 章）----
       final Map<String, String> volumeTitleById = <String, String>{
         for (final VolumeRow v in volumeRows) v.id: v.title,
       };
@@ -1299,17 +1328,17 @@ class MultiAgentBookGenerationService {
       );
       // 矩阵初始态：全部章节入队
       for (final ChapterRow ch in outlineRows) {
-        emitChapter(ch, MultiAgentChapterPhase.queued, 0, '排队等待写作团队');
+        emitChapter(ch, MultiAgentChapterPhase.queued, 0, '排队等待写作管线');
       }
       // 全书编排拓扑（用户 2026-10-07 定的方案，也是最适合 RWKV state 机制的路子）：
       //
       //   主线大纲   ── 串行：规划组 `leader` 单链，一次调用产出全书骨架
       //   支线大纲   ── 并行：规划组 9 位写手通道轮转派活（池宽 ≤ 通道数）
       //   单章内容   ── 串行：每章各自一条 state 链，段与段之间严格串行
-      //   全书章节   ── 并行：`lanes` 个写作团队同时开工，章间零依赖
+      //   全书章节   ── 并行：`lanes` 条章节管线同时开工，章间零依赖
       //
-      // `cfg.concurrency` 的语义就是**并行章节团队数**（见 UI：MAG.Concurrency
-      // 「并行章节数（每章 1 个写作团队）」/「填章节数即可全部并行」）。
+      // `cfg.concurrency` 的语义就是**并行章节管线数**（见 UI：MAG.Concurrency
+      // 「并行章节上限（每章 1 条串行管线）」；0 = 按模型规模自动取最佳）。
       // 章级并行 + 章内串行 + 章级独立 state 链（[chapterPrefix]）三者合起来，
       // 既吃到了 RWKV 的 O(1) 上下文接续，又不让任一章拖住其他章。
       final int lanes = cfg.concurrency.clamp(
@@ -1324,7 +1353,7 @@ class MultiAgentBookGenerationService {
         WritingCraft.duo => '每章 1 主笔（分段串行）',
         WritingCraft.solo => '每章 1 主笔（单笔直书）',
       };
-      onProgress?.call('激活 $lanes 个章节流水线并行写作（$teamShape，每章一条 state 链）…', 0.56);
+      onProgress?.call('激活 $lanes 条章节管线并行写作（$teamShape，每章一条 state 链）…', 0.56);
       int written = 0;
       int teamStarted = 0;
       final List<({int order, String title, String status, int wordCount})>
@@ -1338,7 +1367,7 @@ class MultiAgentBookGenerationService {
       ) async {
         final (ChapterRow ch, int seq) = slot;
         final AgentStateGroup team = stateManager.activateGroup(
-          label: '《${ch.title}》写作团队',
+          label: '《${ch.title}》写作管线',
         );
         void emit(MultiAgentChapterPhase phase, double p, String detail) =>
             emitChapter(ch, phase, p, detail);
@@ -1346,7 +1375,7 @@ class MultiAgentBookGenerationService {
           teamStarted++;
           final int started = teamStarted;
           onProgress?.call(
-            '写作团队《${ch.title}》开工'
+            '章节管线《${ch.title}》开工'
             '（${(started / outlineRows.length * 100).round()}% 章节已开队）…',
             0.56 +
                 0.42 *
@@ -1669,6 +1698,31 @@ class MultiAgentBookGenerationService {
         volumeTitleById: volumeTitleById,
       );
 
+      // ---- 7.8 全书履历回放（按章节顺序，人物 / 世界观各用专用 state）----
+      //
+      // 为什么放在章节池之后：章节是并行写的，逐章抽取的落库顺序不确定；
+      // 用户要求「写完一本书后按章节顺序迭代更新履历」—— 这里用
+      // `getByProjectId`（已按 orderIndex 升序）串行回放，保证：
+      //   第 1 章的人物/世界观变化先落，再落第 2 章，依此类推。
+      // 人物与世界观分别走 `characterLedger` / `worldLedger` 岗位 state；
+      // 未注册对应 state 时自动回落基模，不会阻塞成书。
+      if (archiveHistoryApplier != null) {
+        onProgress?.call('正在按章节顺序回放人物 / 世界观履历…', 0.975);
+        try {
+          final int replayed = await _replayArchiveHistory(
+            projectId: projectId,
+            fallback: chat,
+            warnings: warnings,
+            onProgress: onProgress,
+          );
+          if (replayed > 0) {
+            onProgress?.call('履历回放完成：更新 $replayed 项', 0.978);
+          }
+        } on Object catch (e) {
+          warnings.add('全书履历回放未执行：$e');
+        }
+      }
+
       // ---- 8. 分卷档案归纳（每卷一次）----
       //
       // 放在**章节池之后**：章节是并行写的，池子没结束就无从判断「哪一卷写完了」。
@@ -1803,6 +1857,194 @@ class MultiAgentBookGenerationService {
       stateManager.closeGroup(planning.groupId);
       temporaryWriter?.dispose();
     }
+  }
+
+  /// 全书完成后，按**章节顺序**回放人物 / 世界观履历。
+  ///
+  /// 每章两次专用 state 调用：
+  ///   * 人物：`characterLedger`（角色 `characterKeeper`）
+  ///   * 世界观：`worldLedger`（角色 `worldKeeper`）
+  /// 两段串行执行（先人物再世界观），章与章之间严格串行 —— 这正是
+  /// 「按章节顺序迭代更新履历」的语义。输出统一为
+  /// `类别|名称|字段|一句话变化` 登记行，由注入的
+  /// [archiveHistoryApplier] 直接落库（带 `[第N章]` 标记，幂等）。
+  Future<int> _replayArchiveHistory({
+    required String projectId,
+    required AgentChatExecutor fallback,
+    required List<String> warnings,
+    required void Function(String, double?)? onProgress,
+  }) async {
+    final ArchiveHistoryApplier? applier = archiveHistoryApplier;
+    if (applier == null) return 0;
+    // getByProjectId 已按 orderIndex 升序 → 就是阅读顺序。
+    final List<ChapterRow> ordered = (await chapters.getByProjectId(projectId))
+        .where((ChapterRow c) => (c.content ?? '').trim().isNotEmpty)
+        .toList(growable: false);
+    if (ordered.isEmpty) return 0;
+
+    final AgentChatExecutor charChat = _chatFor(
+      step: WritingCraftStep.characterUpdate,
+      role: RwkvAgentRole.characterKeeper,
+      fallback: fallback,
+    );
+    final AgentChatExecutor worldChat = _chatFor(
+      step: WritingCraftStep.worldUpdate,
+      role: RwkvAgentRole.worldKeeper,
+      fallback: fallback,
+    );
+
+    int updated = 0;
+    for (int i = 0; i < ordered.length; i++) {
+      final ChapterRow ch = ordered[i];
+      final String text = (ch.content ?? '').trim();
+      if (text.isEmpty) continue;
+      final String label = '第${i + 1}章';
+      onProgress?.call(
+        '履历回放 $label《${ch.title}》（${i + 1}/${ordered.length}）…',
+        null,
+      );
+
+      // ---- 人物履历 ----
+      final String charRaw = await _ledgerCall(
+        charChat,
+        system:
+            '你是人物履历管理员。只提取本章中人物的状态与经历变化。'
+            '每行 4 段，用竖线分隔：人物|名称|履历|一句话变化。'
+            '名称必须在本章正文里原样出现；没有变化就只输出「无」。'
+            '禁止解释、禁止 Markdown 表格、禁止复述指令。',
+        content: text,
+      );
+      final List<Map<String, Object?>> charItems = _parseLedgerRows(
+        charRaw,
+        source: text,
+        categoryTargets: const <String, String>{
+          '人物': 'character',
+          '角色': 'character',
+        },
+      );
+      if (charItems.isNotEmpty) {
+        final List<String> issues = await applier(
+          projectId: projectId,
+          items: charItems,
+          chapterLabel: label,
+        );
+        updated += charItems.length;
+        for (final String issue in issues) {
+          warnings.add('$label 人物履历：$issue');
+        }
+      }
+
+      // ---- 世界观履历（含势力 / 种族 / 资源 / 秘境 / 体系等子项）----
+      final String worldRaw = await _ledgerCall(
+        worldChat,
+        system:
+            '你是世界观履历管理员。只提取本章中世界观设定的状态与变化，'
+            '包括地点、场景、地理、势力、种族、资源、秘境、功法体系、政治制度、货币。'
+            '每行 4 段，用竖线分隔：世界观|名称|履历|一句话变化。'
+            '名称必须在本章正文里原样出现；没有变化就只输出「无」。'
+            '禁止解释、禁止 Markdown 表格、禁止复述指令。',
+        content: text,
+      );
+      final List<Map<String, Object?>> worldItems = _parseLedgerRows(
+        worldRaw,
+        source: text,
+        categoryTargets: _worldCategoryTargets,
+      );
+      if (worldItems.isNotEmpty) {
+        final List<String> issues = await applier(
+          projectId: projectId,
+          items: worldItems,
+          chapterLabel: label,
+        );
+        updated += worldItems.length;
+        for (final String issue in issues) {
+          warnings.add('$label 世界观履历：$issue');
+        }
+      }
+    }
+    return updated;
+  }
+
+  /// 世界观登记行的类别 → 落库目标。
+  static const Map<String, String> _worldCategoryTargets = <String, String>{
+    '世界观': 'world',
+    '设定': 'world',
+    '地点': 'world',
+    '场景': 'world',
+    '地理': 'world',
+    '势力': 'faction',
+    '组织': 'faction',
+    '门派': 'faction',
+    '宗门': 'faction',
+    '家族': 'faction',
+    '种族': 'world',
+    '资源': 'world',
+    '秘境': 'world',
+    '境界': 'world',
+    '功法': 'world',
+    '体系': 'world',
+    '政治': 'world',
+    '制度': 'world',
+    '货币': 'world',
+  };
+
+  Future<String> _ledgerCall(
+    AgentChatExecutor chat, {
+    required String system,
+    required String content,
+  }) async {
+    try {
+      return await chat(
+        system,
+        <ChatMessage>[ChatMessage.user('【本章正文】\n$content')],
+        maxTokens: 420,
+        temperature: 0.4,
+      );
+    } on Object catch (e) {
+      debugPrint('[archive-replay] 调用失败：$e');
+      return '';
+    }
+  }
+
+  /// 解析 `类别|名称|字段|一句话变化` 登记行。
+  ///
+  /// 名称必须原样出现在正文里（防幻觉）；字段只认「履历 / 状态」，
+  /// 其余一律按履历处理。单章最多 12 条，避免流水账刷屏。
+  static List<Map<String, Object?>> _parseLedgerRows(
+    String raw, {
+    required String source,
+    required Map<String, String> categoryTargets,
+  }) {
+    final List<Map<String, Object?>> out = <Map<String, Object?>>[];
+    for (final String line in raw.split(RegExp(r'\r?\n'))) {
+      final List<String>? cells = pipeRowCells(line);
+      if (cells == null || cells.length < 4) continue;
+      final String? target = categoryTargets[cells[0].trim()];
+      if (target == null) continue;
+      String name = cells[1].trim();
+      if (name.isEmpty || name.length > 100) continue;
+      if (!source.contains(name)) {
+        name = name.replaceAll(RegExp(r'[（(][^）)]*[）)]'), '').trim();
+      }
+      if (name.isEmpty || !source.contains(name)) continue;
+      final String fieldRaw = cells[2].trim();
+      final String field =
+          (fieldRaw == '状态' || fieldRaw.toLowerCase() == 'status')
+          ? 'status'
+          : 'history';
+      String content = cells.sublist(3).join('|').trim();
+      if (content.isEmpty) continue;
+      if (content.length > 300) content = content.substring(0, 300);
+      out.add(<String, Object?>{
+        'target': target,
+        'action': 'update',
+        'name': name,
+        'field': field,
+        'content': content,
+      });
+      if (out.length >= 12) break;
+    }
+    return out;
   }
 
   MultiAgentBookResult _fail(
@@ -2149,7 +2391,7 @@ class MultiAgentBookGenerationService {
     String sessionKeyPrefix = '',
   }) async {
     final bool fastDraft = polishChat != null;
-    final int beamWidth = fastDraft ? 1 : kBeamWidth;
+    final int beamWidth = fastDraft ? 1 : cfg.beamWidth;
     final int segmentChars = fastDraft
         ? G1kWritingProfile.draftTargetChars
         : kBeamSegmentChars;

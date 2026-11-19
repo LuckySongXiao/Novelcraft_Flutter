@@ -170,10 +170,12 @@ class ProviderAutoRestore {
     return null;
   }
 
-  OfficialServerVariant? _variant(String name) {
+  OfficialServerVariant _variant(String name) {
     for (final OfficialServerVariant v in OfficialServerVariant.values) {
       if (v.name == name) return v;
     }
-    return null;
+    // 旧配置没有该字段、或残留已删除的后端（cpu/vulkan/hip/sycl/arm64）
+    // 一律回落到唯一引擎的默认档位。
+    return OfficialServerVariant.cuda13;
   }
 }

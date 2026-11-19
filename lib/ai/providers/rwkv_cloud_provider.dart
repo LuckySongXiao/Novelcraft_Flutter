@@ -506,6 +506,10 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     final Stopwatch sw = Stopwatch()..start();
     try {
       final RwkvCloudSessionRecord record = await ledger.resolve(sessionKey);
+      final String reqSystem = (request.systemPrompt ?? '').trim();
+      if (reqSystem.isNotEmpty) {
+        record.systemPrompt = reqSystem;
+      }
       final ({String prompt, bool isFirstTurn}) turn = record.buildTurnPrompt(
         request,
       );
@@ -514,17 +518,31 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
         return super.chat(request);
       }
 
-      String? content = await _postStatefulTurn(record, turn.prompt, request.maxTokens);
-      if (content == null && !turn.isFirstTurn) {
-        // 服务端可能已经把这条会话丢了（进程重启 / L1-L2 被淘汰 / 换端点）。
-        // 客户端手里有转写本 → 重放一次重建 state，再重试本轮。
-        final bool rebuilt = await _replayTranscript(record);
-        if (rebuilt) {
-          content = await _postStatefulTurn(record, turn.prompt, request.maxTokens);
+      String? content;
+      if (record.needsRebuild) {
+        // 引擎换代 / 会话被淘汰：旧 id 已不可用。空转写本直接换新 id 发首轮；
+        // 有转写本则「换新 id + 整本重放 + 本轮」合成一次请求重建。
+        if (turn.isFirstTurn) {
+          record.assignSessionId(ledger.newSessionId());
+          content = await _postStatefulTurn(
+            record,
+            turn.prompt,
+            request.maxTokens,
+          );
+        } else {
+          content = await _rebuildAndAnswer(record, request, ledger);
+        }
+      } else {
+        content = await _postStatefulTurn(record, turn.prompt, request.maxTokens);
+        if (content == null && !turn.isFirstTurn) {
+          // 服务端可能已经把这条会话丢了（进程重启 / L1-L2 被淘汰 / 换端点）。
+          // 客户端手里有转写本 → **换新 id** 重放重建并回答本轮。
+          // ⚠ 不能复用旧 id 重放：那等于重放给一个不存在的会话。
+          content = await _rebuildAndAnswer(record, request, ledger);
         }
       }
       if (content == null) {
-        // 连重放都不行：清掉本地台账，交回无状态链路 —— 客户端 state 是增强，
+        // 连重建都不行：清掉本地台账，交回无状态链路 —— 客户端 state 是增强，
         // 绝不能因为它把「写书」主流程拖死。
         await ledger.forget(sessionKey);
         return super.chat(request);
@@ -560,6 +578,30 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
     }
   }
 
+  /// 换一个新 `session_id`，用「整本转写 + 本轮消息」一次重建 state 并回答。
+  ///
+  /// 与旧实现（先 `max_tokens=1` 重放、再补一轮）相比：省一次往返，且不会让
+  /// 重建请求生成的 1 个 token 污染 state 起点。
+  Future<String?> _rebuildAndAnswer(
+    RwkvCloudSessionRecord record,
+    ChatRequest request,
+    RwkvCloudSessionLedger ledger,
+  ) async {
+    record.assignSessionId(ledger.newSessionId());
+    final String prompt = record.buildFullPrompt(request);
+    if (prompt.trim() == 'Assistant:') return null;
+    final String? content = await _postStatefulTurn(
+      record,
+      prompt,
+      request.maxTokens,
+    );
+    if (content == null) {
+      // 新会话也失败：把 id 作废，下一轮继续走重建（不留半死的 id）。
+      record.assignSessionId('');
+    }
+    return content;
+  }
+
   /// 向 `/state/chat/completions` 发一轮**增量**；失败返回 null（由调用方决定重放或回落）。
   Future<String?> _postStatefulTurn(
     RwkvCloudSessionRecord record,
@@ -578,37 +620,15 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
           'max_tokens': maxTokens < 256 ? 256 : maxTokens,
           'stop_tokens': kRwkvDefaultStopTokens,
         },
+        // ⚠ 独立短超时：引擎遇到失效 session_id 时会挂起数十秒再断连，
+        // 用 900s 的常规超时会让一章写作卡十几分钟。快速失败 → 走重建。
+        timeout: const Duration(seconds: 90),
       );
       final String text = _extractFirstContent(json).trim();
       return text.isEmpty ? null : text;
     } on Object catch (e) {
-      _cloudLogger.fine('客户端 state 增量续跑失败（将尝试重放重建）：$e');
+      _cloudLogger.fine('客户端 state 增量续跑失败（将尝试换新 id 重建）：$e');
       return null;
-    }
-  }
-
-  /// 用本地转写本重放一次，重建服务端 state（`max_tokens=1`，只为建 state）。
-  Future<bool> _replayTranscript(RwkvCloudSessionRecord record) async {
-    if (record.transcript.isEmpty) return false;
-    try {
-      await _batch.postJson(
-        kRouteRwkvStateChat,
-        <String, dynamic>{
-          'session_id': record.sessionId,
-          'contents': <String>[record.buildReplayPrompt()],
-          'stream': false,
-          'max_tokens': 1,
-          'stop_tokens': kRwkvDefaultStopTokens,
-        },
-      );
-      _cloudLogger.info(
-        '客户端 state：已重放 ${record.transcript.length} 条转写，'
-        '重建会话 ${record.sessionId}',
-      );
-      return true;
-    } on Object catch (e) {
-      _cloudLogger.fine('客户端 state：重放转写失败：$e');
-      return false;
     }
   }
 
@@ -673,7 +693,18 @@ class RwkvCloudProvider extends OpenAICompatibleProvider
         );
       }
     }
-    return super.configure(configuration, probe: probe);
+    final bool ok = await super.configure(configuration, probe: probe);
+    if (ok && clientStateEnabled && sessionLedger != null) {
+      // 引擎实例可能已换（应用重启 / 端点重开）：把台账里的旧 sessionId 作废。
+      // 首次用到时按转写本「换新 id + 整本重放」重建 —— 用一次额外请求换掉
+      // 「服务端已经忘了，前端还以为有记忆」的静默失忆。
+      try {
+        await sessionLedger!.invalidateAllForNewEngine();
+      } on Object catch (e) {
+        _cloudLogger.fine('客户端 state：台账换代失败（忽略）：$e');
+      }
+    }
+    return ok;
   }
 
   /// 取引擎状态：能力 / 显存 / 队列 / 实时吞吐（文档 §11）。

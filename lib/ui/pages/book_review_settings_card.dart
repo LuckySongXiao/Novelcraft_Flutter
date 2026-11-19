@@ -272,7 +272,7 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  l10n.t('BRS.Title', '客座读者与 13B 高级审查员'),
+                  l10n.t('BRS.Title', '客座读者与高级审查员（state 岗位）'),
                 ),
               ),
               TextButton(
@@ -284,8 +284,20 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
           Text(
             l10n.t(
               'BRS.Intro',
-              '7B 会读取客座意见，再向 13B 请教；13B 可认可 7B 或提出修订意见。'
-              '平台与模型从已配置的供应商中下拉选择，拉到模型列表即可直接选用。',
+              '基模固定；客座读者使用「读者反馈」岗位 state（ST-7 reviewReport）'
+              '给出读后意见，高级审查员使用「审查」岗位 state 复核并决定是否返工。'
+              '下方只需选择运行端点与基模，岗位差异由 state 承担。',
+            ),
+          ),
+          Text(
+            l10n.t(
+              'BRS.StatePostHint',
+              '岗位 state：ST-7 审查反馈（reviewReport）；'
+              '未注册该 state 时回落当前基模。',
+            ),
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.primary,
             ),
           ),
           const SizedBox(height: 8),
@@ -299,7 +311,7 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
             children: <Widget>[
               Expanded(
                 child: _platformField(
-                  label: l10n.t('BRS.SeniorPlatform', '13B 审查员平台'),
+                  label: l10n.t('BRS.SeniorPlatform', '审查岗位运行端点'),
                   value: _seniorProvider,
                   onChanged: (String v) => setState(() {
                     _seniorProvider = v;
@@ -310,7 +322,7 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
               const SizedBox(width: 8),
               Expanded(
                 child: _modelField(
-                  label: l10n.t('BRS.SeniorModel', '13B 审查员模型'),
+                  label: l10n.t('BRS.SeniorModel', '审查岗位基模'),
                   platform: _seniorProvider,
                   value: _seniorModel,
                   onChanged: (String v) =>
@@ -360,7 +372,7 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
             children: <Widget>[
               Expanded(
                 child: _platformField(
-                  label: l10n.t('BRS.Platform', '平台'),
+                  label: l10n.t('BRS.Platform', '运行端点'),
                   value: profile.provider,
                   onChanged: (String v) => setState(() {
                     _guests[index] = _guests[index].copyWith(
@@ -373,7 +385,7 @@ class _BookReviewSettingsCardState extends ConsumerState<BookReviewSettingsCard>
               const SizedBox(width: 8),
               Expanded(
                 child: _modelField(
-                  label: l10n.t('BRS.Model', '模型'),
+                  label: l10n.t('BRS.Model', '基模'),
                   platform: profile.provider,
                   value: profile.model,
                   onChanged: (String v) => setState(() {

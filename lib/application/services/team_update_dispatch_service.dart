@@ -84,6 +84,12 @@ class TeamUpdateDispatchService {
   /// 单章更新项上限（防组长幻觉刷库）。
   final int maxItems;
 
+  /// 并行分派的写手槽位数（与章节团队编制一致：1 组长 + 9 写手）。
+  ///
+  /// 槽位之间并行、槽位内部串行 —— 同一槽位对应同一条 state 会话，
+  /// 并发写会让引擎侧互相污染（与 `_AgentChannel` 的会话约束同源）。
+  static const int dispatchSlots = 9;
+
   /// 分派并应用。
   ///
   /// [items] 为组长验收报告的 updates 原始条目；
@@ -116,38 +122,92 @@ class TeamUpdateDispatchService {
     }
     if (all.isEmpty) return issues;
 
-    // ---- 2. 按 target 分组（保持出现顺序），组内全局轮转写手槽位 ----
-    final List<String> targetOrder = <String>[];
-    final Map<String, List<ChapterUpdateItem>> groups =
-        <String, List<ChapterUpdateItem>>{};
-    for (final ChapterUpdateItem it in all) {
-      (groups[it.target] ??= <ChapterUpdateItem>[]).add(it);
-      if (!targetOrder.contains(it.target)) targetOrder.add(it.target);
+    // ---- 2. 按「实体」分组：同一实体必须串行，不同实体并行 ----
+    //
+    // 为什么不是按 target 轮转写手：target 相同的两项（如两个不同人物）
+    // 之间没有依赖，串行只会白等模型；而**同一实体**的两条更新会写同一行，
+    // 必须保持原顺序。分组后：组间并行（各自绑一个写手槽位），组内串行。
+    final List<List<int>> groups = <List<int>>[];
+    final Map<String, int> groupOf = <String, int>{};
+    for (int i = 0; i < all.length; i++) {
+      final ChapterUpdateItem it = all[i];
+      final String key = '${it.target}|${it.name}';
+      final int? g = groupOf[key];
+      if (g == null) {
+        groupOf[key] = groups.length;
+        groups.add(<int>[i]);
+      } else {
+        groups[g].add(i);
+      }
     }
 
-    int slotSeq = 0;
-    for (final String target in targetOrder) {
-      for (final ChapterUpdateItem it in groups[target]!) {
-        final int slot = (slotSeq++ % 9) + 1;
-        try {
-          // 写手按各自偏向产出最终登记文本；产出为空回落组长原始 content
-          final String produced =
-              await writerChat(slot, _writerPrompt(slot, it));
-          String content = AIOutputSanitizer.extractCleanOutput(produced).trim();
-          if (content.isEmpty || content.length < 4) content = it.content;
-          content = content.length > 500 ? content.substring(0, 500) : content;
+    final List<String?> issueByIndex = List<String?>.filled(all.length, null);
+    int nextGroup = 0;
 
-          final String? issue = await _apply(pid, it, content);
-          if (issue != null) issues.add(issue);
-        } on Object catch (e) {
-          issues.add('「${it.name}」分派失败：$e');
+    Future<void> worker(int slot) async {
+      while (true) {
+        final int gi = nextGroup++;
+        if (gi >= groups.length) return;
+        for (final int idx in groups[gi]) {
+          final ChapterUpdateItem it = all[idx];
+          try {
+            // 写手按各自偏向产出最终登记文本；产出为空回落组长原始 content
+            final String produced =
+                await writerChat(slot, _writerPrompt(slot, it));
+            String content =
+                AIOutputSanitizer.extractCleanOutput(produced).trim();
+            if (content.isEmpty || content.length < 4) content = it.content;
+            content = content.length > 500 ? content.substring(0, 500) : content;
+            issueByIndex[idx] = await _apply(pid, it, content);
+          } on Object catch (e) {
+            issueByIndex[idx] = '「${it.name}」分派失败：$e';
+          }
         }
       }
+    }
+
+    final int workers =
+        groups.length < dispatchSlots ? groups.length : dispatchSlots;
+    await Future.wait(<Future<void>>[
+      for (int w = 0; w < workers; w++) worker(w + 1),
+    ]);
+
+    for (final String? issue in issueByIndex) {
+      if (issue != null && issue.trim().isNotEmpty) issues.add(issue);
     }
     return issues;
   }
 
   // -----------------------------------------------------------------------
+
+  /// 应用一批「已由专用 state 产出」的履历条目（按章节顺序回放用）。
+  ///
+  /// 与 [dispatchUpdates] 的区别：不再让写手二次改写，直接按顺序落库；
+  /// 每条都带章节标记（如 `[第3章]`），且同一内容重复回放时幂等跳过。
+  Future<List<String>> applyArchiveHistory({
+    required String projectId,
+    required List<Map<String, Object?>> items,
+    required String chapterLabel,
+  }) async {
+    final List<String> issues = <String>[];
+    final String pid = projectId.trim();
+    if (pid.isEmpty) return <String>['缺少 projectId，履历回放跳过'];
+    final List<ChapterUpdateItem> all = ChapterUpdateItem.parseItems(items)
+        .where((ChapterUpdateItem it) => it.isValid)
+        .toList(growable: false);
+    final int dropped = items.length - all.length;
+    if (dropped > 0) issues.add('$dropped 条履历格式非法，已跳过');
+    for (final ChapterUpdateItem it in all.take(maxItems)) {
+      final String? issue = await _apply(
+        pid,
+        it,
+        it.content,
+        tag: chapterLabel,
+      );
+      if (issue != null && issue.trim().isNotEmpty) issues.add(issue);
+    }
+    return issues;
+  }
 
   String _writerPrompt(int slot, ChapterUpdateItem it) =>
       '你是章节写作团队的写手 writer-$slot。组长派发设定登记任务：\n'
@@ -160,34 +220,38 @@ class TeamUpdateDispatchService {
   Future<String?> _apply(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     switch (it.target) {
       case 'character':
-        return _applyCharacter(pid, it, content);
+        return _applyCharacter(pid, it, content, tag: tag);
       case 'world':
-        return _applyWorld(pid, it, content);
+        return _applyWorld(pid, it, content, tag: tag);
       case 'faction':
-        return _applyFaction(pid, it, content);
+        return _applyFaction(pid, it, content, tag: tag);
       case 'plot':
-        return _applyPlot(pid, it, content);
+        return _applyPlot(pid, it, content, tag: tag);
       case 'timeline':
-        return _applyTimeline(pid, it, content);
+        return _applyTimeline(pid, it, content, tag: tag);
     }
     return '未知目标 ${it.target}，已跳过';
   }
 
-  String _append(String? existing, String content) {
+  String _append(String? existing, String content, {String tag = '团队更新'}) {
     final String base = (existing ?? '').trim();
-    final String line = '[团队更新] $content';
+    final String line = '[$tag] $content';
+    // 幂等：同一章节回放两次 / 实时抽取已经写过同一句 → 不重复追加。
+    if (base.contains(content)) return base;
     return base.isEmpty ? line : '$base\n$line';
   }
 
   Future<String?> _applyCharacter(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     final List<CharacterRow> rows = await (_db.select(_db.characters)..where(
       (t) => t.projectId.equals(pid) & notDeleted(t.isDeleted),
     )).get();
@@ -200,10 +264,10 @@ class TeamUpdateDispatchService {
           .write(CharactersCompanion(
         status: it.field == 'status' ? Value(_clamp(content, 50)) : const Value.absent(),
         history: it.field == 'history'
-            ? Value(_append(hit.history, content))
+            ? Value(_append(hit.history, content, tag: tag))
             : const Value.absent(),
         notes: it.field == 'notes'
-            ? Value(_append(hit.notes, content))
+            ? Value(_append(hit.notes, content, tag: tag))
             : const Value.absent(),
       ));
       return null;
@@ -225,8 +289,9 @@ class TeamUpdateDispatchService {
   Future<String?> _applyWorld(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     final List<WorldSettingRow> rows = await (_db.select(_db.worldSettings)
           ..where((t) =>
               t.projectId.equals(pid) & notDeleted(t.isDeleted)))
@@ -240,10 +305,10 @@ class TeamUpdateDispatchService {
           .write(WorldSettingsCompanion(
         status: it.field == 'status' ? Value(_clamp(content, 50)) : const Value.absent(),
         history: it.field == 'history'
-            ? Value(_append(hit.history, content))
+            ? Value(_append(hit.history, content, tag: tag))
             : const Value.absent(),
         notes: it.field == 'notes'
-            ? Value(_append(hit.notes, content))
+            ? Value(_append(hit.notes, content, tag: tag))
             : const Value.absent(),
         content: it.field == 'content' ? Value(content) : const Value.absent(),
         description: it.field == 'description'
@@ -268,8 +333,9 @@ class TeamUpdateDispatchService {
   Future<String?> _applyFaction(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     final List<FactionRow> rows = await (_db.select(_db.factions)..where(
       (t) => t.projectId.equals(pid) & notDeleted(t.isDeleted),
     )).get();
@@ -282,10 +348,10 @@ class TeamUpdateDispatchService {
           .write(FactionsCompanion(
         status: it.field == 'status' ? Value(_clamp(content, 50)) : const Value.absent(),
         history: it.field == 'history'
-            ? Value(_append(hit.history, content))
+            ? Value(_append(hit.history, content, tag: tag))
             : const Value.absent(),
         notes: it.field == 'notes'
-            ? Value(_append(hit.notes, content))
+            ? Value(_append(hit.notes, content, tag: tag))
             : const Value.absent(),
         description: it.field == 'description'
             ? Value(content)
@@ -300,8 +366,9 @@ class TeamUpdateDispatchService {
   Future<String?> _applyPlot(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     final List<PlotRow> rows = await (_db.select(_db.plots)..where(
       (t) => t.projectId.equals(pid) & notDeleted(t.isDeleted),
     )).get();
@@ -313,7 +380,7 @@ class TeamUpdateDispatchService {
             ..where((t) => t.id.equals(hit.id)))
           .write(PlotsCompanion(
         notes: it.field == 'notes' || it.field == 'history'
-            ? Value(_append(hit.notes, content))
+            ? Value(_append(hit.notes, content, tag: tag))
             : const Value.absent(),
         description: it.field == 'description'
             ? Value(content)
@@ -337,8 +404,9 @@ class TeamUpdateDispatchService {
   Future<String?> _applyTimeline(
     String pid,
     ChapterUpdateItem it,
-    String content,
-  ) async {
+    String content, {
+    String tag = '团队更新',
+  }) async {
     final List<TimelineEventRow> rows = await (_db.select(_db.timelineEvents)
           ..where((t) =>
               t.projectId.equals(pid) & notDeleted(t.isDeleted)))
@@ -351,7 +419,7 @@ class TeamUpdateDispatchService {
             ..where((t) => t.id.equals(hit.id)))
           .write(TimelineEventsCompanion(
         description: it.field == 'description' || it.field == 'history'
-            ? Value(_append(hit.description, content))
+            ? Value(_append(hit.description, content, tag: tag))
             : const Value.absent(),
       ));
       return null;

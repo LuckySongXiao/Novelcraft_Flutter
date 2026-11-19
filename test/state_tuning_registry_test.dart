@@ -23,7 +23,7 @@ RwkvStateArtifact _art({
 void main() {
   group('目标 / 角色序列化', () {
     test('state 目标 code 唯一且可反查', () {
-      expect(RwkvStateTarget.values.length, 8);
+      expect(RwkvStateTarget.values.length, 10);
       final Set<String> codes =
           RwkvStateTarget.values.map((RwkvStateTarget t) => t.code).toSet();
       expect(codes.length, RwkvStateTarget.values.length);

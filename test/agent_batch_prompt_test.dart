@@ -130,14 +130,20 @@ void main() {
   });
 
   group('max_tokens 与单路同源', () {
-    test('resolveRwkvMaxTokens 对长任务给更大上限', () {
+    test('resolveRwkvMaxTokens 按任务类型给预算（正文类 > 大纲类 > 摘要类）', () {
       final BaseAgent a = agents.first;
-      final int outline = a.resolveRwkvMaxTokens('GenerateOutline');
+      final int prose = a.resolveRwkvMaxTokens('GenerateChapterContent');
       final int polish = a.resolveRwkvMaxTokens('PolishText');
-      expect(outline, greaterThan(0));
-      expect(polish, greaterThan(0));
-      expect(outline, greaterThanOrEqualTo(polish),
-          reason: '大纲类任务应比润色类给更多 token（与单路映射一致）');
+      final int outline = a.resolveRwkvMaxTokens('GenerateOutline');
+      final int summary = a.resolveRwkvMaxTokens('SummarizeChapter');
+      // +47 实测口径：中文 ≈1 token/字，正文/润色要覆盖 3200 字定稿闸 → 4096；
+      // 大纲是结构化短输出 → 2560；摘要更短 → 800。
+      expect(prose, 4096);
+      expect(polish, 4096);
+      expect(outline, 2560);
+      expect(summary, 800);
+      expect(prose, greaterThan(outline), reason: '正文类必须比大纲给更多 token');
+      expect(outline, greaterThan(summary), reason: '大纲必须比摘要给更多 token');
     });
   });
 }

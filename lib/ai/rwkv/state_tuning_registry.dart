@@ -21,6 +21,13 @@
 // 本文件管「给模型叠哪个微调 state」，两者正交、可组合。
 //
 // 本文件不 `import 'dart:io'`，Web 端可编译；持久化由调用方注入回调。
+//
+// ⚠ 参数当量口径（实测张量形状，不按文件名猜）：
+//   * 1B / 1.5B 底座的 state 都是 24 个 `blocks.N.att.time_state`，
+//     每块 BF16 `(32,64,64)` → 约 6 MiB，归为 S6M 当量；
+//   * 3B 底座是 32 块、每块 BF16 `(40,64,64)` → 约 10 MiB，归为 S10M 当量。
+//   底座参数类与 state 当量是两件事：1B 与 1.5B 底座不能互换，
+//   但它们的 state 文件尺寸/形状相同。分类工具把两者都显式展示。
 library;
 
 /// State Tuning 的 6 个目标（对应 Part II 数据集范式 ST-1 ~ ST-6）。
@@ -110,6 +117,27 @@ enum RwkvStateTarget {
     labelEn: 'ST-8 State Updates',
     outputShape: 'textLines',
     datasetKey: 'st8_state_updates',
+  ),
+
+  /// ST-9 人物履历：按章节顺序维护人物的状态与经历。
+  ///
+  /// 与 ST-8 的区别：ST-8 是「整章所有实体的变更登记」，本岗位只负责
+  /// **人物**这一类，输出同样是登记行，但只写人物履历，便于单独重训。
+  characterLedger(
+    code: 'character_ledger',
+    labelZh: 'ST-9 人物履历',
+    labelEn: 'ST-9 Character Ledger',
+    outputShape: 'textLines',
+    datasetKey: 'st9_character_ledger',
+  ),
+
+  /// ST-10 世界观履历：按章节顺序维护地点 / 势力 / 设定等变化。
+  worldLedger(
+    code: 'world_ledger',
+    labelZh: 'ST-10 世界观履历',
+    labelEn: 'ST-10 World Ledger',
+    outputShape: 'textLines',
+    datasetKey: 'st10_world_ledger',
   );
 
   const RwkvStateTarget({
@@ -155,7 +183,13 @@ enum RwkvAgentRole {
   reader('reader', '读者', 'Reader'),
 
   /// 审查员（资深审查/质检）：输出是问题清单与修改意见。
-  reviewer('reviewer', '审查员', 'Reviewer');
+  reviewer('reviewer', '审查员', 'Reviewer'),
+
+  /// 人物履历管理员：按章节顺序维护人物状态与经历（ST-9）。
+  characterKeeper('character_keeper', '人物履历管理员', 'CharacterKeeper'),
+
+  /// 世界观履历管理员：按章节顺序维护地点/势力/设定变化（ST-10）。
+  worldKeeper('world_keeper', '世界观履历管理员', 'WorldKeeper');
 
   const RwkvAgentRole(this.code, this.labelZh, this.labelEn);
 
@@ -171,6 +205,139 @@ enum RwkvAgentRole {
     }
     return null;
   }
+}
+
+/// 训练基底的参数量分类（从模型 id / 路径解析，绝不按文件体积猜）。
+///
+/// 1B 与 1.5B 必须分开记：它们的 state 张量同形（S6M），但底座不能互换。
+enum RwkvBaseParamClass {
+  b1(code: '1b', labelZh: '1B 底座', labelEn: '1B base'),
+  b1p5(code: '1.5b', labelZh: '1.5B 底座', labelEn: '1.5B base'),
+  b3(code: '3b', labelZh: '3B 底座', labelEn: '3B base'),
+  b7(code: '7b', labelZh: '7B 底座', labelEn: '7B base'),
+  b13p3(code: '13.3b', labelZh: '13.3B 底座', labelEn: '13.3B base'),
+  unknown(code: 'unknown', labelZh: '未知底座', labelEn: 'Unknown base');
+
+  const RwkvBaseParamClass({
+    required this.code,
+    required this.labelZh,
+    required this.labelEn,
+  });
+
+  final String code;
+  final String labelZh;
+  final String labelEn;
+
+  String label(bool isEnglish) => isEnglish ? labelEn : labelZh;
+}
+
+/// State 文件的参数当量类（由张量形状实测归类，而非按文件名/体积估算）。
+///
+/// [expectedStateBytes] 是**单个 state 产物**的理论字节数，仅用于展示与
+/// 一致性核验；真正能不能挂还要走同款底座校验。
+enum RwkvStateParamTier {
+  s6m(
+    code: 's6m',
+    labelZh: 'S6M · 1B/1.5B 当量',
+    labelEn: 'S6M · 1B/1.5B class',
+    shapeZh: '24 块 × BF16 (32,64,64)',
+    shapeEn: '24 blocks × BF16 (32,64,64)',
+    expectedStateBytes: 6291456,
+  ),
+  s10m(
+    code: 's10m',
+    labelZh: 'S10M · 3B 当量',
+    labelEn: 'S10M · 3B class',
+    shapeZh: '32 块 × BF16 (40,64,64)',
+    shapeEn: '32 blocks × BF16 (40,64,64)',
+    expectedStateBytes: 10485760,
+  ),
+  unknown(
+    code: 'unknown',
+    labelZh: '未测当量',
+    labelEn: 'Unknown class',
+    shapeZh: '未实测张量形状',
+    shapeEn: 'Tensor shape not measured',
+    expectedStateBytes: 0,
+  );
+
+  const RwkvStateParamTier({
+    required this.code,
+    required this.labelZh,
+    required this.labelEn,
+    required this.shapeZh,
+    required this.shapeEn,
+    required this.expectedStateBytes,
+  });
+
+  final String code;
+  final String labelZh;
+  final String labelEn;
+  final String shapeZh;
+  final String shapeEn;
+
+  /// 单产物理论字节数；0 = 未实测。
+  final int expectedStateBytes;
+
+  String label(bool isEnglish) => isEnglish ? labelEn : labelZh;
+
+  String shape(bool isEnglish) => isEnglish ? shapeEn : shapeZh;
+
+  /// 人类可读的 MiB 体积（仅展示）。
+  String get sizeLabel =>
+      expectedStateBytes <= 0 ? '-' : '${expectedStateBytes / 1048576} MiB';
+}
+
+/// 匹配模型 id / 路径里的 `1b` / `1.5b` / `3b`，要求两侧是分隔符。
+///
+/// 不能写成 `RegExp(r'(\d+)b')`：`rwkv7b-g1b-0.1b` 会先命中家族前缀里的 7b。
+final RegExp kRwkvBaseParamRankPattern = RegExp(
+  r'(?:^|[-_/])([0-9]+(?:\.[0-9]+)?)b(?=$|[-_/])',
+  caseSensitive: false,
+);
+
+/// 从模型 id 或路径解析底座参数类；解析不出返回 [RwkvBaseParamClass.unknown]。
+RwkvBaseParamClass parseRwkvBaseParamClass(String text) {
+  final RegExpMatch? match = kRwkvBaseParamRankPattern.firstMatch(text.trim());
+  if (match == null) return RwkvBaseParamClass.unknown;
+  final double? rank = double.tryParse(match.group(1) ?? '');
+  if (rank == null || rank <= 0) return RwkvBaseParamClass.unknown;
+  if (rank <= 1.0) return RwkvBaseParamClass.b1;
+  if (rank <= 1.5) return RwkvBaseParamClass.b1p5;
+  if (rank <= 3.0) return RwkvBaseParamClass.b3;
+  if (rank <= 7.5) return RwkvBaseParamClass.b7;
+  if (rank <= 14.0) return RwkvBaseParamClass.b13p3;
+  return RwkvBaseParamClass.unknown;
+}
+
+/// 底座参数类 → state 当量。
+///
+/// 只有已实测形状的 1B/1.5B/3B 会落到具体档；7B/13.3B 暂无 state 样本，
+/// 如实返回 unknown，不能套用 3B 的字节数。
+RwkvStateParamTier rwkvStateTierFor(RwkvBaseParamClass baseClass) {
+  switch (baseClass) {
+    case RwkvBaseParamClass.b1:
+    case RwkvBaseParamClass.b1p5:
+      return RwkvStateParamTier.s6m;
+    case RwkvBaseParamClass.b3:
+      return RwkvStateParamTier.s10m;
+    case RwkvBaseParamClass.b7:
+    case RwkvBaseParamClass.b13p3:
+    case RwkvBaseParamClass.unknown:
+      return RwkvStateParamTier.unknown;
+  }
+}
+
+/// 综合分类：优先看训练底座 id；缺底座时退回 state 路径。
+RwkvStateParamTier classifyRwkvStateTier(
+  String baseModelId, {
+  String statePath = '',
+}) {
+  final RwkvBaseParamClass fromBase = parseRwkvBaseParamClass(baseModelId);
+  if (fromBase != RwkvBaseParamClass.unknown) {
+    return rwkvStateTierFor(fromBase);
+  }
+  return rwkvStateTierFor(parseRwkvBaseParamClass(statePath));
 }
 
 /// 一次 state tuning 训练产物。
@@ -329,6 +496,23 @@ class RwkvStateArtifact {
         enabled: (json['enabled'] as bool?) ?? true,
         notes: (json['notes'] as String?) ?? '',
       );
+}
+
+/// 参数当量视图（UI / 日志用；不改变持久化格式）。
+extension RwkvStateArtifactParamClass on RwkvStateArtifact {
+  RwkvBaseParamClass get baseParamClass => parseRwkvBaseParamClass(
+        baseModelId.trim().isEmpty ? statePath : baseModelId,
+      );
+
+  RwkvStateParamTier get paramTier => rwkvStateTierFor(baseParamClass);
+
+  /// 一行展示：`S6M · 1B/1.5B 当量 / 1.5B 底座 / 6.0 MiB`。
+  String paramClassLabel(bool isEnglish) {
+    final String base = baseParamClass.label(isEnglish);
+    final String tier = paramTier.label(isEnglish);
+    final String size = paramTier.sizeLabel;
+    return size == '-' ? '$tier / $base' : '$tier / $base / $size';
+  }
 }
 
 /// 角色 → state 的绑定。

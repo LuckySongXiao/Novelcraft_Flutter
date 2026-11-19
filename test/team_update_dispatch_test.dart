@@ -181,4 +181,55 @@ void main() {
     expect(rows.map((CharacterRow c) => c.name), contains('新弟子3'),
         reason: '写手空产出时回落组长 content 落库');
   });
+
+  test('不同实体并行、同一实体串行（写手槽位不并发复用）', () async {
+    final Map<String, int> inFlight = <String, int>{};
+    int active = 0;
+    int maxActive = 0;
+    final List<Map<String, Object?>> items = <Map<String, Object?>>[
+      for (final String n in <String>['甲', '乙', '丙', '丁'])
+        <String, Object?>{
+          'target': 'character', 'action': 'create', 'name': '弟子$n',
+          'field': 'notes', 'content': '初入宗门',
+        },
+      // 同一实体两条更新：必须按原顺序串行（写同一行）
+      <String, Object?>{
+        'target': 'character', 'action': 'update', 'name': '叶知秋',
+        'field': 'history', 'content': '第一战',
+      },
+      <String, Object?>{
+        'target': 'character', 'action': 'update', 'name': '叶知秋',
+        'field': 'history', 'content': '第二战',
+      },
+    ];
+
+    final List<String> issues = await svc().dispatchUpdates(
+      projectId: projectId,
+      items: items,
+      writerChat: (int slot, String prompt) async {
+        final String name =
+            RegExp(r'实体：(.+)').firstMatch(prompt)?.group(1) ?? '';
+        inFlight[name] = (inFlight[name] ?? 0) + 1;
+        expect(inFlight[name], 1, reason: '同一实体不能并发：$name');
+        active++;
+        if (active > maxActive) maxActive = active;
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        active--;
+        inFlight[name] = inFlight[name]! - 1;
+        final String content =
+            RegExp(r'原始变更：(.+?)(?:\n|$)').firstMatch(prompt)?.group(1) ??
+                '登记';
+        return '登记：$content';
+      },
+    );
+
+    expect(issues, isEmpty, reason: '$issues');
+    expect(maxActive, greaterThan(1), reason: '不同实体应并行（旧实现是纯串行）');
+    final String history = (await chars())
+            .firstWhere((CharacterRow c) => c.name == '叶知秋')
+            .history ??
+        '';
+    expect(history.indexOf('第一战'), lessThan(history.indexOf('第二战')),
+        reason: '同一实体的更新顺序必须保持');
+  });
 }

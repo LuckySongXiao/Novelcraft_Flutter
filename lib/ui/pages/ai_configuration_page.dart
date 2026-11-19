@@ -22,14 +22,11 @@ import '../../ai/rwkv/rwkv_models.dart' show RwkvLocalModel;
 import '../../ai/rwkv/rwkv_official_resources.dart'
     show
         OfficialServerVariant,
-        OfficialServerVariantX,
         RwkvCancelHandle,
         RwkvDownloadCancelledException,
-        RwkvDownloadPhase,
         RwkvDownloadPhaseX,
         RwkvDownloadProgress,
-        RwkvOfficialModel,
-        RwkvModelQuantX;
+        RwkvOfficialModel;
 import '../../ai/providers/deepseek_provider.dart';
 import '../../ai/providers/openrouter_provider.dart';
 import '../../ai/providers/zhipu_provider.dart';
@@ -93,14 +90,14 @@ class _ProviderConfig {
   /// 内置引擎（rwkv_lightning_cuda）强制外置的词表路径（PITFALLS §27.1）
   String? rwkvLocalVocabPath;
 
-  /// 本地 server 的引擎变体；`cuda12`/`cuda13` 表示走内置引擎
-  OfficialServerVariant? rwkvLocalServerVariant;
+  /// 唯一推理引擎 rwkv_lightning_cuda 的官方预编译档位
+  /// （`cuda12` = CUDA 12.9 / `cuda13` = CUDA 13.2）。
+  OfficialServerVariant rwkvLocalServerVariant = OfficialServerVariant.cuda13;
 
   /// 会话推理是否走 `/state/chat/completions`（服务端按 `session_id` 维护 state）。
   ///
-  /// 默认 `true`：本项目的目标引擎 `rwkv_lightning_cuda` 支持该路由，且这是
+  /// 默认 `true`：唯一引擎 `rwkv_lightning_cuda` 支持该路由，且这是
   /// RNN 的 O(1) 上下文接续（每轮只发增量，不重发历史，实测有效）。
-  /// 若换成 llama.cpp / rwkv.cpp 等不提供 `/state/*` 的引擎，请关掉。
   bool rwkvUseStatefulRoute = true;
 
   /// Cloudflare Access Service Token 的 Client Id（形如 `xxx.access`）。
@@ -254,12 +251,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   bool _rwkvLaunching = false;
   bool _rwkvStopping = false;
 
-  OfficialServerVariant _serverVariant = OfficialServerVariant.vulkan;
-  RwkvDownloadProgress? _serverInstallProgress;
-  RwkvDownloadProgress? _modelDownloadProgress;
-  RwkvCancelHandle? _serverInstallCancelHandle;
-  RwkvCancelHandle? _modelDownloadCancelHandle;
-
   @override
   void initState() {
     super.initState();
@@ -284,22 +275,13 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
   static const String _kvKeyRwkvCloudProfiles = 'rwkv.cloud_profiles';
   static const String _kvKeyRwkvCloudActiveProfile =
       'rwkv.cloud_active_profile';
-  static const String _kvScopeUiPrefs = 'ui_prefs';
-  static const String _kvKeyRwkvServerVariant = 'rwkv.server_variant';
 
   Future<void> _loadPersistedRwkvPrefs() async {
     try {
       final KeyValueStore kv = await ref.read(keyValueStoreProvider.future);
       String? cfgJson;
-      String? variantJson;
       try {
         cfgJson = await kv.readJson(_kvScopeAiConfig, _kvKeyRwkvCfg);
-      } catch (_) {}
-      try {
-        variantJson = await kv.readJson(
-          _kvScopeUiPrefs,
-          _kvKeyRwkvServerVariant,
-        );
       } catch (_) {}
       String? cloudJson;
       try {
@@ -335,14 +317,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                 if (tt != null && tt.isNotEmpty) cfg.rwkvThinkType = tt;
               }
             }
-          } catch (_) {}
-        }
-        if (variantJson != null && variantJson.isNotEmpty) {
-          try {
-            _serverVariant = OfficialServerVariant.values.firstWhere(
-              (OfficialServerVariant v) => v.name == variantJson,
-              orElse: () => OfficialServerVariant.vulkan,
-            );
           } catch (_) {}
         }
         if (cloudJson != null && cloudJson.isNotEmpty) {
@@ -807,8 +781,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
     if (p.modelPath != null && p.modelPath!.isNotEmpty) {
       cfg.rwkvLocalModelPath = p.modelPath;
     }
-    // 顶部「官方 Server 变体」下拉同步到内置引擎变体，避免两处不一致
-    setState(() => _serverVariant = p.variant);
     _persistRwkvPrefs();
     _ensureRwkvScanned(force: true);
   }
@@ -842,11 +814,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         _kvScopeAiConfig,
         _kvKeyRwkvCfg,
         jsonEncode(rwkvCfg.toMap()),
-      );
-      await kv.writeJson(
-        _kvScopeUiPrefs,
-        _kvKeyRwkvServerVariant,
-        _serverVariant.name,
       );
       // 云端配置（含 CF Service Token）单独持久化，与本地引擎互不影响
       final _ProviderConfig cloudCfg = _configs[_ProviderKind.rwkvCloud]!;
@@ -986,305 +953,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
       if (stopped) await _testConnection();
     } finally {
       if (mounted) setState(() => _rwkvStopping = false);
-    }
-  }
-
-  Future<void> _installOfficialServer() async {
-    final l10n = ref.read(l10nProvider);
-    if (_serverInstallProgress != null &&
-        !_serverInstallProgress!.phase.isTerminal) {
-      return;
-    }
-    setState(() {
-      _serverInstallCancelHandle = null;
-      _serverInstallProgress = RwkvDownloadProgress(
-        phase: RwkvDownloadPhase.fetchingMeta,
-        message: l10n.tf(
-          'AIC.PreparingOfficialServer',
-          '准备下载官方 llama.cpp {variant} …',
-          {'variant': _serverVariant.displayName},
-        ),
-      );
-    });
-    final prov = ref.read(rwkvProviderInstanceProvider);
-    try {
-      final exePath = await prov.installOfficialLlamaServer(
-        variant: _serverVariant,
-        onProgress: (RwkvDownloadProgress p) {
-          if (!mounted) return;
-          setState(() => _serverInstallProgress = p);
-        },
-        onHandleReady: (RwkvCancelHandle h) {
-          if (!mounted) return;
-          setState(() => _serverInstallCancelHandle = h);
-        },
-      );
-      if (!mounted) return;
-      final cfg = _configs[_ProviderKind.rwkv]!;
-      setState(() {
-        cfg.rwkvLocalExecutable = exePath;
-        _serverInstallProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.done,
-          message: l10n.tf(
-            'AIC.OfficialServerInstalled',
-            '官方 server 已安装：{path}',
-            {'path': exePath},
-          ),
-          totalBytes: _serverInstallProgress?.totalBytes ?? 0,
-          receivedBytes: _serverInstallProgress?.totalBytes ?? 0,
-        );
-        _serverInstallCancelHandle = null;
-      });
-      await _saveAndRegister();
-      _persistRwkvPrefs();
-    } on RwkvDownloadCancelledException catch (e, s) {
-      if (!mounted) return;
-      setState(() {
-        _serverInstallProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.cancelled,
-          error: e,
-          stackTrace: s,
-          message: l10n.tf('AIC.InstallCancelled', '安装已取消{suffix}', {
-            'suffix': e.message == null ? '' : '（${e.message}）',
-          }),
-          totalBytes: _serverInstallProgress?.totalBytes ?? 0,
-          receivedBytes: _serverInstallProgress?.receivedBytes ?? 0,
-        );
-        _serverInstallCancelHandle = null;
-      });
-    } on Exception catch (e, s) {
-      if (!mounted) return;
-      setState(() {
-        _serverInstallProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.failed,
-          error: e,
-          stackTrace: s,
-          message: l10n.tf('AIC.InstallFailed', '安装失败：{error}', {
-            'error': '$e',
-          }),
-        );
-        _serverInstallCancelHandle = null;
-      });
-    }
-  }
-
-  Future<void> _showOfficialModelsDialog() async {
-    final l10n = ref.read(l10nProvider);
-    final mm = ScaffoldMessenger.of(context);
-    final prov = ref.read(rwkvProviderInstanceProvider);
-    final List<RwkvOfficialModel>?
-    models = await showDialog<List<RwkvOfficialModel>>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext ctx) {
-        return FutureBuilder<List<RwkvOfficialModel>>(
-          future: prov.listOfficialModels(
-            onProgress: (RwkvDownloadProgress p) {},
-          ),
-          builder:
-              (
-                BuildContext dialogCtx,
-                AsyncSnapshot<List<RwkvOfficialModel>> snapshot,
-              ) {
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return AlertDialog(
-                    title: Text(
-                      l10n.t('AIC.QueryingOfficialModels', '正在查询官方模型列表…'),
-                    ),
-                    content: const LinearProgressIndicator(),
-                  );
-                }
-                if (snapshot.hasError) {
-                  return AlertDialog(
-                    title: Text(l10n.t('AIC.QueryFailed', '查询失败')),
-                    content: SingleChildScrollView(
-                      child: Text('${snapshot.error}'),
-                    ),
-                    actions: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.pop(dialogCtx),
-                        child: Text(l10n.t('Common.Close', '关闭')),
-                      ),
-                    ],
-                  );
-                }
-                final list = snapshot.data ?? const <RwkvOfficialModel>[];
-                return SimpleDialog(
-                  title: Text(
-                    l10n.t('AIC.SelectOfficialModel', '选择要下载的官方 RWKV 模型'),
-                  ),
-                  children: <Widget>[
-                    for (final m in list)
-                      SimpleDialogOption(
-                        onPressed: () =>
-                            Navigator.pop(dialogCtx, <RwkvOfficialModel>[m]),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              const Icon(Icons.download_for_offline_outlined),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      m.displayName,
-                                      style: Theme.of(ctx).textTheme.titleSmall,
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${m.paramsLabel} · ${m.quant.displayLabel.split('(').last.replaceAll(')', '')} · ${m.sizeHumanReadable}\n${m.fileName}',
-                                      style: Theme.of(ctx).textTheme.bodySmall,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (list.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Text(
-                          l10n.t(
-                            'AIC.NoOfficialModels',
-                            '未找到可用官方模型，请稍后再试或手动下载 GGUF 到 rwkv_models/ 目录。',
-                          ),
-                        ),
-                      ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogCtx),
-                      child: Text(l10n.t('Common.Cancel', '取消')),
-                    ),
-                  ],
-                );
-              },
-        );
-      },
-    );
-    if (models == null || models.isEmpty) return;
-    final model = models.first;
-    mm.showSnackBar(
-      SnackBar(
-        content: Text(
-          l10n.tf('AIC.StartDownloadModel', '开始下载：{name}（{size}）', {
-            'name': model.displayName,
-            'size': model.sizeHumanReadable,
-          }),
-        ),
-      ),
-    );
-    await _downloadModel(model);
-  }
-
-  Future<void> _downloadModel(RwkvOfficialModel model) async {
-    final l10n = ref.read(l10nProvider);
-    if (_modelDownloadProgress != null &&
-        !_modelDownloadProgress!.phase.isTerminal) {
-      return;
-    }
-    setState(() {
-      _modelDownloadCancelHandle = null;
-      _modelDownloadProgress = RwkvDownloadProgress(
-        phase: RwkvDownloadPhase.fetchingMeta,
-        message: l10n.tf('AIC.PreparingDownload', '准备下载：{name} …', {
-          'name': model.displayName,
-        }),
-      );
-    });
-    final mm = ScaffoldMessenger.of(context);
-    final prov = ref.read(rwkvProviderInstanceProvider);
-    try {
-      final filePath = await prov.downloadOfficialModel(
-        model,
-        onProgress: (RwkvDownloadProgress p) {
-          if (!mounted) return;
-          setState(() => _modelDownloadProgress = p);
-        },
-        onHandleReady: (RwkvCancelHandle h) {
-          if (!mounted) return;
-          setState(() => _modelDownloadCancelHandle = h);
-        },
-      );
-      if (!mounted) return;
-      setState(() {
-        _modelDownloadProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.done,
-          message: l10n.tf('AIC.DownloadComplete', '下载完成：{path}', {
-            'path': filePath,
-          }),
-          totalBytes: model.sizeBytes,
-          receivedBytes: model.sizeBytes,
-        );
-        _modelDownloadCancelHandle = null;
-      });
-      final cfg = _configs[_ProviderKind.rwkv]!;
-      cfg.rwkvLocalModelPath = filePath;
-      if (cfg.defaultModel == 'rwkv7-g1i' || cfg.defaultModel.isEmpty) {
-        cfg.defaultModel = model.fileName;
-      }
-      await _saveAndRegister();
-      await _ensureRwkvScanned(force: true);
-      _persistRwkvPrefs();
-      mm.showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.tf('AIC.ModelDownloadedSelected', '✅ {name} 已下载并选中。', {
-              'name': model.displayName,
-            }),
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    } on RwkvDownloadCancelledException catch (e, s) {
-      if (!mounted) return;
-      setState(() {
-        _modelDownloadProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.cancelled,
-          error: e,
-          stackTrace: s,
-          message: l10n.tf('AIC.DownloadCancelled', '下载已取消{suffix}', {
-            'suffix': e.message == null ? '' : '（${e.message}）',
-          }),
-          totalBytes: model.sizeBytes,
-          receivedBytes: _modelDownloadProgress?.receivedBytes ?? 0,
-        );
-        _modelDownloadCancelHandle = null;
-      });
-      mm.showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.tf('AIC.DownloadCancelledModel', '下载已取消：{name}', {
-              'name': model.displayName,
-            }),
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    } on Exception catch (e, s) {
-      if (!mounted) return;
-      setState(() {
-        _modelDownloadProgress = RwkvDownloadProgress(
-          phase: RwkvDownloadPhase.failed,
-          error: e,
-          stackTrace: s,
-          message: l10n.tf('AIC.DownloadFailed', '下载失败：{error}', {
-            'error': '$e',
-          }),
-        );
-        _modelDownloadCancelHandle = null;
-      });
-      mm.showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.tf('AIC.DownloadFailedSnack', '下载失败：{error}', {'error': '$e'}),
-          ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
     }
   }
 
@@ -1653,7 +1321,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
         'rwkvLocalExecutable': c.rwkvLocalExecutable,
         'rwkvLocalModelPath': c.rwkvLocalModelPath,
         'rwkvLocalVocabPath': c.rwkvLocalVocabPath,
-        'rwkvLocalServerVariant': c.rwkvLocalServerVariant?.name,
+        'rwkvLocalServerVariant': c.rwkvLocalServerVariant.name,
         'rwkvMaxConcurrentSessions': c.rwkvMaxConcurrentSessions,
         'rwkvThinkType': c.rwkvThinkType,
         'rwkvUseStatefulRoute': c.rwkvUseStatefulRoute,
@@ -1742,54 +1410,6 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
                             : null,
                         onLaunchRwkvServer: _selectedKind == _ProviderKind.rwkv
                             ? _launchRwkvLocalServer
-                            : null,
-                        serverVariant: _selectedKind == _ProviderKind.rwkv
-                            ? _serverVariant
-                            : null,
-                        onServerVariantChanged:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? (OfficialServerVariant v) {
-                                setState(() => _serverVariant = v);
-                                _persistRwkvPrefs();
-                              }
-                            : null,
-                        serverInstallProgress:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? _serverInstallProgress
-                            : null,
-                        modelDownloadProgress:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? _modelDownloadProgress
-                            : null,
-                        onInstallOfficialServer:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? _installOfficialServer
-                            : null,
-                        onShowOfficialModelsDialog:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? _showOfficialModelsDialog
-                            : null,
-                        onCancelServerInstall:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? () {
-                                final h = _serverInstallCancelHandle;
-                                if (h != null && !h.isCancelled) {
-                                  h.cancel(
-                                    l10n.t('Common.UserCancelled', '用户取消'),
-                                  );
-                                }
-                              }
-                            : null,
-                        onCancelModelDownload:
-                            _selectedKind == _ProviderKind.rwkv
-                            ? () {
-                                final h = _modelDownloadCancelHandle;
-                                if (h != null && !h.isCancelled) {
-                                  h.cancel(
-                                    l10n.t('Common.UserCancelled', '用户取消'),
-                                  );
-                                }
-                              }
                             : null,
                         isEnglish: isEnglish,
                       ),
@@ -1890,7 +1510,7 @@ class _AIConfigurationPageState extends ConsumerState<AIConfigurationPage> {
 
 /// 内置推理引擎卡片 —— `rwkv_lightning_cuda`（albatross）。
 ///
-/// 与 llama.cpp 路线完全独立：只吃 `.pth` / `.rwkvq`，且**强制外置词表**
+/// 与其它 provider 完全独立：只吃 `.pth` / `.rwkvq`，且**强制外置词表**
 /// （PITFALLS §27.1）。这里把「装引擎 → 下词表 → 下模型 → 启动」串成一条链，
 /// 装完通过 [onProvisioned] 回写配置。
 class _BuiltInEngineCard extends ConsumerStatefulWidget {
@@ -2004,7 +1624,7 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
     }
   }
 
-  /// 下载官方 `.pth` 原生权重（引擎格式，非 GGUF）
+  /// 下载官方 `.pth` / `.rwkvq` 原生权重（引擎唯一支持的格式）
   Future<void> _downloadModel() async {
     if (_busy) return;
     final l10n = ref.read(l10nProvider);
@@ -2195,9 +1815,7 @@ class _BuiltInEngineCardState extends ConsumerState<_BuiltInEngineCard> {
     final L10n l10n = ref.read(l10nProvider);
     setState(() => _launching = true);
     try {
-      final bool ok = await _provider.launchLocalServer(
-        serverVariant: _variant,
-      );
+      final bool ok = await _provider.launchLocalServer();
       final String? diag = _provider.lastLaunchDiagnostics;
       if (!mounted) return;
       setState(
@@ -2960,14 +2578,6 @@ class _ConfigCard extends ConsumerWidget {
     this.onRefreshRwkvModels,
     this.onLaunchRwkvServer,
     this.onStopRwkvServer,
-    this.serverVariant,
-    this.onServerVariantChanged,
-    this.serverInstallProgress,
-    this.modelDownloadProgress,
-    this.onInstallOfficialServer,
-    this.onShowOfficialModelsDialog,
-    this.onCancelServerInstall,
-    this.onCancelModelDownload,
     required this.isEnglish,
   });
 
@@ -2994,14 +2604,6 @@ class _ConfigCard extends ConsumerWidget {
   final Future<void> Function()? onStopRwkvServer;
   final VoidCallback? onRefreshRwkvModels;
   final Future<void> Function()? onLaunchRwkvServer;
-  final OfficialServerVariant? serverVariant;
-  final void Function(OfficialServerVariant v)? onServerVariantChanged;
-  final RwkvDownloadProgress? serverInstallProgress;
-  final RwkvDownloadProgress? modelDownloadProgress;
-  final Future<void> Function()? onInstallOfficialServer;
-  final Future<void> Function()? onShowOfficialModelsDialog;
-  final VoidCallback? onCancelServerInstall;
-  final VoidCallback? onCancelModelDownload;
   final bool isEnglish;
 
   @override
@@ -3391,206 +2993,6 @@ class _ConfigCard extends ConsumerWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: scheme.tertiaryContainer.withValues(alpha: 0.22),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: scheme.outlineVariant),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.cloud_download_outlined,
-                          size: 18,
-                          color: scheme.tertiary,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          l10n.t('AIC.OfficialResourcesTitle', '官方资源一键安装'),
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(color: scheme.onTertiaryContainer),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: Builder(
-                            builder: (BuildContext _) {
-                              final sv =
-                                  serverVariant ?? OfficialServerVariant.vulkan;
-                              return InputDecorator(
-                                decoration: InputDecoration(
-                                  isDense: true,
-                                  labelText: l10n.t(
-                                    'AIC.FieldHardwareVariant',
-                                    '硬件加速版本',
-                                  ),
-                                  border: const OutlineInputBorder(),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 6,
-                                  ),
-                                ),
-                                child: DropdownButtonHideUnderline(
-                                  child: DropdownButton<OfficialServerVariant>(
-                                    value: sv,
-                                    isDense: true,
-                                    onChanged: (OfficialServerVariant? v) {
-                                      if (v != null &&
-                                          onServerVariantChanged != null) {
-                                        onServerVariantChanged!(v);
-                                      }
-                                    },
-                                    items: OfficialServerVariant.values
-                                        .map(
-                                          (OfficialServerVariant v) =>
-                                              DropdownMenuItem<
-                                                OfficialServerVariant
-                                              >(
-                                                value: v,
-                                                child: Text(v.displayName),
-                                              ),
-                                        )
-                                        .toList(growable: false),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          flex: 4,
-                          child: FilledButton.icon(
-                            onPressed:
-                                (serverInstallProgress != null &&
-                                    !serverInstallProgress!.phase.isTerminal)
-                                ? null
-                                : onInstallOfficialServer,
-                            icon:
-                                serverInstallProgress != null &&
-                                    !serverInstallProgress!.phase.isTerminal
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.install_desktop_outlined,
-                                    size: 18,
-                                  ),
-                            label: Text(
-                              serverInstallProgress != null &&
-                                      serverInstallProgress!.phase.isTerminal &&
-                                      serverInstallProgress!.phase ==
-                                          RwkvDownloadPhase.done
-                                  ? l10n.t(
-                                      'AIC.OfficialServerInstalledBtn',
-                                      '✅ 已安装官方 Server',
-                                    )
-                                  : l10n.t(
-                                      'AIC.InstallOfficialServerBtn',
-                                      '📦 安装官方 llama.cpp Server',
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (serverInstallProgress != null)
-                      _buildProgressBlock(
-                        context,
-                        ref: ref,
-                        progress: serverInstallProgress!,
-                        scheme: scheme,
-                        completedLabel: l10n.t(
-                          'AIC.LlamaServerInstalled',
-                          '✅ llama-server.exe 已安装',
-                        ),
-                        idleHide: false,
-                        onCancel:
-                            (serverInstallProgress != null &&
-                                !serverInstallProgress!.phase.isTerminal &&
-                                onCancelServerInstall != null)
-                            ? onCancelServerInstall
-                            : null,
-                      ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed:
-                                (modelDownloadProgress != null &&
-                                    !modelDownloadProgress!.phase.isTerminal)
-                                ? null
-                                : onShowOfficialModelsDialog,
-                            icon:
-                                modelDownloadProgress != null &&
-                                    !modelDownloadProgress!.phase.isTerminal
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.download_for_offline_outlined,
-                                    size: 18,
-                                  ),
-                            label: Text(
-                              modelDownloadProgress != null &&
-                                      modelDownloadProgress!.phase.isTerminal &&
-                                      modelDownloadProgress!.phase ==
-                                          RwkvDownloadPhase.done
-                                  ? l10n.t(
-                                      'AIC.LatestModelDownloadedBtn',
-                                      '✅ 已下载最新模型',
-                                    )
-                                  : l10n.t(
-                                      'AIC.DownloadOfficialModelBtn',
-                                      '📥 下载官方原生 RWKV 模型',
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (modelDownloadProgress != null)
-                      _buildProgressBlock(
-                        context,
-                        ref: ref,
-                        progress: modelDownloadProgress!,
-                        scheme: scheme,
-                        completedLabel: l10n.t(
-                          'AIC.OfficialModelDownloaded',
-                          '✅ 官方模型已下载',
-                        ),
-                        idleHide: false,
-                        onCancel:
-                            (modelDownloadProgress != null &&
-                                !modelDownloadProgress!.phase.isTerminal &&
-                                onCancelModelDownload != null)
-                            ? onCancelModelDownload
-                            : null,
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
                   color: scheme.secondaryContainer.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: scheme.outlineVariant),
@@ -3713,7 +3115,7 @@ class _ConfigCard extends ConsumerWidget {
                               decoration: InputDecoration(
                                 hintText: l10n.t(
                                   'AIC.HintRwkvExecutable',
-                                  r'C:\path\to\llama-server.exe 或 rwkv.cpp\server.exe',
+                                  r'C:\path\to\rwkv_lighting_cuda.exe',
                                 ),
                                 border: const OutlineInputBorder(),
                                 isDense: true,
@@ -3723,8 +3125,8 @@ class _ConfigCard extends ConsumerWidget {
                         ),
                         _Field(
                           label: l10n.t(
-                            'AIC.FieldLocalGgufModel',
-                            '本地 GGUF 模型（下拉选择）',
+                            'AIC.FieldLocalModel',
+                            '本地模型（.pth / .rwkvq）',
                           ),
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 320),
@@ -3773,8 +3175,8 @@ class _ConfigCard extends ConsumerWidget {
                                       hint: Text(
                                         list.isEmpty
                                             ? l10n.t(
-                                                'AIC.NoGgufFiles',
-                                                'rwkv_models/ 无 GGUF 文件',
+                                                'AIC.NoLocalModelFiles',
+                                                'rwkv_models/ 无 .pth / .rwkvq 文件',
                                               )
                                             : l10n.t(
                                                 'AIC.SelectModelHint',
@@ -4074,7 +3476,6 @@ class _DualAgentCard extends ConsumerStatefulWidget {
 }
 
 class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
-  bool _g1kPresetLoading = false;
   late final TextEditingController _mainModelCtrl;
   late final TextEditingController _mainRoleCtrl;
   late final TextEditingController _subModelCtrl;
@@ -4234,92 +3635,6 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     await ref.read(g1kBookPresetProvider.notifier).update(const G1kBookPreset());
   }
 
-  Future<void> _applyG1kPreset() async {
-    final L10n l10n = ref.read(l10nProvider);
-    final RwkvCloudProvider cloud = ref.read(rwkvCloudProviderInstanceProvider);
-    if (!cloud.isAvailable ||
-        Uri.tryParse(cloud.configuration.baseUrl)?.host !=
-            'api-7b.rwkvos.com') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.t(
-              'AICfg.G1kPresetSetup',
-              '请先在 RWKV 云端页保存 7B 官方端点和 CF 凭据，并测试连接。',
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-    setState(() => _g1kPresetLoading = true);
-    final Map<String, String> headers = cloud.configuration.customHeaders;
-    final RwkvCloudProvider writer = RwkvCloudProvider();
-    try {
-      final String? mainId = resolveG1kModel(
-        kG1kMainModelFamily,
-        (await cloud.getAvailableModels()).map((m) => m.id),
-      );
-      final bool writerReady = await writer.initialize(
-        RwkvCloudConfiguration(
-          baseUrl: kG1kWriterBaseUrl,
-          defaultModel: kG1kWriterModelFamily,
-          cfAccessClientId: headers[kHeaderCfAccessClientId] ?? '',
-          cfAccessClientSecret: headers[kHeaderCfAccessClientSecret] ?? '',
-          timeoutSeconds: cloud.configuration.timeoutSeconds,
-        ),
-      );
-      final String? writerId = writerReady
-          ? resolveG1kModel(
-              kG1kWriterModelFamily,
-              (await writer.getAvailableModels()).map((m) => m.id),
-            )
-          : null;
-      if (!mounted) return;
-      if (mainId == null || writerId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              l10n.t(
-                'AICfg.G1kPresetFailed',
-                '无法唯一匹配 G1K 两个模型，请检查 7B/3B 端点模型列表，或手动填写完整 ID。',
-              ),
-            ),
-          ),
-        );
-        return;
-      }
-      await ref
-          .read(g1kBookPresetProvider.notifier)
-          .update(G1kBookPreset(mainModel: mainId, writerModel: writerId));
-      if (!mounted) return;
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            l10n.t('AICfg.G1kPresetSaved', '已配置 G1K：7.2B 规划/润色，2.9B 写正文。'),
-          ),
-        ),
-      );
-    } on Object {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              l10n.t(
-                'AICfg.G1kPresetFailed',
-                '无法唯一匹配 G1K 两个模型，请检查 7B/3B 端点模型列表，或手动填写完整 ID。',
-              ),
-            ),
-          ),
-        );
-      }
-    } finally {
-      writer.dispose();
-      if (mounted) setState(() => _g1kPresetLoading = false);
-    }
-  }
-
   /// 可选项：**ModelManager 已注册（即已在对应平台页配置/测试过）的 provider**
   /// + 两个始终存在的 RWKV 单例。
   ///
@@ -4390,7 +3705,6 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
     final scheme = Theme.of(context).colorScheme;
     final mm = ref.watch(modelManagerProvider);
     final AgentRoleWorkflowSettings s = ref.watch(dualAgentSettingsProvider);
-    final G1kBookPreset g1kPreset = ref.watch(g1kBookPresetProvider);
     final List<String> options = _providerOptions(mm.getAllProviders());
     if (!options.contains(AgentEndpointRegistry.platform(s.mainAgentProvider))) {
       options.add(AgentEndpointRegistry.platform(s.mainAgentProvider));
@@ -4461,48 +3775,28 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
           Text(
             l10n.t(
               'AICfg.DualAgentDesc',
-              '建议由稠密模型承担 MainAgent，MoE 或本地 GGUF 模型承担 SubAgent。SubAgent 负责总结需求、整理定稿并归档。',
+              '基模固定，岗位由 state 决定：MainAgent 承担大纲/规划岗位'
+                  '（outlinerStruct），SubAgent 承担正文/润色岗位'
+                  '（novelistProse + copyeditorPatch）。未注册 state 的岗位自动回落基模。',
             ),
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
           ),
-          Text(
-            l10n.t(
-              'AICfg.G1kPresetHint',
-              '多智能体写书专用：7.2B 负责大纲与润色，2.9B 负责正文；不修改普通双代理配置。',
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: scheme.secondaryContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(8),
             ),
-            style: TextStyle(fontSize: 11, color: scheme.primary),
-          ),
-          if (g1kPreset.enabled)
-            SelectableText(
-              'Main: ${g1kPreset.mainModel}\nSub: ${g1kPreset.writerModel}',
+            child: Text(
+              l10n.t(
+                'AICfg.DualAgentStatePosts',
+                '岗位分工由 state 决定，不再绑定模型参数（7.2B / 2.9B 等）：'
+                    '大纲岗位 → outlinerStruct；正文岗位 → novelistProse；'
+                    '润色/返工岗位 → copyeditorPatch；设定抽取 → stateUpdates。'
+                    '换岗位只切 state，基模始终是当前端点加载的那一个。',
+              ),
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-            ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 8,
-              children: [
-                TextButton.icon(
-                  onPressed: _g1kPresetLoading ? null : _applyG1kPreset,
-                  icon: _g1kPresetLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.auto_fix_high_outlined, size: 18),
-                  label: Text(
-                    l10n.t('AICfg.G1kPreset', '预置 G1K 7.2B 主编 + 2.9B 写手'),
-                  ),
-                ),
-                if (g1kPreset.enabled)
-                  TextButton(
-                    onPressed: () => ref
-                        .read(g1kBookPresetProvider.notifier)
-                        .update(const G1kBookPreset()),
-                    child: Text(l10n.t('AICfg.G1kDisable', '停用写书预设')),
-                  ),
-              ],
             ),
           ),
           Material(
@@ -4662,261 +3956,6 @@ class _DualAgentCardState extends ConsumerState<_DualAgentCard> {
   }
 }
 
-String _formatBytes(int bytes) {
-  if (bytes <= 0) return '0 B';
-  const units = <String>['B', 'KB', 'MB', 'GB', 'TB'];
-  var size = bytes.toDouble();
-  var idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
-  }
-  return '${size.toStringAsFixed(size >= 100 || idx <= 1 ? 0 : 2)} ${units[idx]}';
-}
-
-String _formatEta(int totalSeconds) {
-  if (totalSeconds <= 0) return '--:--';
-  final m = totalSeconds ~/ 60;
-  final s = totalSeconds.remainder(60);
-  return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-}
-
-Widget _buildProgressBlock(
-  BuildContext context, {
-  required WidgetRef ref,
-  required RwkvDownloadProgress progress,
-  required ColorScheme scheme,
-  required String completedLabel,
-  bool idleHide = true,
-  VoidCallback? onCancel,
-}) {
-  final l10n = ref.watch(l10nProvider);
-  if (idleHide &&
-      progress.phase == RwkvDownloadPhase.idle &&
-      (progress.message ?? '').isEmpty) {
-    return const SizedBox.shrink();
-  }
-  switch (progress.phase) {
-    case RwkvDownloadPhase.failed:
-      final err =
-          progress.error?.toString() ??
-          progress.message ??
-          l10n.t('AIC.UnknownError', '未知错误');
-      return Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: scheme.errorContainer.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: scheme.error.withValues(alpha: 0.5)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.error_outline, size: 18, color: scheme.error),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l10n.tf('AIC.PhaseFailedLabel', '❌ {phaseLabel}', {
-                      'phaseLabel': l10n.t(
-                        progress.phase.labelKey,
-                        progress.phase.label,
-                      ),
-                    }),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onErrorContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    err,
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onErrorContainer,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    case RwkvDownloadPhase.cancelled:
-      return Row(
-        children: [
-          Icon(Icons.cancel_outlined, size: 16, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              l10n.tf('AIC.CancelledWithMessage', '已取消：{msg}', {
-                'msg': progress.message ?? '',
-              }),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: scheme.onSurfaceVariant,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ),
-        ],
-      );
-    case RwkvDownloadPhase.done:
-      final msg = progress.message ?? completedLabel;
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: scheme.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: scheme.primary.withValues(alpha: 0.25)),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.check_circle_outline, size: 16, color: scheme.primary),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                msg,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurface,
-                  fontWeight: FontWeight.w500,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    case RwkvDownloadPhase.fetchingMeta:
-    case RwkvDownloadPhase.downloading:
-    case RwkvDownloadPhase.verifying:
-    case RwkvDownloadPhase.extracting:
-    case RwkvDownloadPhase.installing:
-    case RwkvDownloadPhase.idle:
-      final double frac = progress.totalBytes > 0
-          ? progress.fractionComplete.clamp(0.0, 1.0)
-          : 0.0;
-      final received = _formatBytes(progress.receivedBytes);
-      final total = progress.totalBytes > 0
-          ? _formatBytes(progress.totalBytes)
-          : '--';
-      final speed = progress.speedMbps > 0
-          ? '${progress.speedMbps.toStringAsFixed(2)} Mbps'
-          : '-- Mbps';
-      final eta = _formatEta(progress.etaSeconds);
-      return Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                LinearProgressIndicator(
-                  value: frac > 0 ? frac : null,
-                  minHeight: 6,
-                  backgroundColor: scheme.surfaceContainerHighest,
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(
-                      l10n.t(progress.phase.labelKey, progress.phase.label),
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: scheme.primary,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      '$received / $total',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: scheme.onSurfaceVariant,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      speed,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: scheme.onSurfaceVariant,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'ETA $eta',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: scheme.onSurfaceVariant,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ],
-                ),
-                if ((progress.message ?? '').isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    progress.message!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.onSurfaceVariant,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (onCancel != null)
-            Positioned(
-              top: -4,
-              right: -4,
-              child: Semantics(
-                label: l10n.t('Common.Cancel', '取消'),
-                button: true,
-                child: Tooltip(
-                  message: l10n.t('AIC.CancelCurrentTask', '取消当前任务'),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: onCancel,
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(
-                        Icons.highlight_off_outlined,
-                        size: 18,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      );
-  }
-}
-
-/// 功能 C：章节落库后自动同步世界观 —— 两级开关（规则同步默认开 / AI 抽取默认关）。
-/// 生成采样参数（官方推荐预设 + 手动微调）与思维链卡片（全局设置）。
-///
-/// 采样参数仅对 RWKV 家族 provider 下发（DeepSeek/Zhipu 等严格 API 会 400，
-/// 下发前由 `isRwkvFamilyProvider` 门控 —— 见 `rwkv_sampling.dart`）。
-/// 所有改动写入 KVStore `(ai_config, runtime_settings)` 并同步全局
-/// `aiRuntimeSettings`，**下一次模型调用即生效**（无需重启/重注册）。
 class _SamplingThinkingCard extends ConsumerStatefulWidget {
   const _SamplingThinkingCard();
 

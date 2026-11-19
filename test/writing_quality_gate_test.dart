@@ -283,10 +283,11 @@ void main() {
 
     final ChapterRow ch = await runOneChapter(chat, craft: WritingCraft.beam);
 
-    // 目标 = max(4200, 3200×1.2=3840) = 4200 字，每轮 5 候选 × ~900 字 → 5 轮
+    // 目标 = max(4200, 3200×1.2=3840) = 4200 字，每轮 3 候选 × ~900 字 → 5 轮
+    //（默认 beamWidth 2026-11-18 由 5 调到 3：本地单卡下 5 份的 token 成本不划算）
     final int beamCalls =
         chat.userCalls.where((String u) => u.contains('本章要点')).length;
-    expect(beamCalls, 25, reason: '5 轮 × 每轮 5 份候选');
+    expect(beamCalls, 15, reason: '5 轮 × 每轮 3 份候选');
     expect(
       chat.userCalls.firstWhere((String u) => u.contains('本章要点')),
       contains('【本卷背景】'),

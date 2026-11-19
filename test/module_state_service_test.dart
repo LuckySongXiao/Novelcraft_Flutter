@@ -230,4 +230,30 @@ void main() {
     expect(calls, 2, reason: '回声必须带纠偏重问一次');
     expect(note, contains('更新 1 项'));
   });
+
+  test('分片互不重叠且切口对齐句末（同一段正文只送一次）', () async {
+    final String source =
+        List<String>.generate(600, (int i) => '第$i句正文内容大约十几个字。').join();
+    model.answer = (_) => '无';
+    final String? note = await service.extractAndApply(input(source));
+    expect(note, contains('更新 0 项'));
+
+    final List<String> chunks = model.requests
+        .map((ChatRequest r) => r.messages.single.content)
+        .map((String p) => p.split('【正文】\n').last)
+        .toList();
+    expect(chunks.length, greaterThan(3), reason: '长文必须切成多片');
+    expect(
+      chunks.join(),
+      source,
+      reason: '分片必须无缝拼接：既不重叠，也不丢字（旧实现步长 1100 会重复 21%）',
+    );
+    for (int i = 0; i < chunks.length - 1; i++) {
+      expect(
+        chunks[i].endsWith('。'),
+        isTrue,
+        reason: '第 ${i + 1} 片切口应回退到句末，避免把半句话交给模型',
+      );
+    }
+  });
 }

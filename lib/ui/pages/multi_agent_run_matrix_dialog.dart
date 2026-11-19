@@ -1,7 +1,7 @@
 // 写作动态矩阵 —— 多智能体写书后台运行时的实时进度视图。
 //
-// 入口：AppBar 右上角绿色「写作中」长条（点击打开）。矩阵化显示每个并行
-// 章节团队的阶段（排队/派活/成稿/验收/返工/补写/定稿/失败）与章内进度，
+// 入口：AppBar 右上角绿色「写作中」长条（点击打开）。矩阵化显示每条并行
+// 章节管线的阶段（排队/起稿/续写/复核/返工/补写/润色/失败）与章内进度，
 // 状态经 multiAgentRunProvider 实时推送，无需轮询刷新。
 library;
 
@@ -128,7 +128,7 @@ class _MultiAgentRunMatrixDialogState
                       child: Center(
                         child: Text(
                             l10n.t('MAG.Matrix.Hint',
-                                '章节规划完成后，此处将实时显示各团队的写作进度'),
+                                '章节规划完成后，此处将实时显示各章节管线的写作进度'),
                             style: TextStyle(
                                 fontSize: 12,
                                 color: scheme.onSurfaceVariant)),

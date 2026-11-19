@@ -403,7 +403,7 @@ class _AiHealthPageState extends ConsumerState<AiHealthPage> {
     if (groupsRaw is List && groupsRaw.isNotEmpty) {
       rows.add(const SizedBox(height: 6));
       rows.add(Text(
-          l10n.t('AIH.AgentState.GroupList', '分组明细（并发 10 = 1 团队并行写 1 章）'),
+          l10n.t('AIH.AgentState.GroupList', '分组明细（每章 1 条写作管线；分段串行只使用主笔 state）'),
           style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)));
       for (final Object? gRaw in groupsRaw) {
         if (gRaw is! Map) continue;

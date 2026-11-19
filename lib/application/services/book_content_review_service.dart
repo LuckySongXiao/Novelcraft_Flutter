@@ -22,7 +22,7 @@ class BookReviewComment {
     required this.problem,
     required this.suggestion,
     required this.quote,
-    this.author = '7B审查员',
+    this.author = '审查岗位',
   });
 
   final String severity;
@@ -44,7 +44,7 @@ class BookReviewComment {
         problem: (json['problem'] as String?) ?? '',
         suggestion: (json['suggestion'] as String?) ?? '',
         quote: (json['quote'] as String?) ?? '',
-        author: (json['author'] as String?) ?? '7B审查员',
+        author: (json['author'] as String?) ?? '审查岗位',
       );
 }
 
@@ -188,7 +188,7 @@ class BookContentReviewService {
     if (!response.isSuccess) return null;
     final String raw = AIOutputSanitizer.extractCleanOutput(response.content);
     final List<BookReviewComment>? comments =
-        _parseComments(raw, text, author: '7B审查员');
+        _parseComments(raw, text, author: '审查岗位');
     if (comments == null) return null;
     final List<BookReviewComment> allComments = <BookReviewComment>[
       ...guestComments,
@@ -217,16 +217,16 @@ class BookContentReviewService {
           if (seniorAdvice.isNotEmpty) {
             allComments.add(BookReviewComment(
               severity: seniorApproved ? 'info' : 'warning',
-              problem: seniorApproved ? '13B 已认可 7B 方案' : '13B 要求进一步修订',
+              problem: seniorApproved ? '高级审查岗位已认可审查方案' : '高级审查岗位要求进一步修订',
               suggestion: seniorAdvice,
               quote: '',
-              author: '13B首席审查员',
+              author: '高级审查岗位',
             ));
           }
           allComments.addAll(
             _parseComments(jsonEncode(<String, Object?>{
               'comments': verdict['comments'],
-            }), text, author: '13B首席审查员') ?? const <BookReviewComment>[],
+            }), text, author: '高级审查岗位') ?? const <BookReviewComment>[],
           );
         }
       }
@@ -463,7 +463,7 @@ class BookContentReviewService {
   static List<BookReviewComment>? _parseComments(
     String raw,
     String source, {
-    String author = '7B审查员',
+    String author = '审查岗位',
   }) {
     final Object? decoded = _decodeReviewPayload(raw);
     final Object? list = decoded is List

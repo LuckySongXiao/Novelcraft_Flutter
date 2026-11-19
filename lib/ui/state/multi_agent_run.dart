@@ -2,7 +2,7 @@
 //
 // 需求：向导对话框可「收起到后台」，生成在后台继续；AppBar 右上角出现
 // 绿色「写作中」动态长条（展示最新进度），点击进入章节矩阵视图实时查看
-// 各并行团队的写作进度。
+// 各并行章节管线的写作进度。
 //
 // 结构：Notifier 持有 MultiAgentRunState（步骤/总进度/章节矩阵），
 // 持有 Completer 让收起后的对话框（或再次打开的向导）能等到同一次结果。
@@ -19,12 +19,12 @@ import '../../l10n/l10n.dart';
 /// 章节阶段标签（矩阵 / AppBar 长条共用），按当前界面语言渲染。
 String multiAgentPhaseLabel(Object phase, L10n l10n) => switch (phase) {
       MultiAgentChapterPhase.queued => l10n.t('MAG.Phase.Queued', '排队中'),
-      MultiAgentChapterPhase.planning => l10n.t('MAG.Phase.Planning', '组长派活'),
-      MultiAgentChapterPhase.writing => l10n.t('MAG.Phase.Writing', '写手成稿'),
-      MultiAgentChapterPhase.accepting => l10n.t('MAG.Phase.Accepting', '组长验收'),
-      MultiAgentChapterPhase.rework => l10n.t('MAG.Phase.Rework', '打回返工'),
-      MultiAgentChapterPhase.leaderFix => l10n.t('MAG.Phase.LeaderFix', '组长补写'),
-      MultiAgentChapterPhase.polishing => l10n.t('MAG.Phase.Polishing', '拼接定稿'),
+      MultiAgentChapterPhase.planning => l10n.t('MAG.Phase.Planning', '主笔起稿'),
+      MultiAgentChapterPhase.writing => l10n.t('MAG.Phase.Writing', '分段续写'),
+      MultiAgentChapterPhase.accepting => l10n.t('MAG.Phase.Accepting', '质量复核'),
+      MultiAgentChapterPhase.rework => l10n.t('MAG.Phase.Rework', '返工修复'),
+      MultiAgentChapterPhase.leaderFix => l10n.t('MAG.Phase.LeaderFix', '主笔补写'),
+      MultiAgentChapterPhase.polishing => l10n.t('MAG.Phase.Polishing', '润色定稿'),
       MultiAgentChapterPhase.outlineRepair =>
         l10n.t('MAG.Phase.OutlineRepair', '调纲重写'),
       MultiAgentChapterPhase.done => l10n.t('MAG.Phase.Done', '已完成'),

@@ -17,7 +17,7 @@
 //   - 响应返回后：把新派生的 state 存回 cache
 //
 // 本文件不直接 `import 'dart:io'`，可在 Web 端编译通过（Server 是远端
-// HTTP 的模式下 Web 端也能用 State 复用；只是 Scanner 自动扫 gguf 仅
+// HTTP 的模式下 Web 端也能用 State 复用；只是 Scanner 自动扫本地权重仅
 // Native 生效）。
 library;
 
@@ -37,7 +37,6 @@ import 'rwkv_session_archive.dart';
 import 'rwkv_file_probe.dart';
 import 'rwkv_lightning_launch_args.dart';
 import 'rwkv_models.dart';
-import 'rwkv_official_resources.dart' show OfficialServerVariant;
 import 'rwkv_session.dart';
 import '../runtime_settings.dart';
 import 'rwkv_state.dart';
@@ -190,10 +189,14 @@ class RwkvEngineConfig {
   /// HTTP 基础地址（server 监听地址）。
   final String baseUrl;
 
-  /// 本地模型目录（Native 下自动扫 .gguf）。
+  /// 本地模型目录（Native 下自动扫 `.pth` / `.rwkvq`）。
   final String modelsDir;
 
-  /// 引擎级并发上限（同机可并行多少个 session；7B 模型建议 2~4）。
+  /// 引擎级并发上限（同机可并行多少个 session）。
+  ///
+  /// 唯一引擎 `rwkv_lightning_cuda` 的服务端 admission 队列实测可扛 100+，
+  /// 客户端默认 16 与 AI 配置页 `rwkvMaxConcurrentSessions` 默认值一致；
+  /// 早期默认 4 会把 beam / 多写手并行压成 4 路。
   final int maxConcurrentSessions;
 
   /// State 缓存上限条目数（LRU）。
@@ -223,7 +226,7 @@ class RwkvEngineConfig {
   const RwkvEngineConfig({
     this.baseUrl = 'http://localhost:8000',
     this.modelsDir = 'rwkv_models',
-    this.maxConcurrentSessions = 4,
+    this.maxConcurrentSessions = 16,
     this.maxStateCacheSize = 64,
     this.stateTtl = const Duration(minutes: 30),
     this.sessionIdleTtl = const Duration(minutes: 60),
@@ -247,7 +250,7 @@ class RwkvEngineConfig {
         baseUrl: (map['baseUrl'] as String?) ?? 'http://localhost:8000',
         modelsDir: (map['modelsDir'] as String?) ?? 'rwkv_models',
         maxConcurrentSessions:
-            (map['maxConcurrentSessions'] as num?)?.toInt() ?? 4,
+            (map['maxConcurrentSessions'] as num?)?.toInt() ?? 16,
         maxStateCacheSize:
             (map['maxStateCacheSize'] as num?)?.toInt() ?? 64,
         stateTtl: Duration(
@@ -418,7 +421,6 @@ class RwkvEngine {
     int port = 8000,
     List<String> extraArgs = const [],
     Duration startupTimeout = const Duration(seconds: 45),
-    OfficialServerVariant? serverVariant,
     String? vocabPath,
     bool enableDynamicModelLoading = false,
     String? stateDbPath,
@@ -432,50 +434,34 @@ class RwkvEngine {
     final Stopwatch sw = Stopwatch()..start();
     _lastLaunchDiagnostics = null;
     try {
-      final bool isLightning = serverVariant == OfficialServerVariant.cuda12 ||
-          serverVariant == OfficialServerVariant.cuda13;
-
-      // ---------------- 参数构造（两套引擎的 CLI 完全不同）----------------
-      final List<String> args;
-      if (isLightning) {
-        final String mp = modelFilePath ?? '';
-        final String vp = vocabPath ?? '';
-        // 探测（本文件不 import dart:io，走条件导入的探针）
-        final bool modelIsDir = rwkvPathIsDirectory(mp);
-        final RwkvLightningLaunchArgs la = RwkvLightningLaunchArgs(
-          modelPath: mp,
-          vocabPath: vp,
-          port: port,
-          enableDynamicModelLoading: enableDynamicModelLoading,
-          stateDbPath: stateDbPath,
-        );
-        // 硬校验集中在 RwkvLightningLaunchArgs 那边（纯函数，可单测）：
-        // ①GGUF 混入 ②词表缺失/过小 —— 两条都会让进程秒退，
-        // 而 UI 侧只能看到 "连接被拒"，极难定位（PITFALLS §27.1）。
-        final RwkvLightningPreflight pf = preflightLightningArgs(
-          la,
-          isDirectory: modelIsDir,
-          vocabSizeBytes: rwkvFileSizeOrNull(vp),
-          modelSizeBytes: modelIsDir ? null : rwkvFileSizeOrNull(mp),
-        );
-        if (!pf.ok) {
-          _lastLaunchDiagnostics = '${pf.message}\n'
-              'args=${la.describeRedacted()}';
-          _logger.severe(_lastLaunchDiagnostics);
-          return false;
-        }
-        args = <String>[...la.toArgs(), ...extraArgs];
-      } else {
-        // llama.cpp / llama-server CLI
-        args = <String>[
-          '--model', modelFilePath ?? '',
-          '--host', '127.0.0.1',
-          '--port', '$port',
-          '--ctx-size', '8192',
-          '--n-gpu-layers', '99',
-          ...extraArgs,
-        ];
+      // ---------------- 参数构造（唯一引擎：rwkv_lightning_cuda）----------------
+      final String mp = modelFilePath ?? '';
+      final String vp = vocabPath ?? '';
+      // 探测（本文件不 import dart:io，走条件导入的探针）
+      final bool modelIsDir = rwkvPathIsDirectory(mp);
+      final RwkvLightningLaunchArgs la = RwkvLightningLaunchArgs(
+        modelPath: mp,
+        vocabPath: vp,
+        port: port,
+        enableDynamicModelLoading: enableDynamicModelLoading,
+        stateDbPath: stateDbPath,
+      );
+      // 硬校验集中在 RwkvLightningLaunchArgs 那边（纯函数，可单测）：
+      // ①GGUF 混入 ②词表缺失/过小 —— 两条都会让进程秒退，
+      // 而 UI 侧只能看到 "连接被拒"，极难定位（PITFALLS §27.1）。
+      final RwkvLightningPreflight pf = preflightLightningArgs(
+        la,
+        isDirectory: modelIsDir,
+        vocabSizeBytes: rwkvFileSizeOrNull(vp),
+        modelSizeBytes: modelIsDir ? null : rwkvFileSizeOrNull(mp),
+      );
+      if (!pf.ok) {
+        _lastLaunchDiagnostics = '${pf.message}\n'
+            'args=${la.describeRedacted()}';
+        _logger.severe(_lastLaunchDiagnostics);
+        return false;
       }
+      final List<String> args = <String>[...la.toArgs(), ...extraArgs];
       final ok = await launcher.start(
         executable: executable,
         arguments: args,

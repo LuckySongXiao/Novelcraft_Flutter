@@ -46,6 +46,8 @@ class RwkvCloudSessionRecord {
     List<ChatMessage>? transcript,
     this.turnCount = 0,
     int? lastActiveMs,
+    this.epoch = 0,
+    this.systemPrompt = '',
   })  : transcript = transcript ?? <ChatMessage>[],
         lastActiveMs = lastActiveMs ?? DateTime.now().millisecondsSinceEpoch;
 
@@ -53,10 +55,19 @@ class RwkvCloudSessionRecord {
   final String sessionKey;
 
   /// 下发给服务端的会话 ID（**客户端生成**，持久化后跨重启不变）。
-  final String sessionId;
+  ///
+  /// ⚠ 可变：引擎重启/淘汰或台账换代时会被清空（[needsRebuild] = true），
+  /// 重放重建前会换成**新的** id —— 拿旧 id 重放等于重放给一个不存在的会话。
+  String sessionId;
 
   /// 已发生的对话（user/assistant 成对），仅用于**重放重建**服务端 state。
   final List<ChatMessage> transcript;
+
+  /// 首次建立会话时使用的 system prompt（重放重建时补回）。
+  String systemPrompt;
+
+  /// 台账「引擎世代」戳：与当前世代不一致 → 旧 id 视为失效。
+  int epoch;
 
   /// 已完成的轮数。
   int turnCount;
@@ -66,6 +77,12 @@ class RwkvCloudSessionRecord {
 
   /// 是否尚未与服务端建立过 state。
   bool get isFresh => turnCount == 0 || transcript.isEmpty;
+
+  /// 服务端会话是否已确认失效、需要「换新 id + 整本重放」。
+  bool get needsRebuild => sessionId.trim().isEmpty;
+
+  /// 换一个新会话 id（重放重建前调用）。
+  void assignSessionId(String id) => sessionId = id.trim();
 
   /// 构造本轮要下发的**增量**提示词；首轮带上 system 与全部 messages。
   ///
@@ -116,14 +133,25 @@ class RwkvCloudSessionRecord {
     return sb.toString();
   }
 
-  /// 把整份转写本拼成单条 prompt（重放重建用，末尾停在 `Assistant:`）。
-  String buildReplayPrompt() => buildPrompt(
-        transcript.where((ChatMessage m) => m.role != ChatRole.system),
-        systemPrompt: transcript
-            .where((ChatMessage m) => m.role == ChatRole.system)
-            .map((ChatMessage m) => m.content)
-            .join('\n\n'),
-      );
+  /// 重建会话时用：**整本转写 + 本轮新消息**一次发完。
+  ///
+  /// 为什么不先「只重放整本（`max_tokens=1`）」再补一轮：那要多花一次往返，
+  /// 且重建请求生成的 1 个 token 会污染重建后的 state 起点。
+  /// 这里把「重建 state」和「回答本轮」合成一次请求 —— 语义与「新会话首轮」
+  /// 一致（system + 全部历史 + 本轮 user + `Assistant:`）。
+  String buildFullPrompt(ChatRequest request) {
+    final List<ChatMessage> tail = request.messages.isEmpty
+        ? const <ChatMessage>[]
+        : <ChatMessage>[request.messages.last];
+    final String reqSystem = (request.systemPrompt ?? '').trim();
+    return buildPrompt(
+      <ChatMessage>[
+        ...transcript.where((ChatMessage m) => m.role != ChatRole.system),
+        ...tail,
+      ],
+      systemPrompt: reqSystem.isNotEmpty ? reqSystem : systemPrompt,
+    );
+  }
 
   /// 追加一轮并返回自身（链式）。
   RwkvCloudSessionRecord appendTurn(String userText, String assistantText) {
@@ -138,6 +166,8 @@ class RwkvCloudSessionRecord {
   Map<String, Object?> toJson() => <String, Object?>{
         'sessionKey': sessionKey,
         'sessionId': sessionId,
+        'systemPrompt': systemPrompt,
+        'epoch': epoch,
         'turnCount': turnCount,
         'lastActiveMs': lastActiveMs,
         'transcript': <Object?>[for (final ChatMessage m in transcript) m.toJson()],
@@ -160,6 +190,8 @@ class RwkvCloudSessionRecord {
     return RwkvCloudSessionRecord(
       sessionKey: (json['sessionKey'] as String?) ?? '',
       sessionId: (json['sessionId'] as String?) ?? '',
+      systemPrompt: (json['systemPrompt'] as String?) ?? '',
+      epoch: (json['epoch'] as num?)?.toInt() ?? 0,
       transcript: transcript,
       turnCount: (json['turnCount'] as num?)?.toInt() ?? 0,
       lastActiveMs: (json['lastActiveMs'] as num?)?.toInt(),
@@ -204,6 +236,50 @@ class RwkvCloudSessionLedger {
   /// 总比把 KeyValueStore 撑爆好）。
   final int maxStoredChars;
 
+  /// 「引擎世代」的落盘键（与业务会话同一个 scope）。
+  ///
+  /// 每次 App/引擎实例换代 +1：老记录带着旧世代的 `sessionId`，下次用到时
+  /// 一律判失效并重建 —— 否则引擎重启后前端会把「已被清空的会话」当成可用。
+  static const String sessionEpochKey = '__session_epoch__';
+
+  int _epoch = 0;
+  bool _epochLoaded = false;
+  bool _epochBumped = false;
+
+  /// 当前引擎世代（首次使用时从落盘读一次）。
+  Future<int> _currentEpoch() async {
+    if (_epochLoaded) return _epoch;
+    try {
+      final String? raw = await read(sessionEpochKey);
+      _epoch = int.tryParse((raw ?? '').trim()) ?? 0;
+    } on Object {
+      _epoch = 0;
+    }
+    _epochLoaded = true;
+    return _epoch;
+  }
+
+  /// 引擎实例可能已更换（应用重启 / 端点重开）：把台账里的旧 `sessionId` 全部作废。
+  ///
+  /// 每个台账实例只会真正换代一次（后续 `initialize` 不重复 +1）。
+  /// 作废后记录仍保留转写本 —— 首次用到时由调用方「换新 id + 整本重放」。
+  Future<void> invalidateAllForNewEngine() async {
+    if (_epochBumped) return;
+    _epochBumped = true;
+    final int next = (await _currentEpoch()) + 1;
+    _epoch = next;
+    _epochLoaded = true;
+    try {
+      await write(sessionEpochKey, '$next');
+    } on Object {
+      // 落盘失败只影响下一次进程能否感知换代，本次内存里已经作废。
+    }
+    for (final RwkvCloudSessionRecord r in _memo.values) {
+      r.sessionId = '';
+      r.epoch = next;
+    }
+  }
+
   final Map<String, RwkvCloudSessionRecord> _memo =
       <String, RwkvCloudSessionRecord>{};
 
@@ -219,6 +295,7 @@ class RwkvCloudSessionLedger {
     final RwkvCloudSessionRecord? cached = _memo[key];
     if (cached != null) return cached;
 
+    final int epoch = await _currentEpoch();
     RwkvCloudSessionRecord? loaded;
     try {
       final String? raw = await read(key);
@@ -230,17 +307,27 @@ class RwkvCloudSessionLedger {
               (Object? k, Object? v) => MapEntry<String, Object?>('$k', v),
             ),
           );
-          // sessionId 缺失/损坏一律视为不可用，重建一个新的（宁可丢记忆，
-          // 也不能把空 id 下发出去导致服务端把多个并发混成一条会话）。
-          if (parsed.sessionId.trim().isNotEmpty) loaded = parsed;
+          // ⚠ 允许 `sessionId` 为空：那是「引擎换代后待重建」的正常状态，
+          // 转写本必须保留（旧实现把整条记录丢掉 → 重建时无历史可用）。
+          if (parsed.sessionKey.trim().isNotEmpty) {
+            if (parsed.epoch != epoch) {
+              parsed.sessionId = '';
+              parsed.epoch = epoch;
+            }
+            loaded = parsed;
+          }
         }
       }
     } on Object {
       loaded = null;
     }
 
-    final RwkvCloudSessionRecord record =
-        loaded ?? RwkvCloudSessionRecord(sessionKey: key, sessionId: newSessionId());
+    final RwkvCloudSessionRecord record = loaded ??
+        RwkvCloudSessionRecord(
+          sessionKey: key,
+          sessionId: newSessionId(),
+          epoch: epoch,
+        );
     _memo[key] = record;
     return record;
   }

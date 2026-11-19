@@ -2,128 +2,25 @@ export 'rwkv_official_resources_stub.dart'
     if (dart.library.io) 'rwkv_official_resources_native.dart'
     if (dart.library.html) 'rwkv_official_resources_web.dart';
 
+/// 内置推理引擎的官方预编译档位。
+///
+/// 本项目唯一支持的推理引擎是 **rwkv_lightning_cuda**，官方只发布
+/// CUDA 12.9 / 13.2 两档 Windows/Linux 预编译包；其它后端（CPU、Vulkan、
+/// ROCm、SYCL、ARM64）和 llama.cpp 路线均已移除。
 enum OfficialServerVariant {
-  cpu,
-  vulkan,
   cuda12,
   cuda13,
-  hip,
-  sycl,
-  arm64,
 }
 
 extension OfficialServerVariantX on OfficialServerVariant {
-  String get assetToken {
-    switch (this) {
-      case OfficialServerVariant.cpu:
-        return 'cpu';
-      case OfficialServerVariant.vulkan:
-        return 'vulkan';
-      case OfficialServerVariant.cuda12:
-        return 'cuda-12';
-      case OfficialServerVariant.cuda13:
-        return 'cuda-13';
-      case OfficialServerVariant.hip:
-        return 'rocm';
-      case OfficialServerVariant.sycl:
-        return 'sycl';
-      case OfficialServerVariant.arm64:
-        return 'cpu-arm64';
-    }
-  }
-
-  String get archToken {
-    switch (this) {
-      case OfficialServerVariant.arm64:
-        return 'arm64';
-      case OfficialServerVariant.cpu:
-      case OfficialServerVariant.vulkan:
-      case OfficialServerVariant.cuda12:
-      case OfficialServerVariant.cuda13:
-      case OfficialServerVariant.hip:
-      case OfficialServerVariant.sycl:
-        return 'x64';
-    }
-  }
-
   String get displayName {
     switch (this) {
-      case OfficialServerVariant.cpu:
-        return 'CPU 通用版';
-      case OfficialServerVariant.vulkan:
-        return 'Vulkan (任意 GPU，推荐)';
       case OfficialServerVariant.cuda12:
-        return 'NVIDIA CUDA 12.x';
+        return 'NVIDIA CUDA 12.9';
       case OfficialServerVariant.cuda13:
-        return 'NVIDIA CUDA 13.x';
-      case OfficialServerVariant.hip:
-        return 'AMD ROCm';
-      case OfficialServerVariant.sycl:
-        return 'Intel SYCL Arc';
-      case OfficialServerVariant.arm64:
-        return 'Windows ARM64';
+        return 'NVIDIA CUDA 13.2';
     }
   }
-}
-
-class RwkvServerBuildInfo {
-  final String repo;
-  final String tag;
-  final OfficialServerVariant variant;
-  final String assetName;
-  final String downloadUrl;
-  final int sizeBytes;
-  final String? browserDownloadUrl;
-
-  const RwkvServerBuildInfo({
-    required this.repo,
-    required this.tag,
-    required this.variant,
-    required this.assetName,
-    required this.downloadUrl,
-    required this.sizeBytes,
-    this.browserDownloadUrl,
-  });
-
-  RwkvServerBuildInfo copyWith({
-    String? repo,
-    String? tag,
-    OfficialServerVariant? variant,
-    String? assetName,
-    String? downloadUrl,
-    int? sizeBytes,
-    String? browserDownloadUrl,
-  }) =>
-      RwkvServerBuildInfo(
-        repo: repo ?? this.repo,
-        tag: tag ?? this.tag,
-        variant: variant ?? this.variant,
-        assetName: assetName ?? this.assetName,
-        downloadUrl: downloadUrl ?? this.downloadUrl,
-        sizeBytes: sizeBytes ?? this.sizeBytes,
-        browserDownloadUrl: browserDownloadUrl ?? this.browserDownloadUrl,
-      );
-
-  Map<String, Object?> toJson() => <String, Object?>{
-        'repo': repo,
-        'tag': tag,
-        'variant': variant.name,
-        'assetName': assetName,
-        'downloadUrl': downloadUrl,
-        'sizeBytes': sizeBytes,
-        'browserDownloadUrl': browserDownloadUrl,
-      };
-
-  factory RwkvServerBuildInfo.fromJson(Map<String, Object?> map) =>
-      RwkvServerBuildInfo(
-        repo: map['repo'] as String,
-        tag: map['tag'] as String,
-        variant: OfficialServerVariant.values.byName(map['variant'] as String),
-        assetName: map['assetName'] as String,
-        downloadUrl: map['downloadUrl'] as String,
-        sizeBytes: (map['sizeBytes'] as num).toInt(),
-        browserDownloadUrl: map['browserDownloadUrl'] as String?,
-      );
 }
 
 enum RwkvDownloadPhase {
@@ -493,24 +390,7 @@ class RwkvLightningRelease {
 }
 
 abstract class RwkvOfficialResourcesBridge {
-  Future<RwkvServerBuildInfo> fetchLatestServerBuild({
-    OfficialServerVariant variant = OfficialServerVariant.vulkan,
-    String? repo,
-    void Function(RwkvDownloadProgress)? onProgress,
-  });
-
-  Future<String> installLlamaServer({
-    RwkvServerBuildInfo? buildInfo,
-    OfficialServerVariant variant = OfficialServerVariant.vulkan,
-    String? installDir,
-    void Function(RwkvDownloadProgress)? onProgress,
-    void Function(RwkvCancelHandle handle)? onHandleReady,
-  });
-
-  Future<List<RwkvOfficialModel>> listOfficialRwkvModels({
-    void Function(RwkvDownloadProgress)? onProgress,
-  });
-
+  /// 下载一个官方 `.pth` / `.rwkvq` 权重（引擎原生格式）；支持断点续传。
   Future<String> downloadOfficialModel(
     RwkvOfficialModel model, {
     String? targetDir,

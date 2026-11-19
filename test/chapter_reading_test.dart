@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:novelcraft/application/services/chapter_ai_model_resolver.dart';
 import 'package:novelcraft/ui/pages/chapter_ai_panel.dart';
 import 'package:novelcraft/ui/pages/chapter_preview_page.dart';
 
@@ -37,9 +38,21 @@ void main() {
     });
 
     testWidgets('有选区时输入要求并点击（无 AI 服务时给出明确指引）', (tester) async {
-      await tester.pumpWidget(_wrap(
-        const ChapterAiPanel(
-            selectedText: '夜色渐深，城市灯火。', fullContent: '夜色渐深，城市灯火。'),
+      // ⚠ 必须把 resolver 钉成 null：真实实现会读本机 AI 配置并回落双 Agent /
+      // 默认模型，测试机上可能解析出可用 provider，从而走真实调用，
+      // 永远看不到「无可用服务」的提示（本机会绿、换机器会红）。
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          chapterAiModelProvider.overrideWith((ref) async => null),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(
+            body: ChapterAiPanel(
+              selectedText: '夜色渐深，城市灯火。',
+              fullContent: '夜色渐深，城市灯火。',
+            ),
+          ),
+        ),
       ));
 
       // 无默认 provider 的测试环境 → 明确指引而非崩溃
@@ -48,7 +61,8 @@ void main() {
         '加入雨景',
       );
       await tester.tap(find.text('润色'));
-      await tester.pump();
+      // resolver 是 FutureProvider：要等异步求值 + setState 重建，pump 一次不够。
+      await tester.pumpAndSettle();
       expect(
         find.textContaining('AI 服务'),
         findsWidgets,

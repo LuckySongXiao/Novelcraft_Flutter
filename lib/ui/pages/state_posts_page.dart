@@ -19,6 +19,12 @@ class StatePostsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final RwkvStateRegistry registry = ref.watch(stateTuningRegistryProvider);
     final WritingStepStatePlan plan = ref.watch(writingStepStatePlanProvider);
+    final Map<RwkvStateParamTier, int> tierCounts =
+        <RwkvStateParamTier, int>{};
+    for (final RwkvStateArtifact artifact in registry.artifacts) {
+      tierCounts[artifact.paramTier] =
+          (tierCounts[artifact.paramTier] ?? 0) + 1;
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('State 岗位配置')),
@@ -68,6 +74,41 @@ class StatePostsPage extends ConsumerWidget {
                   );
                 },
                 child: const Text('同步'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '按参数当量归类（实测 state 张量形状，不按文件名估算）',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  if (tierCounts.isEmpty)
+                    const Text('尚未登记 state 产物')
+                  else
+                    for (final RwkvStateParamTier tier
+                        in RwkvStateParamTier.values)
+                      if (tierCounts.containsKey(tier))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '${tier.label(false)}：${tierCounts[tier]} 个产物 · '
+                            '${tier.shape(false)} · 单产物 ${tier.sizeLabel}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '1B 与 1.5B 的 state 同形（S6M），但底座不能互换；3B 单独一类（S10M）。',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ],
               ),
             ),
           ),
@@ -376,6 +417,7 @@ class _VariantBlock extends StatelessWidget {
         Text('id：${artifact.id}', style: small),
         Text('文件：${artifact.statePath}', style: small),
         Text('基底：${artifact.baseModelId}', style: small),
+        Text('参数当量：${artifact.paramClassLabel(false)}', style: small),
         Text(
           '训练：${artifact.steps} 步 · loss ${artifact.finalLoss}'
           '${artifact.sampleCount > 0 ? ' · ${artifact.sampleCount} 样本' : ''}',

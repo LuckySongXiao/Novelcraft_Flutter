@@ -1,10 +1,10 @@
 // 本地 RWKV 模型发现与元数据解析。
 //
-// 扫描项目根下 `rwkv_models/` 目录内的 `.gguf` 文件（GGUF 是 RWKV 7B 模型
-// 的主流分发格式，llama.cpp / rwkv.cpp 都原生支持），解析文件名获取：
+// 扫描项目根下 `rwkv_models/` 目录内的 `.pth` / `.rwkvq` 文件（唯一引擎
+// `rwkv_lightning_cuda` 的原生格式），解析文件名获取：
 //   - 模型架构（rwkv5 / rwkv6 / rwkv7）
 //   - 参数量（1.5B / 3B / 7.2B / 14B）
-//   - 量化等级（Q4_0 / Q5_K_M / Q6_K 等）
+//   - 量化等级（W8A16 / sb6_w4 等）
 //
 // 本文件**不直接** `import 'dart:io'`，扫描通过条件导出的
 // [RwkvModelScanner] 桥接实现（同 inference_launcher 的模式）：
@@ -74,7 +74,7 @@ class RwkvLocalModel {
 
 /// 从文件名推断架构 / 参数量 / 量化。
 ///
-/// 示例：`rwkv7-g1j-7.2b-Q6_K.gguf` → (rwkv7, 7.2B, Q6_K)
+/// 示例：`rwkv7-g1l-1.5b-20261031-ctx34304.pth` → (rwkv7, 1.5B, '')
 RwkvLocalModel parseRwkvFileName(String filePath, String fileName, int sizeBytes) {
   final lower = fileName.toLowerCase();
   String arch = 'unknown';

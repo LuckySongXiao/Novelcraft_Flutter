@@ -65,6 +65,13 @@ class _NovelCraftAppState extends ConsumerState<NovelCraftApp> {
   }
 
   Future<void> _reclaimLocalInference() async {
+    // 先停掉 App 自己拉起的引擎（持有进程句柄，SIGTERM → 强杀），
+    // 再按 pid 记录兜底回收「句柄已丢」的孤儿进程。
+    try {
+      await ref.read(rwkvProviderInstanceProvider).stopLocalServer();
+    } on Object {
+      // 退出路径不允许抛异常
+    }
     try {
       await InferenceProcessLauncher.reclaimOrphaned();
     } on Object {

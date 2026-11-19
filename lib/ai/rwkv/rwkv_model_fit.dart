@@ -120,7 +120,7 @@ String describeModelFit({
           '→ 余量很薄，长上下文可能显存不足';
     case RwkvModelFit.tooLarge:
       return '$needTxt · 本机空闲 ${(vramAvailableBytes! / gib).toStringAsFixed(1)}GB '
-          '→ **放不下**（建议改选更小的模型，或改用云端/llama.cpp 路线）';
+          '→ **放不下**（建议改选更小的模型，或改用云端端点）';
   }
 }
 

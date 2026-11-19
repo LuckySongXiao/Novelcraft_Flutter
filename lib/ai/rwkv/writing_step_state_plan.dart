@@ -114,6 +114,20 @@ enum WritingCraftStep {
     target: RwkvStateTarget.stateUpdates,
   ),
 
+  /// 人物履历回放：按章节顺序维护人物状态与经历（ST-9）。
+  characterUpdate(
+    labelZh: '人物履历',
+    stageIds: <String>['Book/characterLedger', 'State/character'],
+    target: RwkvStateTarget.characterLedger,
+  ),
+
+  /// 世界观履历回放：按章节顺序维护地点/势力/设定变化（ST-10）。
+  worldUpdate(
+    labelZh: '世界观履历',
+    stageIds: <String>['Book/worldLedger', 'State/world'],
+    target: RwkvStateTarget.worldLedger,
+  ),
+
   /// 审查（评分/问题清单，JSON）。
   review(
     labelZh: '审查',
@@ -298,6 +312,18 @@ const List<RwkvStatePost> kStatePosts = <RwkvStatePost>[
     dutyZh: '设定抽取：按「类别|名称|字段|一句话变化」登记实体变更',
     dutyEn: 'State ledger updates: entity change register rows',
     roles: <RwkvAgentRole>{},
+  ),
+  RwkvStatePost(
+    target: RwkvStateTarget.characterLedger,
+    dutyZh: '人物履历：按章节顺序维护人物状态与经历',
+    dutyEn: 'Character ledger: ordered per-chapter character history',
+    roles: <RwkvAgentRole>{RwkvAgentRole.characterKeeper},
+  ),
+  RwkvStatePost(
+    target: RwkvStateTarget.worldLedger,
+    dutyZh: '世界观履历：按章节顺序维护地点/势力/设定变化',
+    dutyEn: 'World ledger: ordered per-chapter world-state history',
+    roles: <RwkvAgentRole>{RwkvAgentRole.worldKeeper},
   ),
 ];
 

@@ -177,7 +177,7 @@ void main() {
       expect(again.transcript, hasLength(2));
     });
 
-    test('落盘内容损坏 / sessionId 缺失 → 重建新会话，绝不把空 ID 下发', () async {
+    test('落盘内容损坏 → 重建新会话；sessionId 缺失 → 标记待重建并保留转写本', () async {
       final _MemoryStore store = _MemoryStore();
       store.data['p::leader'] = '{broken';
       final RwkvCloudSessionLedger ledger = RwkvCloudSessionLedger(
@@ -195,8 +195,54 @@ void main() {
       });
       ledger.clearMemo();
       final RwkvCloudSessionRecord rec2 = await ledger.resolve('p::writer-1');
-      expect(rec2.sessionId.trim().isEmpty, isFalse);
-      expect(rec2.isFresh, isTrue, reason: '空 sessionId 视为不可用，必须重建');
+      expect(rec2.needsRebuild, isTrue, reason: '空 sessionId = 待重建（不会下发空 id）');
+      expect(rec2.turnCount, 5, reason: '转写本必须保留，重建时才有历史可重放');
+    });
+
+    test('引擎换代：作废所有 sessionId 但保留转写本，且每实例只换代一次', () async {
+      final _MemoryStore store = _MemoryStore();
+      final RwkvCloudSessionLedger ledger = RwkvCloudSessionLedger(
+        read: store.read,
+        write: store.write,
+      );
+      final RwkvCloudSessionRecord rec = await ledger.resolve('p::leader');
+      rec
+        ..appendTurn('写第一段', '第一段正文')
+        ..systemPrompt = '你是主笔';
+      await ledger.persist(rec);
+      final String oldId = rec.sessionId;
+      expect(oldId.startsWith('nc-'), isTrue);
+
+      await ledger.invalidateAllForNewEngine();
+      expect(rec.needsRebuild, isTrue, reason: '换代后旧 id 必须作废');
+      expect(rec.transcript, isNotEmpty, reason: '转写本必须保留，重建才有历史');
+      expect(rec.systemPrompt, '你是主笔', reason: 'system prompt 要留着重放');
+
+      // 同一实例重复初始化不再 +1（否则每次 configure 都会让所有会话重新重放）。
+      store.data[RwkvCloudSessionLedger.sessionEpochKey] = '1';
+      await ledger.invalidateAllForNewEngine();
+      expect(store.data[RwkvCloudSessionLedger.sessionEpochKey], '1');
+    });
+
+    test('换代标记落盘：新台账实例读到旧 epoch 时同样作废旧 id', () async {
+      final _MemoryStore store = _MemoryStore();
+      final RwkvCloudSessionLedger first = RwkvCloudSessionLedger(
+        read: store.read,
+        write: store.write,
+      );
+      final RwkvCloudSessionRecord rec = await first.resolve('p::leader');
+      rec.appendTurn('写第一段', '第一段正文');
+      await first.persist(rec);
+      await first.invalidateAllForNewEngine();
+      await first.persist(rec); // 落盘带旧世代标记
+
+      final RwkvCloudSessionLedger second = RwkvCloudSessionLedger(
+        read: store.read,
+        write: store.write,
+      );
+      final RwkvCloudSessionRecord rec2 = await second.resolve('p::leader');
+      expect(rec2.needsRebuild, isTrue, reason: '旧世代记录必须判失效');
+      expect(rec2.turnCount, 1, reason: '历史轮次仍保留');
     });
 
     test('转写本超出上限时**成对**丢最旧轮次，保持 user/assistant 对齐', () async {
@@ -426,13 +472,17 @@ void main() {
       // 台账已落盘：transcript 有 user/assistant 成对的一条。
       // ⚠ key 里带**端点 host** 前缀 —— state 存在服务端，两个不同端点上的
       // 同名 session_id 是两条完全不同的状态链，必须隔离命名空间。
+      // `__session_epoch__` 是「引擎世代」标记（换代时用来作废旧 session_id）。
+      final List<String> recordKeys = store.data.keys
+          .where((String k) => !k.contains(RwkvCloudSessionLedger.sessionEpochKey))
+          .toList();
       expect(
-        store.data.keys.single,
+        recordKeys.single,
         endsWith('::proj::chapter::c1::leader'),
         reason: '实际落盘键：${store.data.keys}',
       );
       expect(
-        store.data.keys.single,
+        recordKeys.single,
         contains('api-7b.rwkvos.com'),
         reason: '落盘键必须带端点身份',
       );
@@ -468,7 +518,7 @@ void main() {
       expect((bodies[1]['contents'] as List<dynamic>).single, 'User: 写第二段\n\nAssistant:');
     });
 
-    test('服务端丢了会话 → 先用本地转写本重放重建，再重试本轮', () async {
+    test('服务端丢了会话 → 换新 session_id，用整本转写重建并回答本轮', () async {
       final _MemoryStore store = _MemoryStore();
       final RwkvCloudSessionLedger ledger = RwkvCloudSessionLedger(
         read: store.read,
@@ -481,15 +531,11 @@ void main() {
         bodies.add(body);
         // 第 1 次：首轮建 state，成功
         if (calls == 1) return stateReply('第一段正文');
-        // 第 2 次：服务端已丢会话 → 失败（触发重放）
-        if (calls == 2) return http.Response('{"error":"session not found"}', 404);
-        // 第 3 次：重放重建（max_tokens == 1），必须成功
-        if (calls == 3) {
-          expect(body['max_tokens'], 1);
-          expect((body['contents'] as List<dynamic>), hasLength(1));
-          return stateReply('ok');
+        // 第 2 次：服务端已丢会话 → 404（触发重建）
+        if (calls == 2) {
+          return http.Response('{"error":"session not found"}', 404);
         }
-        // 第 4 次：重试本轮
+        // 第 3 次：换新 id + 整本转写 + 本轮消息，一次重建并回答
         return stateReply('第二段正文');
       }, ledger);
 
@@ -506,12 +552,20 @@ void main() {
         ),
       );
 
-      expect(calls, 4, reason: '首轮 + 失败 + 重放 + 重试');
+      expect(calls, 3, reason: '首轮 + 失败 + 换新 id 重建（与回答合并）');
       expect(second.isSuccess, isTrue);
       expect(second.content, '第二段正文');
-      final String replay = (bodies[2]['contents'] as List<dynamic>).single as String;
-      expect(replay, contains('User: 写第一段'), reason: '重放必须带上完整转写本');
+      expect(
+        bodies[2]['session_id'],
+        isNot(bodies[0]['session_id']),
+        reason: '重放必须换新 id：旧 id 在服务端已不存在',
+      );
+      final String replay =
+          (bodies[2]['contents'] as List<dynamic>).single as String;
+      expect(replay, contains('User: 写第一段'), reason: '重建必须带完整转写本');
       expect(replay, contains('Assistant: 第一段正文'));
+      expect(replay, contains('User: 写第二段'), reason: '本轮消息与重建合并成一次请求');
+      expect(replay, contains('System: 你是主笔'), reason: '重建要补回 system prompt');
     });
 
     test('连重放都不行 → 清台账并回落无状态链路（不能拖死写书主流程）', () async {

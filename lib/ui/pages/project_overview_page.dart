@@ -196,7 +196,7 @@ class ProjectOverviewPage extends ConsumerWidget {
                     OutlinedButton.icon(
                       onPressed: () => _reviewBook(context, ref),
                       icon: const Icon(Icons.rate_review_outlined),
-                      label: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
+                      label: Text(l10n.t('PO.ReviewBook', '全书审查并改进')),
                     ),
                     OutlinedButton.icon(
                       onPressed: () => _showReviewComments(context, ref),
@@ -269,11 +269,11 @@ class ProjectOverviewPage extends ConsumerWidget {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
-        title: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
+        title: Text(l10n.t('PO.ReviewBook', '全书审查并改进')),
         content: Text(
           l10n.tf(
             'PO.ReviewDialogBodyFmt',
-            '将逐章读取 {0} 章正文、大纲和上下文。7B 先写审查留言，发现异常后交给 3B 改写并回写版本。',
+            '将逐章读取 {0} 章正文、大纲和上下文。审查岗位 state 先写审查留言，发现异常后交给正文/润色岗位 state 改写并回写版本。',
             <Object>[chapters.length],
           ),
         ),
@@ -334,7 +334,7 @@ class ProjectOverviewPage extends ConsumerWidget {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext ctx) => AlertDialog(
-        title: Text(l10n.t('PO.ReviewBook', '7B 全书审查并改进')),
+        title: Text(l10n.t('PO.ReviewBook', '全书审查并改进')),
         content: SizedBox(
           width: 440,
           child: ValueListenableBuilder<({int reviewed, int applied, int failed})?>(
@@ -446,7 +446,7 @@ class ProjectOverviewPage extends ConsumerWidget {
     await showDialog<void>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
-        title: Text(l10n.t('PO.ReviewComments', '7B 审查留言')),
+        title: Text(l10n.t('PO.ReviewComments', '审查留言')),
         content: SizedBox(
           width: 560,
           height: 420,

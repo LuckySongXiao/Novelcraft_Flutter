@@ -1,7 +1,11 @@
 // 多智能体协同写书 —— 开始前由用户填写向导：
-//   书籍名称 / 作者署名 / 初始目标分卷数 / 每卷目标章节数 / 可分配子智能体数量。
-// 开始后按三级大纲（主线 → 分卷 → 章节）与「组长 + 写手」章节团队编排，
-// 进度实时展示（含每章进度条），结束后逐条如实渲染结果。
+//   书籍名称 / 作者署名 / 初始目标分卷数 / 每卷目标章节数 / 并行章节上限。
+//
+// 写作工艺固定为「主笔分段串行」：每章一条串行管线
+//（章纲 → 2200 字/段正文 → 润色定稿 → 设定抽取），章与章之间并行。
+// 每个工艺步骤自动使用「基模 + 该岗位的 state」；未注册 state 的岗位回落基模。
+// 开始后按三级大纲（主线 → 分卷 → 章节）与章节管线编排，进度实时展示，
+// 结束后逐条如实渲染结果。
 library;
 
 import 'package:flutter/material.dart';
@@ -43,14 +47,11 @@ class _MultiAgentWizardDialogState
   final TextEditingController _volumesCtrl = TextEditingController(text: '3');
   final TextEditingController _chaptersCtrl = TextEditingController(text: '10');
 
-  /// 目标预留团队数（普通模式上限；0 = 不限）。
-  final TextEditingController _reservedCtrl = TextEditingController(text: '10');
+  /// 并行章节上限（每章 1 条串行管线；0 = 按模型规模自动取最佳）。
+  final TextEditingController _reservedCtrl = TextEditingController(text: '0');
 
-  /// 并发档位：普通（≤100 团队）/ 高速（全部章节同时开工）。
+  /// 并发档位：普通（受并行章节上限约束）/ 高速（全部章节同时开工）。
   MultiAgentSpeedMode _mode = MultiAgentSpeedMode.normal;
-
-  /// 写作工艺（正文产出方式）：续写优选 / 单笔直书 / 主笔分段串行 / 组长+9 写手。
-  WritingCraft _craft = WritingCraft.beam;
 
   /// 本次生成注入的文风规则集 id（空 = 不注入）。
   String _styleRuleSetId = '';
@@ -80,20 +81,25 @@ class _MultiAgentWizardDialogState
     final l10n = ref.read(l10nProvider);
     final int volumes = int.tryParse(_volumesCtrl.text.trim()) ?? 3;
     final int chaptersPerVolume = int.tryParse(_chaptersCtrl.text.trim()) ?? 10;
-    final int reserved = int.tryParse(_reservedCtrl.text.trim()) ?? 10;
+    final int reserved = int.tryParse(_reservedCtrl.text.trim()) ?? 0;
+    final String writerModel = ref
+        .read(dualAgentSettingsProvider)
+        .subAgentModel
+        .trim();
     final config = MultiAgentBookConfig(
       bookTitle: _titleCtrl.text,
       authorName: _authorCtrl.text,
       targetVolumes: volumes,
       chaptersPerVolume: chaptersPerVolume,
-      subAgentCount: 10, // 固定编制：1 组长 + 9 偏向写手（仅 team 工艺使用）
-      craft: _craft,
-      // 并发由公式自动计算（分卷数 × 每卷章节数 + 预留团队数 + 档位）
+      // 唯一工艺：主笔分段串行（章内串行、章间并行）。
+      craft: WritingCraft.duo,
+      // 并发 = 并行章节管线数；每章同一时刻只有 1 个请求在飞。
       concurrency: ConcurrencyPlanner.compute(
         volumes: volumes,
         chaptersPerVolume: chaptersPerVolume,
-        reservedTeams: reserved,
+        maxParallelChapters: reserved,
         mode: _mode,
+        modelName: writerModel,
       ),
       styleRuleSetId: _styleRuleSetId,
     );
@@ -175,6 +181,10 @@ class _MultiAgentWizardDialogState
   Widget _buildForm(L10n l10n) {
     final scheme = Theme.of(context).colorScheme;
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final String modelName = ref
+        .watch(dualAgentSettingsProvider)
+        .subAgentModel
+        .trim();
     return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -183,8 +193,10 @@ class _MultiAgentWizardDialogState
           Text(
             l10n.t(
               'MAG.FormIntro',
-              '先配置书籍信息。G1K 组合中 7.2B 负责大纲和润色，2.9B 负责正文；'
-                  '其他模型按所选写作工艺执行。',
+              '写作方式：基模固定，每个工艺岗位挂自己的 state。'
+                  '正文采用「主笔分段串行」——每章一条串行管线：'
+                  '章纲 → 2200 字/段续写（只带上一段尾部 300 字）→ 润色定稿 → 设定抽取；'
+                  '章与章之间按下方的并行上限同时开工。未注册 state 的岗位自动回落基模。',
             ),
             style: const TextStyle(fontSize: 12),
           ),
@@ -216,6 +228,7 @@ class _MultiAgentWizardDialogState
                 child: TextField(
                   controller: _volumesCtrl,
                   keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(
                     labelText: l10n.t('MAG.TargetVolumes', '目标分卷数'),
                     border: const OutlineInputBorder(),
@@ -227,6 +240,7 @@ class _MultiAgentWizardDialogState
                 child: TextField(
                   controller: _chaptersCtrl,
                   keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(
                     labelText: l10n.t('MAG.ChaptersPerVolume', '每卷章节数'),
                     border: const OutlineInputBorder(),
@@ -246,59 +260,52 @@ class _MultiAgentWizardDialogState
               builder: (_) => const WritingPromptSettingsPage(),
             )),
           ),
-          // 2026-09-30 实测：单次生成自然收敛 ≈2000~2800 字且尾部易复读，
-          // 故「主笔分段串行」为推荐默认；旧 9 写手并行保留但成本约 8 倍。
+          // 唯一工艺：主笔分段串行。章内严格串行、章间并行，
+          // 是「基模固定 + 逐岗位切 state」最匹配的形态。
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              l10n.t('MAG.Craft', '写作工艺（正文产出方式）'),
+              l10n.t('MAG.Craft', '写作工艺（固定）'),
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: <Widget>[
-              for (final (WritingCraft, String) item
-                  in <(WritingCraft, String)>[
-                    (WritingCraft.beam, l10n.t('MAG.Craft.Beam', '续写优选（推荐）')),
-                    (WritingCraft.solo, l10n.t('MAG.Craft.Solo', '单笔直书')),
-                    (WritingCraft.duo, l10n.t('MAG.Craft.Duo', '主笔分段串行')),
-                    (
-                      WritingCraft.team,
-                      l10n.t('MAG.Craft.Team', '组长 + 9 写手（旧）'),
-                    ),
-                  ])
-                ChoiceChip(
-                  label: Text(item.$2, style: const TextStyle(fontSize: 12)),
-                  selected: _craft == item.$1,
-                  visualDensity: VisualDensity.compact,
-                  onSelected: (_) => setState(() => _craft = item.$1),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: scheme.secondaryContainer.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: scheme.secondary.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  l10n.t('MAG.Craft.Fixed', '主笔分段串行（唯一）'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-            ],
+                const SizedBox(height: 4),
+                Text(
+                  l10n.t(
+                    'MAG.Craft.DuoHint',
+                    '每章 1 条串行管线：约 2200 字/段、只带上一段尾部 300 字；'
+                        '大纲 / 正文 / 润色返工 / 设定抽取各用对应岗位的 state。',
+                  ),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 6),
-          Text(switch (_craft) {
-            WritingCraft.beam => l10n.t(
-              'MAG.Craft.BeamHint',
-              '每轮并发 5 份续写候选、按「长度/多样性/污染/重复度」择优再续写：'
-                  '专为 RWKV「续写强、指令弱」设计，成功率最高。',
-            ),
-            WritingCraft.solo => l10n.t(
-              'MAG.Craft.SoloHint',
-              '1 次调用写完本章：最快最省，适合短章（实测自然收敛约 2000~2800 字）。',
-            ),
-            WritingCraft.duo => l10n.t(
-              'MAG.Craft.DuoHint',
-              '主笔按 ~2200 字/段续写、只带上一段尾部 300 字。',
-            ),
-            WritingCraft.team => l10n.t(
-              'MAG.Craft.TeamHint',
-              '1 组长 + 9 写手并行 + 组长拼接：每章 12+ 次调用、成本约 8 倍，仅特殊需求时使用。',
-            ),
-          }, style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _buildStyleRulePicker(l10n, scheme),
           const SizedBox(height: 10),
           TextField(
@@ -310,10 +317,10 @@ class _MultiAgentWizardDialogState
               LengthLimitingTextInputFormatter(3),
             ],
             decoration: InputDecoration(
-              labelText: l10n.t('MAG.ReservedTeams', '目标预留团队数'),
+              labelText: l10n.t('MAG.ReservedTeams', '并行章节上限'),
               helperText: l10n.t(
                 'MAG.ReservedHelper',
-                '普通模式上限（≤100）；0 = 不限，由硬上限兜底',
+                '0 = 按模型规模自动取最佳（3B→6、7B→3 条并行管线）；每章 1 条串行管线',
               ),
               border: const OutlineInputBorder(),
               isDense: true,
@@ -321,7 +328,7 @@ class _MultiAgentWizardDialogState
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 10),
-          // ---- 并发档位：普通（≤100 团队）/ 高速（全部章节同时开工）----
+          // ---- 并发档位：按并行上限 / 全部章节同时开工 ----
           SegmentedButton<MultiAgentSpeedMode>(
             segments: <ButtonSegment<MultiAgentSpeedMode>>[
               ButtonSegment<MultiAgentSpeedMode>(
@@ -329,14 +336,14 @@ class _MultiAgentWizardDialogState
                 icon: const Icon(Icons.speed, size: 18),
                 label: Text(compact
                     ? l10n.t('MAG.Mode.NormalShort', '普通')
-                    : l10n.t('MAG.Mode.Normal', '普通模式（≤100 团队）')),
+                    : l10n.t('MAG.Mode.Normal', '普通模式（按并行上限）')),
               ),
               ButtonSegment<MultiAgentSpeedMode>(
                 value: MultiAgentSpeedMode.turbo,
                 icon: const Icon(Icons.rocket_launch_outlined, size: 18),
                 label: Text(compact
                     ? l10n.t('MAG.Mode.TurboShort', '高速')
-                    : l10n.t('MAG.Mode.Turbo', '高速模式（全部同时开工）')),
+                    : l10n.t('MAG.Mode.Turbo', '高速模式（全部章节同时开工）')),
               ),
             ],
             selected: <MultiAgentSpeedMode>{_mode},
@@ -369,11 +376,27 @@ class _MultiAgentWizardDialogState
                     volumes: int.tryParse(_volumesCtrl.text.trim()) ?? 3,
                     chaptersPerVolume:
                         int.tryParse(_chaptersCtrl.text.trim()) ?? 10,
-                    reservedTeams:
-                        int.tryParse(_reservedCtrl.text.trim()) ?? 10,
+                    maxParallelChapters:
+                        int.tryParse(_reservedCtrl.text.trim()) ?? 0,
                     mode: _mode,
+                    modelName: modelName,
                   ),
                   style: const TextStyle(fontSize: 11),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  l10n.tf(
+                    'MAG.ParallelModelFmt',
+                    '正文模型：{0} · 自动推荐 {1} 条并行章节管线',
+                    <Object>[
+                      modelName.isEmpty ? '未配置' : modelName,
+                      '${ConcurrencyPlanner.recommendedParallelChapters(modelName)}',
+                    ],
+                  ),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -514,7 +537,7 @@ class _MultiAgentWizardDialogState
         null,
       ),
       (
-        l10n.tf('MAG.ResultWrittenFmt', '团队协作成稿：{0}/{1} 章已完成并落库。', <Object>[
+        l10n.tf('MAG.ResultWrittenFmt', '章节管线成稿：{0}/{1} 章已完成并落库。', <Object>[
           r.chaptersWritten,
           r.chaptersPlanned,
         ]),

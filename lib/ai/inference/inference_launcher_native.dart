@@ -21,6 +21,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:io' as io show pid;
 
 /// 本地推理进程启动器（Native 实现）。
 class InferenceProcessLauncher {
@@ -39,6 +40,9 @@ class InferenceProcessLauncher {
       '${Directory.systemTemp.path}${Platform.pathSeparator}$_pidFileName';
 
   static const String _pidFileName = 'novelcraft_inference_server.pid.json';
+
+  /// 当前 App 的 pid（看门狗用）。
+  static final int _appPid = io.pid;
 
   /// 当前是否在运行中。
   bool get isRunning => _running;
@@ -94,6 +98,10 @@ class InferenceProcessLauncher {
       final int startedPid = _process!.pid;
       // 落盘 pid：App 异常退出后靠它精确回收，避免显存被孤儿进程长期占用。
       unawaited(_writePidRecord(startedPid, executable));
+      // 退出看门狗：App 正常关闭 / 被强杀 / 崩溃时都让引擎跟随退出。
+      // 仅靠 AppLifecycleListener 在「任务管理器结束进程」时不会触发，
+      // 因此额外用一个 detached PowerShell 等待 App pid 消失后强杀引擎。
+      unawaited(_startExitWatchdog(startedPid));
       _process!.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
@@ -251,6 +259,46 @@ class InferenceProcessLauncher {
         .trim();
     if (exe.isNotEmpty && name == exe) return true;
     return name.contains('llama') || name.contains('rwkv');
+  }
+
+  /// 启动一个 detached 看门狗：等待 App 进程退出后强杀引擎。
+  ///
+  /// 为什么需要它：`AppLifecycleListener.onExitRequested` 覆盖不到
+  /// 「任务管理器结束进程 / 崩溃 / 拔电」等场景。看门狗是独立进程，
+  /// App 消失后它必然恢复执行，从而保证 GPU 显存不被孤儿引擎长期占用。
+  ///
+  /// ⚠ 必须用 **WMI Win32_Process.Create** 拉起，而不是 `Process.start`：
+  /// 后者创建的子进程仍在上层终端/IDE 的 Job Object 里，父进程退出时
+  /// 会被一并回收，看门狗根本活不到「App 退出」那一刻。
+  static Future<void> _startExitWatchdog(int enginePid) async {
+    if (!Platform.isWindows) return;
+    try {
+      final String ps = 'Wait-Process -Id $_appPid -ErrorAction SilentlyContinue; '
+          'Stop-Process -Id $enginePid -Force -ErrorAction SilentlyContinue';
+      // PowerShell -EncodedCommand 要求 UTF-16LE + Base64。
+      final List<int> utf16 = <int>[];
+      for (final int unit in ps.codeUnits) {
+        utf16
+          ..add(unit & 0xFF)
+          ..add((unit >> 8) & 0xFF);
+      }
+      final String encoded = base64Encode(utf16);
+      final String commandLine =
+          'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden '
+          '-EncodedCommand $encoded';
+      await Process.run(
+        'powershell.exe',
+        <String>[
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Invoke-CimMethod -ClassName Win32_Process -MethodName Create '
+              "-Arguments @{CommandLine='$commandLine'}",
+        ],
+      );
+    } on Object {
+      // 看门狗只是兜底；启动失败不影响推理，仍有 pid 记录 + 退出回调两条路。
+    }
   }
 
   static Future<void> _writePidRecord(int pid, String executable) async {

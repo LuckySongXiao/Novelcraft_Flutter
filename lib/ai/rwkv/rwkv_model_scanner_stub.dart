@@ -11,7 +11,7 @@ class RwkvModelScanner {
   /// 构造。
   RwkvModelScanner();
 
-  /// 扫描指定目录下的 .gguf / .bin 模型；stub 实现返回空列表。
+  /// 扫描指定目录下的 `.pth` / `.rwkvq` 权重；stub 实现返回空列表。
   Future<List<RwkvLocalModel>> scan(String directoryPath) async =>
       const <RwkvLocalModel>[];
 }

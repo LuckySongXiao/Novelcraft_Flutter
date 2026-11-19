@@ -44,8 +44,12 @@ class ModuleStateService {
   /// 输出 400 tokens 内自然收尾（finish_reason=stop）。
   static const int _chunkChars = 1400;
 
-  /// 相邻分片的步进（留 300 字重叠，避免跨段事实被切断）。
-  static const int _chunkStep = 1100;
+  /// 分片切口向回退的最大字数（找最近的句末标点）。
+  ///
+  /// 分片**互不重叠**（步长 = 窗口）：旧实现 1400/1100 会把 21% 的正文
+  /// 重复送进模型 —— 既多一次调用，又容易在同一件事上抽出两行重复登记。
+  /// 代价是切口可能落在句子中间，所以切口一律向回退到最近的句末标点。
+  static const int _chunkBoundaryBacktrack = 180;
 
   /// 12 类分区的契约表。
   ///
@@ -166,10 +170,11 @@ class ModuleStateService {
     //
     // ⚠ 分片必须短：本机 rwkv_lightning（3B w8a16，8GB）在**单请求提示词超过
     // 约 3000 字**时会在 prefill 阶段直接断开连接（无响应、无错误码）。
-    // 1400 字/片 + 行式指令稳定落在引擎能力内。
-    for (var start = 0; start < whole.length; start += _chunkStep) {
-      final chunk =
-          whole.substring(start, (start + _chunkChars).clamp(0, whole.length));
+    // 1400 字/片 + 行式指令稳定落在引擎能力内；分片之间**不重叠**，
+    // 切口向回退到最近句末标点（见 [_nextChunkEnd]）。
+    for (int start = 0, end = 0; start < whole.length; start = end) {
+      end = _nextChunkEnd(whole, start);
+      final chunk = whole.substring(start, end);
 
       // ① 首选「行式登记表」。2026-11-17 真机实测（3B w8a16 / 热降频）：
       //    同一段 1100 字按 `updates` JSON 问，模型吐的是
@@ -280,6 +285,23 @@ class ModuleStateService {
   static final RegExp _rowBreaks = RegExp(
     '(?=(?:${_targetLabels.keys.join('|')})\\s*[|｜])',
   );
+
+  /// 计算从 [start] 起的分片末端：窗口末端向回退到最近的句末标点。
+  ///
+  /// 只在「分片互不重叠」时使用。不回溯的话切口常落在句子中间，
+  /// 模型会把半句话当成新开头去理解，抽出来的事实容易缺主语。
+  static int _nextChunkEnd(String whole, int start) {
+    final int hardEnd = (start + _chunkChars).clamp(0, whole.length);
+    if (hardEnd >= whole.length) return whole.length;
+    final int floor = (hardEnd - _chunkBoundaryBacktrack).clamp(
+      start + 1,
+      hardEnd,
+    );
+    for (int i = hardEnd - 1; i >= floor; i--) {
+      if ('。！？!?；;\n'.contains(whole[i])) return i + 1;
+    }
+    return hardEnd;
+  }
 
   /// 把被压平的登记表重新按行切开。
   ///

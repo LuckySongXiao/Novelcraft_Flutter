@@ -1978,6 +1978,19 @@ final multiAgentBookGenerationServiceProvider =
                   items: items,
                   writerChat: writerChat,
                 ),
+        // 全书完成后按章节顺序回放人物 / 世界观履历（专用 state → 直接落库）。
+        archiveHistoryApplier:
+            ({
+              required String projectId,
+              required List<Map<String, Object?>> items,
+              required String chapterLabel,
+            }) => ref
+                .read(teamUpdateDispatchServiceProvider)
+                .applyArchiveHistory(
+                  projectId: projectId,
+                  items: items,
+                  chapterLabel: chapterLabel,
+                ),
         // 章节结构化导出（Markdown + JSON 落盘，便于离线分析写作问题）。
         exportService: ref.watch(chapterExportServiceProvider),
         // 分卷档案归纳：全部章节写完后按卷把设定流水收敛成档案。
